@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/supabase";
  *   { ok: true, data: { exists: boolean, existingDate?: "dd/mm/yyyy",
  *     existingTime?: "HH:MM", existingServiceName?: string,
  *     existingStaffName?: string, existingBranchName?: string,
+ *     existingCustomerName?: string, existingStatus?: string,
  *     existingBookingId?: string } }
  *
  * `excludeBookingId` (optional) skips a booking (used when editing so the
@@ -33,10 +34,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 1. Find the customer by exact phone match.
+    // 1. Find the customer by exact phone match. Select name + phone too so
+    //    the "cannot book" message can identify WHICH customer the blocking
+    //    booking belongs to (the staff may be booking for a customer whose
+    //    phone collides with another, or may not realize the matched customer
+    //    already used the one-time offer).
     const { data: customers, error: custErr } = await supabaseAdmin
       .from("customers")
-      .select("id")
+      .select("id, name, phone")
       .eq("phone", phone)
       .limit(1);
     if (custErr) {
@@ -47,6 +52,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ ok: true, data: { exists: false } });
     }
     const customerId = customers[0].id as string;
+    const customerName = (customers[0].name as string) || "";
 
     // 2. Fetch this customer's non-cancelled bookings WITH branch + services
     //    joins so we can report the full details (service name, staff name,
@@ -143,6 +149,8 @@ export async function GET(request: NextRequest) {
         existingServiceName,
         existingStaffName,
         existingBranchName,
+        existingCustomerName: customerName,
+        existingStatus: existingBooking.status,
         existingBookingId: existingBooking.id,
       },
     });

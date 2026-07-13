@@ -637,9 +637,34 @@ export function ServiceSelector() {
           );
           const checkJson = await checkRes.json();
           if (checkJson.ok && checkJson.data?.exists) {
-            const existingDate = checkJson.data.existingDate || "";
+            const d = checkJson.data;
+            // Detailed "cannot book" message — identifies the blocking booking
+            // precisely (customer, service, staff, date+time, branch, status)
+            // so the cashier understands which existing appointment is blocking
+            // the new one. The status is key: a "checkout" (paid) booking no
+            // longer appears in the active booking list, so without the status
+            // the cashier would think the customer has no booking at all.
+            const custName = d.existingCustomerName || "(khách không rõ)";
+            const svcName = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
+            const staffName = d.existingStaffName || "(chưa phân thợ)";
+            const dateStr = d.existingDate || "—";
+            const timeStr = d.existingTime || "—";
+            const branchStr = d.existingBranchName ? `\n• Chi nhánh: ${d.existingBranchName}` : "";
+            const statusLabel: Record<string, string> = {
+              pending: "Chờ xác nhận",
+              confirmed: "Đã xác nhận",
+              checkout: "Đã thanh toán",
+              cancelled: "Đã huỷ",
+              no_show: "Không đến",
+            };
+            const statusStr = d.existingStatus
+              ? `\n• Trạng thái: ${statusLabel[d.existingStatus] || d.existingStatus}`
+              : "";
             setDialogError(
-              `Không thể đặt lịch vì đang có 1 lịch cắt "Dành cho khách hàng mới - DV Cắt" vào ngày ${existingDate}.`
+              `Không thể đặt lịch vì khách hàng "${custName}" đã có một lịch "${svcName}" đã đặt trước đó.\n` +
+              `• Thợ: ${staffName}\n` +
+              `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}${statusStr}\n` +
+              `Lưu ý: ưu đãi "Dành cho khách hàng mới" chỉ được đặt 1 lần. Vui lòng huỷ/chỉnh sửa lịch cũ hoặc chọn nhóm dịch vụ khác.`
             );
             return;
           }
@@ -1313,7 +1338,7 @@ export function ServiceSelector() {
             )}
 
             {dialogError && (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {dialogError}
               </div>
             )}
