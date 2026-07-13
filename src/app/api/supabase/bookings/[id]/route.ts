@@ -250,6 +250,44 @@ export async function PUT(
         if (updateData.branch_id) existingQuery = existingQuery.eq("branch_id", updateData.branch_id);
         const { data: existingBookings } = await existingQuery;
 
+        // Pre-fetch staff + customer names for the conflict message (batched).
+        const editConflictStaffIds = new Set<string>();
+        const editConflictCustomerIds = new Set<string>();
+        for (const ex of existingBookings || []) {
+          for (const s of (ex.services || []) as Array<{ staff_id?: string | null }>) {
+            if (s.staff_id) editConflictStaffIds.add(String(s.staff_id));
+          }
+          if (ex.customer_id) editConflictCustomerIds.add(String(ex.customer_id));
+        }
+        const editStaffMap = new Map<string, string>();
+        if (editConflictStaffIds.size > 0) {
+          const { data: rows } = await supabaseAdmin
+            .from("staff")
+            .select("id, name")
+            .in("id", Array.from(editConflictStaffIds));
+          for (const r of rows || []) editStaffMap.set(String(r.id), String(r.name));
+        }
+        const editCustMap = new Map<string, string>();
+        if (editConflictCustomerIds.size > 0) {
+          const { data: rows } = await supabaseAdmin
+            .from("customers")
+            .select("id, name")
+            .in("id", Array.from(editConflictCustomerIds));
+          for (const r of rows || []) editCustMap.set(String(r.id), String(r.name));
+        }
+        const toVnTimeEdit = (ms: number): string => {
+          const d = new Date(ms + 7 * 60 * 60 * 1000);
+          return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+        };
+        const statusLabelEdit: Record<string, string> = {
+          pending: "Chờ xác nhận",
+          confirmed: "Đã xác nhận",
+          checkin: "Đang phục vụ",
+          checkout: "Đã thanh toán",
+          cancelled: "Đã huỷ",
+          no_show: "Không đến",
+        };
+
         for (const ex of existingBookings || []) {
           if (ex.id === id) continue; // skip the booking being edited
           if (ex.status === "cancelled" || ex.status === "no_show") continue;
@@ -261,13 +299,41 @@ export async function PUT(
             const exEnd = exStart + exDur;
             for (const ns of newSlots) {
               if (ns.staffId === exSvc.staff_id && ns.start < exEnd && exStart < ns.end) {
-                // exStart is a UTC ms epoch. Convert to Vietnam wall-clock time
-                // (UTC+7) for the error message — using timeZone: UTC would show
-                // the UTC hour ("03:00"), confusing the user who entered 10:00.
-                const exDate = new Date(exStart + 7 * 60 * 60 * 1000);
-                const exTime = `${String(exDate.getUTCHours()).padStart(2, "0")}:${String(exDate.getUTCMinutes()).padStart(2, "0")}`;
+                const exTime = toVnTimeEdit(exStart);
+                const exEndTime = toVnTimeEdit(exEnd);
+                const nsTime = toVnTimeEdit(ns.start);
+                const nsEndTime = toVnTimeEdit(ns.end);
+                const exDateStr = isoDay.split("-").reverse().join("/");
+                const staffName = editStaffMap.get(String(exSvc.staff_id)) || "nhân viên";
+                const svcName = exSvc.service?.name || "dịch vụ";
+                const exCode = ex.code ? String(ex.code) : "";
+                const exCustomerName = ex.customer_id
+                  ? (editCustMap.get(String(ex.customer_id)) || "")
+                  : "";
+                const exBranchName = (ex.branch as { name?: string } | null)?.name || "";
+                const exDurationMin = Math.round(exDur / 60000);
+                const exStatusLabel = ex.status
+                  ? statusLabelEdit[String(ex.status)] || String(ex.status)
+                  : "";
+                const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+                const custLine = exCustomerName ? `• Khách: ${exCustomerName}\n` : "";
+                const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+                const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
                 return NextResponse.json(
-                  { ok: false, error: `Không thể đặt lịch vì trùng với lịch đặt trước đó: nhân viên đã có lịch vào ${exTime} ${isoDay.split("-").reverse().join("/")} (${exSvc.service?.name || "dịch vụ"}).` },
+                  {
+                    ok: false,
+                    error:
+                      `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+                      `${codeLine}:\n` +
+                      custLine +
+                      `• Thợ: ${staffName}\n` +
+                      `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+                      `• Thời gian: ${exTime} - ${exEndTime} ngày ${exDateStr}\n` +
+                      branchLine +
+                      statusLine +
+                      `→ Trùng với dịch vụ mới bạn đang đặt (${nsTime} - ${nsEndTime} ngày ${exDateStr}). ` +
+                      `Vui lòng chọn khung giờ hoặc thợ khác.`,
+                  },
                   { status: 400 }
                 );
               }

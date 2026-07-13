@@ -1249,7 +1249,13 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         const a = newSlots[i];
         const b = newSlots[j];
         if (a.staffId === b.staffId && a.start < b.end && b.start < a.end) {
-          return `Không thể đặt lịch vì trùng với lịch đặt trước đó: nhân viên ${a.staffName} đã có dịch vụ "${a.serviceName}" lúc ${a.timeLabel} ${a.dateLabel} trong cùng phiếu.`;
+          return (
+            `Không thể đặt lịch vì trùng thời gian trong cùng phiếu.\n` +
+            `• Thợ: ${a.staffName}\n` +
+            `• Dịch vụ 1: ${a.serviceName} (${toVietnamTime(a.start)} - ${toVietnamTime(a.end)} ngày ${a.dateLabel})\n` +
+            `• Dịch vụ 2: ${b.serviceName} (${toVietnamTime(b.start)} - ${toVietnamTime(b.end)} ngày ${b.dateLabel})\n` +
+            `Trong một lịch hẹn, mỗi dịch vụ phải dùng một thợ khác nhau. Vui lòng chọn thợ khác cho 1 trong 2 dịch vụ.`
+          );
         }
       }
     }
@@ -1284,7 +1290,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           if (isNaN(exStart)) continue;
           const exServices = (existing.services || []) as Array<{
             staff_id?: string | null;
-            service?: { duration?: number } | null;
+            staff?: { name?: string } | null;
+            service?: { duration?: number; name?: string } | null;
             service_id?: string;
           }>;
           for (const exSvc of exServices) {
@@ -1295,8 +1302,53 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             // Check overlap against each new slot for the same staff.
             for (const ns of newSlots) {
               if (ns.staffId === exStaffId && ns.start < exEnd && exStart < ns.end) {
+                // Build a detailed conflict message that identifies the
+                // blocking booking precisely — booking code, customer,
+                // service, staff, the FULL time range (start → end) of the
+                // existing booking, branch, status, AND the new service's
+                // time range that overlaps it. Without the end time + duration
+                // the staff can't tell how long the existing appointment runs,
+                // which is the exact scenario the user described (a 9:30 90-min
+                // service would overlap a 10:30-12:00 booking).
                 const stf = staffList.find((s) => s.id === exStaffId);
-                return `Không thể đặt lịch vì trùng với lịch đặt trước đó: nhân viên ${stf?.name || exStaffId} đã có lịch vào ${toVietnamTime(exStart)} ${isoDay.split("-").reverse().join("/")}.`;
+                const staffName = stf?.name || exSvc.staff?.name || exStaffId;
+                const svcName = exSvc.service?.name || "Dịch vụ";
+                const exDurationMin = Math.round(exDuration / 60000);
+                const exTimeStr = toVietnamTime(exStart);
+                const exEndTimeStr = toVietnamTime(exEnd);
+                const nsTimeStr = toVietnamTime(ns.start);
+                const nsEndTimeStr = toVietnamTime(ns.end);
+                const exDateStr = isoDay.split("-").reverse().join("/");
+                const exCode = (existing.code as string) || "";
+                const exCustName = (existing.customer as { name?: string } | null)?.name || "";
+                const exBranchName = (existing.branch as { name?: string } | null)?.name || "";
+                const statusLabel: Record<string, string> = {
+                  pending: "Chờ xác nhận",
+                  confirmed: "Đã xác nhận",
+                  checkin: "Đang phục vụ",
+                  checkout: "Đã thanh toán",
+                  cancelled: "Đã huỷ",
+                  no_show: "Không đến",
+                };
+                const exStatusLabel = status
+                  ? statusLabel[status] || status
+                  : "";
+                const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+                const custLine = exCustName ? `• Khách: ${exCustName}\n` : "";
+                const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+                const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+                return (
+                  `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+                  `${codeLine}:\n` +
+                  custLine +
+                  `• Thợ: ${staffName}\n` +
+                  `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+                  `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
+                  branchLine +
+                  statusLine +
+                  `→ Trùng với dịch vụ mới bạn đang đặt (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
+                  `Vui lòng chọn khung giờ hoặc thợ khác.`
+                );
               }
             }
           }

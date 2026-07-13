@@ -759,6 +759,92 @@ export function ServiceSelector() {
       const durationMin = Number(selectedService.duration) || 60;
       const newEndMs = newStartMs + durationMin * 60 * 1000;
 
+      // Staff conflict check (client-side, mirrors the server-side check):
+      // the TimePicker hides busy minutes, but the user can TYPE a time
+      // directly and bypass the dropdown. This explicit check fires right
+      // before the booking is created/updated, fetching the conflicting
+      // booking's details so the cashier sees WHICH existing appointment is
+      // blocking (code, customer, service, full time range, branch, status).
+      // The server still rejects as a safety net; this just gives a richer
+      // message without a round-trip to the 400 handler.
+      if (selectedStaffId && selectedService) {
+        try {
+          const params = new URLSearchParams();
+          params.set("page", "1");
+          params.set("limit", "200");
+          const dl = localDayToUtcRange(isoDayForStart);
+          params.set("date_from", dl.from);
+          params.set("date_to", dl.to);
+          if (selectedBranchId) params.set("branch_id", selectedBranchId);
+          const cfRes = await fetch(`/api/supabase/bookings?${params.toString()}`);
+          const cfJson = await cfRes.json();
+          if (cfJson.ok) {
+            const exList = (cfJson.data || []) as Array<Record<string, unknown>>;
+            for (const ex of exList) {
+              if (ex.status === "cancelled" || ex.status === "no_show") continue;
+              // When editing a booking in this tab, skip that booking itself.
+              if (meta?.bookingId && ex.id === meta.bookingId) continue;
+              const exStart = new Date(String(ex.date_time || "")).getTime();
+              if (isNaN(exStart)) continue;
+              const exServices = (ex.services || []) as Array<{
+                staff_id?: string | null;
+                staff?: { name?: string } | null;
+                service?: { duration?: number; name?: string } | null;
+              }>;
+              for (const exSvc of exServices) {
+                if (exSvc.staff_id !== selectedStaffId) continue;
+                const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+                const exEnd = exStart + exDur;
+                if (newStartMs < exEnd && exStart < newEndMs) {
+                  const staffName = exSvc.staff?.name || (staffList.find((s) => s.id === selectedStaffId)?.name) || "nhân viên";
+                  const svcName = exSvc.service?.name || "Dịch vụ";
+                  const exDurationMin = Math.round(exDur / 60000);
+                  const exTimeStr = toVietnamTime(exStart);
+                  const exEndTimeStr = toVietnamTime(exEnd);
+                  const nsTimeStr = toVietnamTime(newStartMs);
+                  const nsEndTimeStr = toVietnamTime(newEndMs);
+                  const exDateStr = isoDayForStart.split("-").reverse().join("/");
+                  const exCode = (ex.code as string) || "";
+                  const exCustName = (ex.customer as { name?: string } | null)?.name || "";
+                  const exBranchName = (ex.branch as { name?: string } | null)?.name || "";
+                  const statusLabel: Record<string, string> = {
+                    pending: "Chờ xác nhận",
+                    confirmed: "Đã xác nhận",
+                    checkin: "Đang phục vụ",
+                    checkout: "Đã thanh toán",
+                    cancelled: "Đã huỷ",
+                    no_show: "Không đến",
+                  };
+                  const exStatusLabel = ex.status
+                    ? statusLabel[String(ex.status)] || String(ex.status)
+                    : "";
+                  const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+                  const custLine = exCustName ? `• Khách: ${exCustName}\n` : "";
+                  const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+                  const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+                  setDialogError(
+                    `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+                    `${codeLine}:\n` +
+                    custLine +
+                    `• Thợ: ${staffName}\n` +
+                    `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+                    `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
+                    branchLine +
+                    statusLine +
+                    `→ Trùng với dịch vụ mới bạn đang đặt (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
+                    `Vui lòng chọn khung giờ hoặc thợ khác.`
+                  );
+                  setAddingFromDialog(false);
+                  return;
+                }
+              }
+            }
+          }
+        } catch {
+          /* best-effort — server still validates */
+        }
+      }
+
       if (meta && !meta.bookingCreated) {
         // First service on a draft tab → create a new booking.
         await createBookingForTab({
