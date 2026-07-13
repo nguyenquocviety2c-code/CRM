@@ -10,7 +10,7 @@ import {
 } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
 import { maskPhone } from "@/lib/phone-mask";
-import { toVietnamTime } from "@/lib/utils";
+import { toVietnamTime, toVietnamDay } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -1370,12 +1370,16 @@ export function BookingHoverDetails({
   canCancelPayment: boolean;
   onOpenInvoice: () => void;
 }) {
-  // Parse date + time directly from the ISO string (no TZ shift).
+  // Parse date + time using the timezone-safe Vietnam helpers. Supabase
+  // stores date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
+  // is the UTC time — NOT the Vietnam wall-clock time the user entered.
+  // Parsing the raw segment directly would display "03:30" for a 10:30 VN
+  // booking (off by 7h).
   const dateStr = booking.date_time
     ? (() => {
-        const m = booking.date_time.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-        if (!m) return "";
-        return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+        const isoDayParts = toVietnamDay(booking.date_time).split("-");
+        if (isoDayParts.length !== 3) return "";
+        return `${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]} ${toVietnamTime(booking.date_time)}`;
       })()
     : "";
 

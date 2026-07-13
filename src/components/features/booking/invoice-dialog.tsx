@@ -28,6 +28,7 @@ import { Booking } from "@/stores/booking-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
+import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 
 /**
  * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
@@ -575,8 +576,15 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
               <span className="text-gray-900">
                 {booking.date_time
                   ? (() => {
-                      const m = booking.date_time!.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-                      return m ? `${m[4]}:${m[5]} ${m[3]}/${m[2]}/${m[1]}` : "—";
+                      // Use the timezone-safe Vietnam helpers. Supabase
+                      // stores date_time normalized to +00:00 (UTC), so the
+                      // raw "THH:MM" segment is the UTC time — NOT the VN
+                      // time the user entered. Parsing the raw segment
+                      // directly would display "03:30" for a 10:30 VN
+                      // booking (off by 7h).
+                      const isoDayParts = toVietnamDay(booking.date_time).split("-");
+                      if (isoDayParts.length !== 3) return "—";
+                      return `${toVietnamTime(booking.date_time)} ${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}`;
                     })()
                   : "—"}
               </span>

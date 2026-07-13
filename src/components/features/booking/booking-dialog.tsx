@@ -800,24 +800,24 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         note?: string | null;
       };
       // Derive the booking-level start date/time from booking.date_time (ISO).
-      // IMPORTANT: parse the time directly from the ISO string (the "HH:MM"
-      // segment after "T") instead of using new Date().getHours(). The stored
-      // date_time uses the local time the user entered but Postgres tags it
-      // with the server's UTC offset; getHours() then shifts it again, causing
-      // 08:30 to display as 15:30 in UTC+7. Reading the raw "HH:MM" preserves
-      // the user's original input.
+      // IMPORTANT: use the timezone-safe Vietnam helpers (toVietnamDay /
+      // toVietnamTime). Supabase stores date_time normalized to +00:00 (UTC),
+      // so the raw "THH:MM" segment of the ISO string is the UTC time — NOT
+      // the Vietnam wall-clock time the user entered. Parsing the raw segment
+      // directly would display "03:30" for a 10:30 VN booking (off by 7h).
+      // The epoch (new Date(...).getTime()) is the correct UTC instant;
+      // converting via +7h gives the user's original VN time.
       let startDate = booking.date || "";
       let startTime = booking.time || "";
       if (b.date_time) {
-        // ISO formats: "2026-07-01T08:30:00+00:00" or "2026-07-01T08:30:00Z"
-        const isoMatch = b.date_time.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-        if (isoMatch) {
-          if (!startDate) {
-            startDate = `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+        if (!startDate) {
+          const isoDay = toVietnamDay(b.date_time).split("-");
+          if (isoDay.length === 3) {
+            startDate = `${isoDay[2]}/${isoDay[1]}/${isoDay[0]}`;
           }
-          if (!startTime) {
-            startTime = `${isoMatch[4]}:${isoMatch[5]}`;
-          }
+        }
+        if (!startTime) {
+          startTime = toVietnamTime(b.date_time);
         }
       }
       // Map booking services to form shape. Per-service date/time are no longer

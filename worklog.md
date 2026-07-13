@@ -256,3 +256,127 @@ Stage Summary:
 - Lint: 0 new errors or warnings introduced by this task's edits. The single pre-existing warning (React Hook Form `watch()` at booking-dialog.tsx:2067) is unchanged from prior tasks.
 - Dev log: clean. No compile errors, no runtime errors, no PM2 errors during the entire verification session.
 - Screenshots saved at the requested paths: /home/z/my-project/verify-time-conflict-dialog.png (booking dialog conflict alert) and /home/z/my-project/verify-cashier-conflict.png (cashier red error box).
+
+---
+Task ID: 6
+Agent: Timezone Migration Agent (Z.ai Code)
+Task: Fix the timezone data inconsistency in `bookings.date_time` (legacy bookings stored raw HH:MM = VN time with lying +00:00 offset; new bookings stored raw HH:MM = UTC after PostgREST normalizes +07:00). This inconsistency caused the staff-time-conflict check to miss overlaps (e.g. the user's reported scenario: a NEW booking at 10:00 VN with a 90-min service was allowed for Nguyễn Trường Đan even though LH000033 occupies him 10:30-12:00 VN, because the conflict check compared UTC epochs 7h apart). Solution: (1) one-off migration to subtract 7h from every legacy booking's epoch, (2) fix all display paths that parsed raw HH:MM to use `toVietnamTime(epoch)` instead, (3) verify the conflict check now works end-to-end via curl + Agent Browser.
+
+Work Log:
+- Read /home/z/my-project/worklog.md (Tasks 1-5): CRM running under PM2 on port 3000; multi-service refactor + cannot-book + staff-time-conflict improvements done in earlier rounds. The CURRENT bug is the timezone inconsistency the previous tasks' verification log explicitly noted: "existing bookings in the DB are stored with +00:00 (UTC) offset because they were created before the +07:00 VN-offset convention was adopted. This causes `toVnTime(ms)` (which adds 7 hours to the UTC instant) to display times 7 hours off the user's mental model for those legacy rows."
+- Inspected the key files:
+  * `src/lib/utils.ts`: confirmed `toVietnamTime(input)` = epoch + 7h → "HH:MM" VN wall-clock; `toVietnamDay(input)` = epoch + 7h → "YYYY-MM-DD" VN calendar day. Both correct for ANY epoch regardless of the source's stored offset (because they take the epoch, not the raw HH:MM segment).
+  * `src/app/api/supabase/bookings/route.ts` POST: conflict check uses `new Date(ex.date_time).getTime()` for existing + `new Date(date_time).getTime()` for new → epoch-based, CORRECT post-migration. The `toVnTime(ms)` helper at line 452-455 also uses epoch → CORRECT.
+  * `src/app/api/supabase/bookings/[id]/route.ts` PUT: same epoch-based logic (`new Date(effectiveDateTime).getTime()` + `new Date(ex.date_time).getTime()`) → CORRECT post-migration.
+  * `src/components/features/booking/booking-dialog.tsx` line 546-547: `staffBlockedAtSameSlot` already uses `toVietnamDay(b.date_time)` + `toVietnamTime(b.date_time)` → CORRECT post-migration. Lines 1193-1320: `validateBooking` already uses `new Date(exDateTime).getTime()` for existing + `localDayStartUtc(isoDay)` for new + `toVietnamTime(exStart)` for display → CORRECT post-migration.
+  * `src/components/features/cashier/service-selector.tsx` line 351 + 787: `new Date(b.date_time).getTime()` + `new Date(String(ex.date_time || "")).getTime()` → CORRECT post-migration. Lines 802-805: `toVietnamTime(exStart)` etc → CORRECT.
+  * `src/app/dat-lich/page.tsx` line 390 + 406: uses `+07:00` for `dayBase` + `new Date(b.date_time).getTime()` for existing → CORRECT post-migration.
+  * `src/components/features/cashier/customer-tabs.tsx` line 926: already uses `toVietnamDay(activeBooking.date_time)` → CORRECT.
+  * `src/components/features/booking/booking-customer-view.tsx` lines 137-152: already uses `toVietnamDay` + `toVietnamTime` → CORRECT.
+  * `src/app/booking/page.tsx` lines 461-465: already uses `toVietnamDay` + `toVietnamTime` → CORRECT.
+
+- Identified 5 files with raw HH:MM parsing (NEED FIX):
+  1. `src/app/api/supabase/bookings/by-phone/route.ts` lines 95-102 — parsed raw "THH:MM" from ISO, returned date/time fields.
+  2. `src/app/api/supabase/bookings/check-new-customer-cut/route.ts` lines 126-136 — same raw parse for the "cannot book" message's existingDate/existingTime.
+  3. `src/components/features/booking/booking-dialog.tsx` lines 802-822 — edit-form prefill parsed raw "THH:MM" to populate the Ngày/Giờ fields when opening an existing booking for editing.
+  4. `src/components/features/booking/invoice-dialog.tsx` line 578 — invoice dialog's "Ngày giờ" display row parsed raw "THH:MM" from `booking.date_time`.
+  5. `src/components/features/booking/booking-staff-view.tsx` line 1376 — staff-view hover card's date/time display parsed raw "THH:MM".
+
+- Inspected the data: queried `/api/supabase/bookings?limit=300` and listed all 57 bookings with `code | created_at | date_time | HH:MM raw | status`. Found:
+  * 46 LEGACY bookings (created before ~2026-07-12T19:00:00Z) with raw HH:MM in VN business hours [08:30, 19:30] OR out-of-hours edge cases (LH000031 raw 21:18 cancelled, LH000039 raw 23:32 checkout) — all interpret raw HH:MM as VN time (offset +00:00 is lying).
+  * 11 NEW bookings (created at/after 2026-07-12T19:43:13Z) with raw HH:MM in the UTC equivalent of VN business hours [01:30, 12:30] — PostgREST normalized +07:00 to +00:00 on insert, so raw HH:MM is the UTC time. The first clearly-NEW booking is LH000048 (created 2026-07-12T20:38:37Z, raw 07:00 = 14:00 VN — LEGACY interpretation 07:00 VN would be outside business hours).
+  * LH000047 (created 2026-07-12T19:43:13Z, raw 09:00) is the boundary case — could be either NEW (09:00 UTC = 16:00 VN) or LEGACY (09:00 VN). Treated as NEW by my cutoff; it's checkout (terminal status) so even if it's actually LEGACY, the impact is limited to a 7-hour display shift in reports — no impact on conflict detection.
+
+- Created the migration API route at `src/app/api/supabase/bookings/migrate-timezone/route.ts`:
+  * POST endpoint. Accepts `?dry_run=true|false` (default `true` for preview) + `?force=true` (override idempotency guard).
+  * Rule: a booking is LEGACY (needs migration) IF `created_at < "2026-07-12T19:00:00Z"` (the cutoff, ~45 min before the first clearly-NEW booking). For each LEGACY booking, subtract 7h from the epoch (`date_time = originalEpoch - 7*60*60*1000`) and UPDATE the row.
+  * IDEMPOTENCY GUARD: the route refuses to re-run (returns 409 Conflict) if a `migration-backup-*.json` file already exists in `/home/z/my-project`. This prevents accidental double-migration (which would subtract 7h AGAIN from already-migrated bookings, breaking them). `?force=true` overrides (use ONLY after a manual rollback).
+  * BACKUP: before mutating, writes a JSON backup of every migrated booking's (id, code, original_date_time, migrated_date_time, created_at) to `/home/z/my-project/migration-backup-{timestamp}.json`. Use this to roll back if needed (re-add 7h to every listed booking's date_time).
+
+- Ran the migration:
+  * Dry-run (`?dry_run=true`): returned `{total_bookings: 57, to_migrate_count: 46, skipped_count: 11}`. Verified LH000033 is in the migration list with `original_date_time: "2026-07-08T10:30:00+00:00"` → `migrated_date_time: "2026-07-08T03:30:00+00:00"` (raw 10:30 → 03:30; post-migration `toVietnamTime(epoch)` = 03:30 UTC + 7h = 10:30 VN ✓).
+  * Real run (`?dry_run=false`): returned `{ok: true, to_migrate_count: 46, migrated_count: 46, error_count: 0, backup_path: "/home/z/my-project/migration-backup-1783984970730.json"}`. ALL 46 bookings migrated successfully with 0 errors.
+  * Idempotency test: re-running with `?dry_run=false` returned 409 Conflict: "A migration backup file already exists in /home/z/my-project — the migration has already been run." ✓
+  * Verified migrated data: LH000033 now stored as `2026-07-08T03:30:00+00:00` (= 10:30 VN); LH000058 (NEW, was already `2026-07-14T07:30:00+00:00`) unchanged (= 14:30 VN); LH000001 migrated from `08:30:00+00:00` to `01:30:00+00:00` (= 08:30 VN); LH000039 (out-of-hours LEGACY) migrated from `23:32:00+00:00` to `16:32:00+00:00` (= 23:32 VN).
+
+- Fixed the 5 display paths to use `toVietnamTime(epoch)` / `toVietnamDay(epoch)` instead of raw "THH:MM" parsing:
+  1. `src/app/api/supabase/bookings/by-phone/route.ts`: imported `toVietnamDay, toVietnamTime`; replaced the raw regex parse with `const isoDayParts = toVietnamDay(b.date_time).split("-"); dateStr = "${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}"; timeStr = toVietnamTime(b.date_time);`.
+  2. `src/app/api/supabase/bookings/check-new-customer-cut/route.ts`: imported `toVietnamDay, toVietnamTime`; replaced the raw regex parse with the same pattern for `existingDate` + `existingTime`.
+  3. `src/components/features/booking/booking-dialog.tsx` edit-form prefill (lines 802-822): replaced the raw regex parse with `const isoDay = toVietnamDay(b.date_time).split("-"); startDate = "${isoDay[2]}/${isoDay[1]}/${isoDay[0]}"; startTime = toVietnamTime(b.date_time);`. The `toVietnamDay` + `toVietnamTime` were already imported at line 32.
+  4. `src/components/features/booking/invoice-dialog.tsx` "Ngày giờ" display row (line 578): added `import { toVietnamDay, toVietnamTime } from "@/lib/utils";`; replaced the raw regex parse with `const isoDayParts = toVietnamDay(booking.date_time).split("-"); return "${toVietnamTime(booking.date_time)} ${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}"`.
+  5. `src/components/features/booking/booking-staff-view.tsx` hover card date/time (line 1376): changed `import { toVietnamTime } from "@/lib/utils"` to `import { toVietnamTime, toVietnamDay } from "@/lib/utils"`; replaced the raw regex parse with the same `toVietnamDay` + `toVietnamTime` pattern.
+
+- Verified the conflict check works via curl (the user's exact reported scenario):
+  * POSTed to `/api/supabase/bookings` with `date_time: "2026-07-08T10:00:00+07:00"` (= 10:00 VN), `customer_id: 80de14c9-9540-4e0f-aa52-644ff18bafb6` (huy2), `service_id: 3bd732c0-667f-407c-a37e-b7c98acaa309` (Master Cut (tư vấn sau cho KHM) — 90 min, the same service as LH000033), `staff_id: f0095749-2f90-4fa5-b7fc-9dcbaaafcb44` (Nguyễn Trường Đan), `branch_id: 494993c8-19e6-4dd4-b119-26299b4ef54f` (Level 1 Minh Khai).
+  * Expected: 400 conflict error with the detailed message.
+  * Got: HTTP 400 with EXACTLY the expected message:
+    ```
+    Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.
+    Lịch LH000033:
+    • Khách: huy
+    • Thợ: Nguyễn Trường Đan
+    • Dịch vụ: Master Cut (tư vấn sau cho KHM) (90 phút)
+    • Thời gian: 10:30 - 12:00 ngày 08/07/2026
+    • Chi nhánh: Level 1 Minh Khai
+    • Trạng thái: Đã xác nhận
+    → Trùng với dịch vụ mới bạn đang đặt (10:00 - 11:30 ngày 08/07/2026). Vui lòng chọn khung giờ hoặc thợ khác.
+    ```
+    ALL 9 expected elements verified present. The displayed times are CORRECT VN wall-clock times (10:30-12:00 and 10:00-11:30), confirming the migration + display fix works end-to-end. No booking was created (blocked by the conflict check) → no cleanup needed.
+
+- Verified by-phone and check-new-customer-cut APIs return correct VN times:
+  * `GET /api/supabase/bookings/by-phone?phone=0343218683` (huy, has LH000033) returned `{date: "08/07/2026", time: "10:30", ...}` ✓
+  * `GET /api/supabase/bookings/check-new-customer-cut?phone=0343218683` returned `{existingDate: "08/07/2026", existingTime: "10:30", existingServiceName: "Master Cut (tư vấn sau cho KHM)", existingStaffName: "Nguyễn Trường Đan", ...}` ✓
+
+- Verified via Agent Browser (login → /booking → create booking → conflict dialog):
+  * Logged in via agent-browser with `ductran / 123456` (Admin group). Redirected to /cashier. Navigated to /booking.
+  * Clicked "Tạo mới" (via JS — agent-browser's high-level click didn't trigger React onClick, same as Tasks 4-5).
+  * In the booking dialog: typed phone "0900000099" (a NEW phone, not in DB → customer_type defaults to "new" → the "Dành cho khách hàng mới - DV Cắt" category is visible). Did NOT pick a customer from the dropdown (so the form treats this as a walk-in / new customer).
+  * Set date to 08/07/2026 and time to 10:00 via JS (native input value setter + dispatching `input` event so React Hook Form picks up the change).
+  * Picked service category "Dành cho khách hàng mới - DV Cắt" → service "Master Cut (tư vấn sau cho KHM)" (90 min) → staff "Nguyễn Trường Đan". All 8 staff visible in the dropdown because `staffBlockedAtSameSlot` only blocks staff at the EXACT (day, time) slot — LH000033 is at 10:30, my booking is at 10:00, different slots → Nguyễn Trường Đan is selectable.
+  * Clicked "Lưu" via JS. The submit handler ran: created a new customer record for phone "0900000099" (the dialog auto-creates a customer when none is picked from the dropdown), ran the new-customer-cut check (passed — new customer has no previous booking), ran `validateBooking` which fetched 2026-07-08's bookings and detected the overlap: new slot 03:00-04:30 UTC (= 10:00-11:30 VN) overlaps LH000033's slot 03:30-05:00 UTC (= 10:30-12:00 VN) for the same staff Nguyễn Trường Đan. The "Không thể đặt lịch" alert dialog appeared on top of the booking dialog.
+  * Captured the alert's `<p>` text via JS eval. Rendered message EXACTLY:
+    ```
+    Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.
+    Lịch LH000033:
+    • Khách: huy
+    • Thợ: Nguyễn Trường Đan
+    • Dịch vụ: Master Cut (tư vấn sau cho KHM) (90 phút)
+    • Thời gian: 10:30 - 12:00 ngày 08/07/2026
+    • Chi nhánh: Level 1 Minh Khai
+    • Trạng thái: Đã xác nhận
+    → Trùng với dịch vụ mới bạn đang đặt (10:00 - 11:30 ngày 08/07/2026). Vui lòng chọn khung giờ hoặc thợ khác.
+    ```
+    All 9 expected elements verified present, with proper line breaks (whitespace-pre-line). Both time ranges (10:30-12:00 and 10:00-11:30) are CORRECT VN wall-clock times — confirming the migration + display fix works in the browser-rendered UI too.
+  * Screenshot saved: /home/z/my-project/verify-timezone-conflict-dialog.png (viewport screenshot showing the "Không thể đặt lịch" alert on top of the booking dialog).
+  * Cleanup: deleted the test customer (id `e3d36cc8-0e12-459e-8c44-e385994cd437`) created by the dialog's auto-customer-creation flow. No leftover test bookings remain (the conflict check blocked the booking creation).
+
+- Dev log check (PASS):
+  * `tail -40 .pm2-logs/crm-out.log`: all requests during the test window returned HTTP 200 (including the conflict-rejecting POST which returned 400, visible as "POST /api/supabase/bookings 400 in 355ms" — the 400 is the conflict rejection, not an error). The browser test's requests all returned 200 (POST /api/supabase/customers 201 for the auto-created test customer, GET /api/supabase/bookings/check-new-customer-cut 200, GET /api/supabase/bookings 200 for the client-side conflict fetch). No compile errors. Only "✓ Compiled in <ms>" success lines.
+  * `.pm2-logs/crm-error.log` is 0 bytes — no PM2-level errors.
+  * `grep -iE "error|warn|exception|fail|⨯" .pm2-logs/crm-out.log` returned no matches (excluding the normal "400 in" / "409 in" lines which are intentional API rejections, not errors).
+  * `agent-browser errors` = empty, `agent-browser console` = only React DevTools info + HMR/Fast Refresh logs (no warnings/errors).
+
+- Lint check (PASS):
+  * `npx eslint` on all 11 edited/created files: 0 errors, 1 warning. The warning is the PRE-EXISTING `react-hooks/incompatible-library` about React Hook Form's `watch()` API at booking-dialog.tsx:2067 (was at line 2015 in Task 4, shifted to 2067 in Task 5, still present at 2067 after my edits — NOT in any code I touched). 
+  * Files with 0 errors + 0 warnings: src/app/api/supabase/bookings/route.ts, src/app/api/supabase/bookings/[id]/route.ts, src/components/features/cashier/service-selector.tsx, src/app/api/supabase/bookings/by-phone/route.ts, src/app/api/supabase/bookings/check-new-customer-cut/route.ts, src/app/dat-lich/page.tsx, src/lib/utils.ts, src/components/features/booking/invoice-dialog.tsx, src/components/features/booking/booking-staff-view.tsx, src/app/api/supabase/bookings/migrate-timezone/route.ts.
+  * Files with 0 errors + 1 pre-existing warning: src/components/features/booking/booking-dialog.tsx (the warning is at line 2067, far from my edit at lines 802-822).
+  * Conclusion: my edits introduced ZERO new lint errors or warnings.
+
+Stage Summary:
+- The timezone data inconsistency bug is FIXED. The `bookings.date_time` column now has a CONSISTENT format across ALL 57 rows: raw "THH:MM" = UTC time (PostgREST's normalized +00:00 offset). The 46 LEGACY bookings (created before 2026-07-12T19:00:00Z) were migrated by subtracting 7h from their epoch (e.g. LH000033: `2026-07-08T10:30:00+00:00` → `2026-07-08T03:30:00+00:00`, so `toVietnamTime(epoch)` = 03:30 + 7h = 10:30 VN ✓). The 11 NEW bookings (created at/after the cutoff) were already in the correct format and left untouched.
+- The conflict check (server-side POST + PUT, client-side booking-dialog + service-selector) now works correctly because it uses `new Date(date_time).getTime()` (epoch) for both existing and new bookings — and the epoch is now correct for ALL bookings. Verified end-to-end via curl: POSTing a booking at 10:00 VN with a 90-min service for Nguyễn Trường Đan on 2026-07-08 (overlapping LH000033's 10:30-12:00 VN slot) returns HTTP 400 with the full detailed conflict message identifying LH000033 / huy / Nguyễn Trường Đan / Master Cut (tư vấn sau cho KHM) (90 phút) / 10:30-12:00 ngày 08/07/2026 / Level 1 Minh Khai / Đã xác nhận / overlap note.
+- The Agent Browser test confirms the same conflict detection works in the actual UI: logged in as `ductran / 123456`, opened /booking, created a booking for 10:00 VN on 2026-07-08 with Nguyễn Trường Đan + Master Cut (tư vấn sau cho KHM) (90 min) → the "Không thể đặt lịch" alert dialog appeared with the full detailed message. All 9 expected elements verified present with correct VN wall-clock times.
+- All 5 display paths that parsed raw "THH:MM" from `date_time` (by-phone API, check-new-customer-cut API, booking-dialog edit-form prefill, invoice-dialog "Ngày giờ" row, booking-staff-view hover card) now use the timezone-safe `toVietnamDay(epoch)` + `toVietnamTime(epoch)` helpers. Verified via API calls (by-phone returns `time: "10:30"` for LH000033, check-new-customer-cut returns `existingTime: "10:30"`) and via the conflict dialog display (shows "10:30 - 12:00" and "10:00 - 11:30").
+- Idempotency: the migration route refuses to re-run if a `migration-backup-*.json` file exists in /home/z/my-project (verified — second call returned 409 Conflict). This prevents accidental double-migration. The backup file (`migration-backup-1783984970730.json`, 12KB) contains all 46 migrated bookings' (id, code, original_date_time, migrated_date_time, created_at) for rollback if ever needed.
+- Files edited/created (11 total):
+  1. **NEW** `src/app/api/supabase/bookings/migrate-timezone/route.ts` — one-off migration API route. POST endpoint with `?dry_run=true|false` + `?force=true`. Subtracts 7h from every LEGACY booking's date_time epoch. Writes a JSON backup before mutating. Refuses to re-run if a backup file already exists (idempotency guard).
+  2. `src/app/api/supabase/bookings/by-phone/route.ts` — replaced raw "THH:MM" regex parse with `toVietnamDay(b.date_time)` + `toVietnamTime(b.date_time)` for the response's `date` + `time` fields.
+  3. `src/app/api/supabase/bookings/check-new-customer-cut/route.ts` — same fix for `existingDate` + `existingTime` in the "cannot book" message.
+  4. `src/components/features/booking/booking-dialog.tsx` — edit-form prefill (lines 802-822): replaced raw "THH:MM" regex parse with `toVietnamDay(b.date_time)` + `toVietnamTime(b.date_time)` for the form's Ngày/Giờ fields when opening an existing booking for editing.
+  5. `src/components/features/booking/invoice-dialog.tsx` — "Ngày giờ" display row: replaced raw "THH:MM" regex parse with `toVietnamDay(booking.date_time)` + `toVietnamTime(booking.date_time)`. Added the import.
+  6. `src/components/features/booking/booking-staff-view.tsx` — hover card date/time display: replaced raw "THH:MM" regex parse with `toVietnamDay(booking.date_time)` + `toVietnamTime(booking.date_time)`. Added `toVietnamDay` to the existing import.
+- Files INSPECTED but NOT edited (already correct): src/lib/utils.ts (toVietnamTime/toVietnamDay/localDayStartUtc are correct), src/app/api/supabase/bookings/route.ts (POST conflict check uses epoch — correct post-migration), src/app/api/supabase/bookings/[id]/route.ts (PUT conflict check uses epoch — correct post-migration), src/components/features/cashier/service-selector.tsx (uses epoch + toVietnamTime — correct), src/app/dat-lich/page.tsx (uses +07:00 for dayBase + epoch for existing — correct), src/components/features/cashier/customer-tabs.tsx (uses toVietnamDay — correct), src/components/features/booking/booking-customer-view.tsx (uses toVietnamDay + toVietnamTime — correct), src/app/booking/page.tsx (uses toVietnamDay + toVietnamTime — correct).
+- No compile errors, no runtime errors, no console errors, no PM2 errors during the entire verification session. Lint: 0 new errors/warnings introduced by my edits. The single pre-existing warning (React Hook Form `watch()` at booking-dialog.tsx:2067) is unchanged from prior tasks.
+- The migration is one-off and irreversible (the backup file is the rollback path). The migration route file is left in place (idempotent — won't re-run) so the migration can be re-verified or audited later; it can be deleted if desired without affecting anything.
+- Screenshots: /home/z/my-project/verify-timezone-conflict-dialog.png (booking dialog conflict alert showing LH000033 with correct VN times).
+- Backup file: /home/z/my-project/migration-backup-1783984970730.json (rollback reference for the 46 migrated bookings).

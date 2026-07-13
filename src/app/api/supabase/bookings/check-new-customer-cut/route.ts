@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 
 /**
  * GET /api/supabase/bookings/check-new-customer-cut?phone=...&excludeBookingId=...
@@ -123,16 +124,19 @@ export async function GET(request: NextRequest) {
       if (staffRow?.name) existingStaffName = staffRow.name as string;
     }
 
-    // 4. Format date + time from the ISO string. Extract directly to avoid
-    //    timezone shifts (same convention as the by-phone route).
+    // 4. Format date + time using the timezone-safe Vietnam helpers.
+    //    Supabase stores date_time normalized to +00:00 (UTC), so the raw
+    //    "THH:MM" segment is the UTC time — NOT the VN time the user entered.
+    //    Parsing the raw segment directly would display "03:30" for a 10:30
+    //    VN booking (off by 7h).
     let existingDate = "";
     let existingTime = "";
-    const isoMatch = String(existingBooking.date_time || "").match(
-      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/
-    );
-    if (isoMatch) {
-      existingDate = `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
-      existingTime = `${isoMatch[4]}:${isoMatch[5]}`;
+    if (existingBooking.date_time) {
+      const isoDayParts = toVietnamDay(existingBooking.date_time).split("-");
+      if (isoDayParts.length === 3) {
+        existingDate = `${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}`;
+      }
+      existingTime = toVietnamTime(existingBooking.date_time);
     }
     const existingServiceName =
       existingServiceRow.service?.name ||

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 
 /**
  * GET /api/supabase/bookings/by-phone?phone=...&excludeBookingId=...
@@ -92,14 +93,17 @@ export async function GET(request: NextRequest) {
           category?: { name?: string } | null;
         }>;
       }) => {
-        // Format date/time from the ISO string. The stored date_time is
-        // "YYYY-MM-DDTHH:MM:SS+00:00" — extract HH:MM + dd/mm/yyyy directly
-        // to avoid timezone shifts (same convention as the booking dialog).
-        const isoMatch = String(b.date_time || "").match(
-          /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/
-        );
-        const dateStr = isoMatch ? `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}` : "";
-        const timeStr = isoMatch ? `${isoMatch[4]}:${isoMatch[5]}` : "";
+        // Format date/time from the ISO string. Use the timezone-safe
+        // Vietnam helpers (toVietnamDay / toVietnamTime) — Supabase stores
+        // date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
+        // is the UTC time, NOT the Vietnam wall-clock time the user entered.
+        // Parsing the raw segment directly would display "03:30" for a 10:30
+        // VN booking (off by 7h).
+        const isoDayParts = toVietnamDay(b.date_time).split("-");
+        const dateStr = isoDayParts.length === 3
+          ? `${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}`
+          : "";
+        const timeStr = toVietnamTime(b.date_time);
         const services = (b.services || []).map((s) => ({
           name: s.service?.name || s.category?.name || "Dịch vụ",
           staffName: s.staff_id ? staffMap.get(s.staff_id) || "" : "",
