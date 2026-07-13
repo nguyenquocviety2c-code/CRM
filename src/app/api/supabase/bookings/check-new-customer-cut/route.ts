@@ -11,7 +11,10 @@ import { supabaseAdmin } from "@/lib/supabase";
  * the existing booking or contact CSKH).
  *
  * Returns:
- *   { ok: true, data: { exists: boolean, existingDate?: "dd/mm/yyyy", existingBookingId?: string } }
+ *   { ok: true, data: { exists: boolean, existingDate?: "dd/mm/yyyy",
+ *     existingTime?: "HH:MM", existingServiceName?: string,
+ *     existingStaffName?: string, existingBranchName?: string,
+ *     existingBookingId?: string } }
  *
  * `excludeBookingId` (optional) skips a booking (used when editing so the
  * booking being edited doesn't count as a conflict with itself).
@@ -45,13 +48,16 @@ export async function GET(request: NextRequest) {
     }
     const customerId = customers[0].id as string;
 
-    // 2. Fetch this customer's non-cancelled bookings, then check each one's
-    //    services for the new-customer-cut category. We fetch booking_services
-    //    via the bookings list + a separate booking_services query because the
-    //    REST join may not be available for all FK configs.
+    // 2. Fetch this customer's non-cancelled bookings WITH branch + services
+    //    joins so we can report the full details (service name, staff name,
+    //    exact date/time, branch) in the "cannot book" message. Previously we
+    //    only returned the date, which left the customer guessing about which
+    //    existing booking was blocking them.
+    const BOOKING_SELECT =
+      "id, date_time, status, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, service_id, staff_id, service_category_id, service:services!service_id(id, name), category:service_categories!service_category_id(id, name))";
     const { data: bookings, error: bkErr } = await supabaseAdmin
       .from("bookings")
-      .select("id, date_time, status")
+      .select(BOOKING_SELECT)
       .eq("customer_id", customerId)
       .order("created_at", { ascending: false });
     if (bkErr) {
@@ -63,37 +69,82 @@ export async function GET(request: NextRequest) {
     if (validBookings.length === 0) {
       return NextResponse.json({ ok: true, data: { exists: false } });
     }
-    const bookingIds = validBookings.map((b: { id: string }) => b.id);
-    // Fetch booking_services rows matching the new-customer-cut category.
-    let query = supabaseAdmin
-      .from("booking_services")
-      .select("booking_id")
-      .in("booking_id", bookingIds)
-      .eq("service_category_id", NEW_CUSTOMER_CUT_CATEGORY_ID);
-    if (excludeBookingId) {
-      query = query.neq("booking_id", excludeBookingId);
+    // Find the first booking that contains a service in the new-customer-cut
+    // category. We inspect the joined booking_services rows directly (no need
+    // for a separate query now that the select includes the join).
+    let existingBooking: {
+      id: string;
+      date_time: string;
+      status: string;
+      branch?: { name?: string } | null;
+      services?: Array<{
+        service_category_id?: string | null;
+        service?: { name?: string } | null;
+        category?: { name?: string } | null;
+        staff_id?: string | null;
+      }> | null;
+    } | null = null;
+    let existingServiceRow: {
+      service?: { name?: string } | null;
+      category?: { name?: string } | null;
+      staff_id?: string | null;
+    } | null = null;
+    for (const b of validBookings) {
+      if (excludeBookingId && b.id === excludeBookingId) continue;
+      const match = (b.services || []).find(
+        (s) => s.service_category_id === NEW_CUSTOMER_CUT_CATEGORY_ID
+      );
+      if (match) {
+        existingBooking = b;
+        existingServiceRow = match;
+        break;
+      }
     }
-    const { data: cutServices, error: svcErr } = await query;
-    if (svcErr) {
-      return NextResponse.json({ ok: false, error: svcErr.message }, { status: 500 });
-    }
-    if (!cutServices || cutServices.length === 0) {
+    if (!existingBooking || !existingServiceRow) {
       return NextResponse.json({ ok: true, data: { exists: false } });
     }
-    // Found an existing new-customer-cut booking. Return its date (dd/mm/yyyy)
-    // for the warning message.
-    const existingBookingId = cutServices[0].booking_id as string;
-    const existing = validBookings.find(
-      (b: { id: string }) => b.id === existingBookingId
-    );
-    let existingDate = "";
-    if (existing?.date_time) {
-      const m = String(existing.date_time).match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (m) existingDate = `${m[3]}/${m[2]}/${m[1]}`;
+
+    // 3. Fetch the staff name for the matching service (booking_services
+    //    doesn't join staff in the select above, so we look it up directly).
+    let existingStaffName = "";
+    if (existingServiceRow.staff_id) {
+      const { data: staffRow } = await supabaseAdmin
+        .from("staff")
+        .select("name")
+        .eq("id", existingServiceRow.staff_id)
+        .limit(1)
+        .maybeSingle();
+      if (staffRow?.name) existingStaffName = staffRow.name as string;
     }
+
+    // 4. Format date + time from the ISO string. Extract directly to avoid
+    //    timezone shifts (same convention as the by-phone route).
+    let existingDate = "";
+    let existingTime = "";
+    const isoMatch = String(existingBooking.date_time || "").match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/
+    );
+    if (isoMatch) {
+      existingDate = `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+      existingTime = `${isoMatch[4]}:${isoMatch[5]}`;
+    }
+    const existingServiceName =
+      existingServiceRow.service?.name ||
+      existingServiceRow.category?.name ||
+      "Dịch vụ cắt";
+    const existingBranchName = existingBooking.branch?.name || "";
+
     return NextResponse.json({
       ok: true,
-      data: { exists: true, existingDate, existingBookingId },
+      data: {
+        exists: true,
+        existingDate,
+        existingTime,
+        existingServiceName,
+        existingStaffName,
+        existingBranchName,
+        existingBookingId: existingBooking.id,
+      },
     });
   } catch (err: unknown) {
     return NextResponse.json(

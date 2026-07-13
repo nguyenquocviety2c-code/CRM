@@ -416,6 +416,26 @@ export async function POST(request: NextRequest) {
         if (branch_id) existingQuery = existingQuery.eq("branch_id", branch_id);
         const { data: existingBookings } = await existingQuery;
 
+        // Pre-fetch staff names for all staff referenced by the existing
+        // bookings so the conflict error message can name the conflicting
+        // technician (not just "nhân viên"). One batched query — no N+1.
+        const conflictStaffIds = new Set<string>();
+        for (const ex of existingBookings || []) {
+          for (const s of (ex.services || []) as Array<{ staff_id?: string | null }>) {
+            if (s.staff_id) conflictStaffIds.add(String(s.staff_id));
+          }
+        }
+        const conflictStaffMap = new Map<string, string>();
+        if (conflictStaffIds.size > 0) {
+          const { data: conflictStaffRows } = await supabaseAdmin
+            .from("staff")
+            .select("id, name")
+            .in("id", Array.from(conflictStaffIds));
+          for (const st of conflictStaffRows || []) {
+            conflictStaffMap.set(String(st.id), String(st.name));
+          }
+        }
+
         for (const ex of existingBookings || []) {
           if (ex.status === "cancelled" || ex.status === "no_show") continue;
           const exStart = new Date(ex.date_time).getTime();
@@ -431,8 +451,14 @@ export async function POST(request: NextRequest) {
                 // the UTC hour ("03:00"), confusing the user who entered 10:00.
                 const exDate = new Date(exStart + 7 * 60 * 60 * 1000);
                 const exTime = `${String(exDate.getUTCHours()).padStart(2, "0")}:${String(exDate.getUTCMinutes()).padStart(2, "0")}`;
+                const exDateStr = isoDay.split("-").reverse().join("/");
+                const staffName = conflictStaffMap.get(String(exSvc.staff_id)) || "nhân viên";
+                const svcName = exSvc.service?.name || "dịch vụ";
+                // Detailed conflict message: name the technician, the service,
+                // and the exact date + time of the blocking booking so the
+                // user knows precisely which appointment clashes.
                 return NextResponse.json(
-                  { ok: false, error: `Không thể đặt lịch vì trùng với lịch đặt trước đó: nhân viên đã có lịch vào ${exTime} ${isoDay.split("-").reverse().join("/")} (${exSvc.service?.name || "dịch vụ"}).` },
+                  { ok: false, error: `Không thể đặt lịch vì trùng với lịch đặt trước đó: thợ ${staffName} đã có lịch "${svcName}" vào ${exTime} ngày ${exDateStr}. Vui lòng chọn khung giờ hoặc thợ khác.` },
                   { status: 400 }
                 );
               }

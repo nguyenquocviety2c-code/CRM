@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { LogIn, Calendar as CalendarIcon, Clock, Scissors, User, Phone, CheckCircle2, Building2 } from "lucide-react";
+import { LogIn, Calendar as CalendarIcon, Clock, Scissors, User, Phone, CheckCircle2, Building2, Plus, Trash2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,12 +65,27 @@ export default function DatLichPage() {
   const isLoggedIn = !!useAuthStore((s) => s.user);
 
   // --- Form state ---------------------------------------------------------
+  // Multi-service booking: the customer can add 2, 3, or more services in a
+  // single booking. Each row has its own category/service/staff. All services
+  // run in PARALLEL (same start time, each on a different staff). The backend
+  // enforces "each service must use a different staff" — we mirror that here
+  // with a client-side check and disable the submit when violated.
+  interface ServiceRow {
+    id: string;
+    categoryId: string;
+    serviceId: string;
+    staffId: string;
+  }
+  const newRow = () => ({
+    id: `r${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    categoryId: "",
+    serviceId: "",
+    staffId: "",
+  });
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [bookingDate, setBookingDate] = useState(""); // "DD/MM/YYYY"
-  const [categoryId, setCategoryId] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [staffId, setStaffId] = useState("");
+  const [serviceRows, setServiceRows] = useState<ServiceRow[]>([newRow()]);
   const [bookingTime, setBookingTime] = useState(""); // "HH:MM"
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -277,53 +292,70 @@ export default function DatLichPage() {
   const allServices = servicesData || [];
   const allStaff = staffData || [];
 
-  // If the selected category is no longer visible after the customer-type
+  // If a row's selected category is no longer visible after the customer-type
   // filter changes (e.g. phone typed → old customer → "Dành cho KH mới" hidden),
-  // reset the service selection chain to avoid a stale hidden selection.
-  useEffect(() => {
-    if (categoryId && !categories.some((c) => c.id === categoryId)) {
-      setCategoryId("");
-      setServiceId("");
-      setStaffId("");
-      setBookingTime("");
-    }
-  }, [categories, categoryId]);
+  // reset that row's service selection chain to avoid a stale hidden selection.
+  // Implemented as a render-phase update (the React 19 idiom for "adjust state
+  // when a derived value changes") rather than setState-in-effect, to avoid
+  // cascading renders and the react-hooks/set-state-in-effect lint error.
+  const categoriesKey = categories.map((c) => c.id).join("|");
+  const [prevCategoriesKey, setPrevCategoriesKey] = useState(categoriesKey);
+  if (categoriesKey !== prevCategoriesKey) {
+    setPrevCategoriesKey(categoriesKey);
+    setServiceRows((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        if (row.categoryId && !categories.some((c) => c.id === row.categoryId)) {
+          changed = true;
+          return { ...row, categoryId: "", serviceId: "", staffId: "" };
+        }
+        return row;
+      });
+      return changed ? next : prev;
+    });
+  }
 
-  // Services filtered by the selected category.
-  const servicesInCategory = useMemo(
-    () => allServices.filter((s) => !categoryId || s.category_id === categoryId),
-    [allServices, categoryId]
+  // Per-row helpers: services filtered by the row's category, and staff
+  // filtered by the row's service (name-based narrowing mirrors booking-dialog).
+  const servicesForCategory = useCallback(
+    (catId: string) => allServices.filter((s) => !catId || s.category_id === catId),
+    [allServices]
+  );
+  const staffForService = useCallback(
+    (svcId: string) => {
+      if (!svcId) return allStaff;
+      const svc = allServices.find((s) => s.id === svcId);
+      if (!svc) return allStaff;
+      const n = (svc.name || "").toLowerCase();
+      if (n.includes("creative director")) {
+        return allStaff.filter((s) => s.groupName === "Creative Director");
+      }
+      if (n.includes("artist")) {
+        return allStaff.filter((s) => s.groupName === "Artist");
+      }
+      return allStaff;
+    },
+    [allStaff, allServices]
   );
 
-  // Staff filtered by the selected service (name-based narrowing, mirrors
-  // booking-dialog: "Creative Director" in name → only that group, etc.).
-  const staffForService = useMemo(() => {
-    if (!serviceId) return allStaff;
-    const svc = allServices.find((s) => s.id === serviceId);
-    if (!svc) return allStaff;
-    const n = (svc.name || "").toLowerCase();
-    if (n.includes("creative director")) {
-      return allStaff.filter((s) => s.groupName === "Creative Director");
-    }
-    if (n.includes("artist")) {
-      return allStaff.filter((s) => s.groupName === "Artist");
-    }
-    return allStaff;
-  }, [allStaff, allServices, serviceId]);
-
-  // The selected service (for its duration — needed for feasibility).
-  const selectedService = useMemo(
-    () => allServices.find((s) => s.id === serviceId),
-    [allServices, serviceId]
-  );
-
-  // --- Feasible-time computation (mirrors booking-dialog) -----------------
-  // Fetch the day's existing bookings (for the branch) and compute which
-  // HH:MM start times would overlap the selected staff's existing bookings.
+  // --- Feasible-time computation (multi-service aware) --------------------
+  // Fetch the day's existing bookings (for the branch). We compute which
+  // HH:MM start times would cause a conflict for ANY of the selected staff.
+  // In the parallel model, all services start at the same time T; a time T
+  // is infeasible if, for ANY service row, the staff is busy during
+  // [T, T + service_duration]. So the hidden set = union across all rows.
   const isoDay = useMemo(() => {
     const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
   }, [bookingDate]);
+
+  // Collect the "active" rows: those with both a service and a staff chosen.
+  // These are the rows that participate in the feasibility computation.
+  const activeRows = useMemo(
+    () => serviceRows.filter((r) => r.serviceId && r.staffId),
+    [serviceRows]
+  );
+  const hasActiveRow = activeRows.length > 0;
 
   const { data: dayBookings } = useQuery<ExistingBooking[]>({
     queryKey: ["dat-lich-day-bookings", isoDay, selectedBranchId],
@@ -343,42 +375,58 @@ export default function DatLichPage() {
       if (!json.ok) return [];
       return (json.data || []) as ExistingBooking[];
     },
-    enabled: !!isoDay && !!staffId,
+    enabled: !!isoDay && hasActiveRow,
   });
 
-  // Compute hiddenHours + hiddenMinutes for the TimePicker.
+  // Compute hiddenHours + hiddenMinutes for the TimePicker across ALL active
+  // rows. A minute is hidden if it conflicts for ANY active row's staff.
   const { hiddenHours, hiddenMinutes } = useMemo(() => {
     const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>> };
-    if (!staffId || !isoDay || !selectedService) return empty;
-    const intervals: { startMs: number; endMs: number }[] = [];
-    for (const b of dayBookings || []) {
-      if (b.status === "cancelled" || b.status === "no_show") continue;
-      const exStart = new Date(b.date_time).getTime();
-      if (isNaN(exStart)) continue;
-      for (const s of b.services || []) {
-        if (s.staff_id !== staffId) continue;
-        const dur =
-          (Number(s.duration) || Number(s.service?.duration) || 60) * 60 * 1000;
-        intervals.push({ startMs: exStart, endMs: exStart + dur });
-      }
-    }
-    if (intervals.length === 0) return empty;
-    const durationMs = (selectedService.duration || 60) * 60 * 1000;
-    if (durationMs <= 0) return empty;
+    if (!isoDay || activeRows.length === 0) return empty;
     const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!m) return empty;
     // Use the +07:00 offset so dayBase is the correct UTC instant for VN
     // midnight (same fix as the booking dialog + cashier service selector).
     const dayBase = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00+07:00`).getTime();
     if (isNaN(dayBase)) return empty;
+
+    // Build per-row busy intervals + duration. Each row contributes its own
+    // staff's busy slots and its own service duration.
+    const rowSpecs: Array<{
+      intervals: { startMs: number; endMs: number }[];
+      durationMs: number;
+    }> = [];
+    for (const row of activeRows) {
+      const svc = allServices.find((s) => s.id === row.serviceId);
+      const durationMs = (svc?.duration || 60) * 60 * 1000;
+      if (durationMs <= 0) continue;
+      const intervals: { startMs: number; endMs: number }[] = [];
+      for (const b of dayBookings || []) {
+        if (b.status === "cancelled" || b.status === "no_show") continue;
+        const exStart = new Date(b.date_time).getTime();
+        if (isNaN(exStart)) continue;
+        for (const s of b.services || []) {
+          if (s.staff_id !== row.staffId) continue;
+          const dur =
+            (Number(s.duration) || Number(s.service?.duration) || 60) * 60 * 1000;
+          intervals.push({ startMs: exStart, endMs: exStart + dur });
+        }
+      }
+      rowSpecs.push({ intervals, durationMs });
+    }
+    if (rowSpecs.length === 0) return empty;
+
     const hh = new Set<string>();
     const hm: Record<string, Set<string>> = {};
     const hourHasFeasible: Record<string, boolean> = {};
     for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
     for (let min = 0; min < 60 * 24; min++) {
       const startMs = dayBase + min * 60 * 1000;
-      const endMs = startMs + durationMs;
-      const overlaps = intervals.some((iv) => startMs < iv.endMs && iv.startMs < endMs);
+      // A minute conflicts if ANY row's staff is busy during [start, start+dur].
+      const overlaps = rowSpecs.some((spec) => {
+        const endMs = startMs + spec.durationMs;
+        return spec.intervals.some((iv) => startMs < iv.endMs && iv.startMs < endMs);
+      });
       const hStr = String(Math.floor(min / 60)).padStart(2, "0");
       const mStr = String(min % 60).padStart(2, "0");
       if (overlaps) {
@@ -393,27 +441,38 @@ export default function DatLichPage() {
       if (!hourHasFeasible[hStr]) hh.add(hStr);
     }
     return { hiddenHours: hh, hiddenMinutes: hm };
-  }, [staffId, isoDay, selectedService, dayBookings, bookingDate]);
+  }, [activeRows, isoDay, dayBookings, bookingDate, allServices]);
 
-  // Reset downstream selections when an upstream one changes.
-  const onCategoryChange = (id: string) => {
-    setCategoryId(id);
-    setServiceId("");
-    setStaffId("");
+  // --- Row mutation helpers -----------------------------------------------
+  const updateRow = (id: string, patch: Partial<ServiceRow>) => {
+    setServiceRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  };
+  const onRowCategoryChange = (id: string, catId: string) => {
+    // Changing category resets service + staff for that row.
+    updateRow(id, { categoryId: catId, serviceId: "", staffId: "" });
     setBookingTime("");
   };
-  const onServiceChange = (id: string) => {
-    setServiceId(id);
-    setStaffId("");
+  const onRowServiceChange = (id: string, svcId: string) => {
+    // Changing service resets staff for that row.
+    updateRow(id, { serviceId: svcId, staffId: "" });
+    setBookingTime("");
+  };
+  const onRowStaffChange = (id: string, stId: string) => {
+    updateRow(id, { staffId: stId });
+    setBookingTime("");
+  };
+  const addRow = () => {
+    setServiceRows((prev) => [...prev, newRow()]);
+  };
+  const removeRow = (id: string) => {
+    setServiceRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
     setBookingTime("");
   };
   // Changing the branch invalidates the whole service chain — staff and
-  // service availability are branch-specific. Reset everything downstream.
+  // service availability are branch-specific. Reset all rows + time.
   const onBranchChange = (id: string) => {
     setSelectedBranchId(id);
-    setCategoryId("");
-    setServiceId("");
-    setStaffId("");
+    setServiceRows([newRow()]);
     setBookingTime("");
   };
 
@@ -423,14 +482,29 @@ export default function DatLichPage() {
     customerPhone.trim() &&
     bookingDate
   );
-  // Khung giờ requires Nhóm DV + Dịch vụ + Kỹ thuật viên all selected first.
-  const timePickerReady = part1Complete && !!serviceId && !!staffId;
+  // A row is "complete" when it has category + service + staff. At least one
+  // complete row is required before the time picker opens. Incomplete rows
+  // (empty or half-filled) are ignored at submit time.
+  const completeRows = useMemo(
+    () => serviceRows.filter((r) => r.categoryId && r.serviceId && r.staffId),
+    [serviceRows]
+  );
+  // Khung giờ requires at least 1 complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên).
+  const timePickerReady = part1Complete && completeRows.length >= 1;
+
+  // Within-form staff conflict: two complete rows sharing the same staff would
+  // overlap in the parallel model (both start at T). The backend rejects this;
+  // we surface the conflict early so the customer can pick a different staff.
+  const duplicateStaff = useMemo(() => {
+    const ids = completeRows.map((r) => r.staffId);
+    return ids.some((id, i) => ids.indexOf(id) !== i);
+  }, [completeRows]);
 
   const canSubmit =
     part1Complete &&
-    serviceId &&
-    staffId &&
-    bookingTime &&
+    completeRows.length >= 1 &&
+    !duplicateStaff &&
+    !!bookingTime &&
     !!selectedBranchId &&
     !submitting;
 
@@ -440,30 +514,39 @@ export default function DatLichPage() {
     setError("");
     setSubmitting(true);
     try {
-      // 0. One-time offer check: if the selected category is "Dành cho khách
+      // 0. One-time offer check: if ANY selected category is "Dành cho khách
       //    hàng mới - DV Cắt", the customer (by phone) may only book it ONCE.
       //    If they already have a non-cancelled booking with this category,
-      //    block the submit with a message pointing to the existing booking's
-      //    date and CSKH for changes.
-      const selectedCat = categories.find((c) => c.id === categoryId);
-      const isNewCustomerCut =
-        !!selectedCat &&
-        selectedCat.name.toLowerCase().includes("dành cho khách hàng mới");
-      if (isNewCustomerCut && customerPhone.trim()) {
+      //    block the submit with a detailed message pointing to the existing
+      //    booking's service, staff, exact date/time, and branch.
+      const hasNewCustomerCut = completeRows.some((row) => {
+        const cat = categories.find((c) => c.id === row.categoryId);
+        return !!cat && cat.name.toLowerCase().includes("dành cho khách hàng mới");
+      });
+      if (hasNewCustomerCut && customerPhone.trim()) {
         try {
           const checkRes = await fetch(
             `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(customerPhone.trim())}`
           );
           const checkJson = await checkRes.json();
           if (checkJson.ok && checkJson.data?.exists) {
-            const existingDate = checkJson.data.existingDate || "";
-            // Staff (logged in) see the short internal notice; customers
-            // additionally see the CSKH contact line.
+            const d = checkJson.data;
+            // Build a detailed "cannot book" message that spells out the
+            // existing booking's service, staff, exact date + time, and branch
+            // so the customer/staff knows exactly which appointment is blocking
+            // the new one (instead of just a date with no context).
+            const dateStr = d.existingDate || "—";
+            const timeStr = d.existingTime || "—";
+            const svcStr = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
+            const staffStr = d.existingStaffName || "(chưa phân thợ)";
+            const branchStr = d.existingBranchName ? ` — Chi nhánh: ${d.existingBranchName}` : "";
             setError(
-              `Không thể đặt lịch vì đang có 1 lịch cắt "Dành cho khách hàng mới - DV Cắt" vào ngày ${existingDate}.` +
-                (isLoggedIn
-                  ? ""
-                  : " Để đặt ngày khác vui lòng liên hệ bộ phận CSKH để thay đổi lịch.")
+              `Không thể đặt lịch vì bạn đã có một lịch "${svcStr}" đã đặt trước đó.\n` +
+              `• Thợ: ${staffStr}\n` +
+              `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}\n` +
+              (isLoggedIn
+                ? "Vui lòng huỷ/chỉnh sửa lịch cũ trước khi đặt lịch mới."
+                : " Để đặt ngày khác vui lòng liên hệ bộ phận CSKH để thay đổi lịch.")
             );
             setSubmitting(false);
             return;
@@ -552,13 +635,11 @@ export default function DatLichPage() {
           branch_id: selectedBranchId,
           status: "confirmed",
           number_of_customers: 1,
-          services: [
-            {
-              service_id: serviceId,
-              service_category_id: categoryId || null,
-              staff_id: staffId,
-            },
-          ],
+          services: completeRows.map((row) => ({
+            service_id: row.serviceId,
+            service_category_id: row.categoryId || null,
+            staff_id: row.staffId,
+          })),
         }),
       });
       const bookingJson = await bookingRes.json();
@@ -590,9 +671,7 @@ export default function DatLichPage() {
     setCustomerName("");
     setCustomerPhone("");
     setBookingDate("");
-    setCategoryId("");
-    setServiceId("");
-    setStaffId("");
+    setServiceRows([newRow()]);
     setBookingTime("");
     setSuccess(false);
     setSkipExistingCheck(false);
@@ -771,7 +850,10 @@ export default function DatLichPage() {
             </div>
           </section>
 
-          {/* Part 2: Service selection (locked until Part 1 is complete) */}
+          {/* Part 2: Service selection (locked until Part 1 is complete).
+              Multi-service: the customer can add 2, 3, or more services, each
+              on a different staff. All services start at the SAME time (parallel
+              model) so the Khung giờ picker is a single shared field below. */}
           <section
             className={cn(
               "rounded-xl border bg-white p-6 shadow-sm transition-opacity",
@@ -787,144 +869,200 @@ export default function DatLichPage() {
                 </span>
               )}
             </h2>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* Nhóm dịch vụ */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-gray-700">Nhóm dịch vụ</Label>
-                <Select
-                  value={categoryId}
-                  onValueChange={onCategoryChange}
-                  disabled={!part1Complete}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue
-                      placeholder={
-                        part1Complete ? "Chọn nhóm dịch vụ" : "Nhập thông tin KH trước"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.length === 0 ? (
-                      <SelectItem value="_none" disabled>
-                        Không có nhóm dịch vụ
-                      </SelectItem>
-                    ) : (
-                      categories.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.name}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-4">
+              {serviceRows.map((row, idx) => {
+                const rowServices = servicesForCategory(row.categoryId);
+                const rowStaff = staffForService(row.serviceId);
+                return (
+                  <div
+                    key={row.id}
+                    className="rounded-lg border border-gray-200 bg-gray-50/50 p-4"
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        Dịch vụ {idx + 1}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-gray-400 hover:text-red-600"
+                        disabled={serviceRows.length <= 1}
+                        onClick={() => removeRow(row.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      {/* Nhóm dịch vụ */}
+                      <div className="space-y-1.5">
+                        <Label className="text-sm text-gray-700">Nhóm dịch vụ</Label>
+                        <Select
+                          value={row.categoryId}
+                          onValueChange={(v) => onRowCategoryChange(row.id, v)}
+                          disabled={!part1Complete}
+                        >
+                          <SelectTrigger className="h-10">
+                            <SelectValue
+                              placeholder={
+                                part1Complete ? "Chọn nhóm dịch vụ" : "Nhập thông tin KH trước"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {categories.length === 0 ? (
+                              <SelectItem value="_none" disabled>
+                                Không có nhóm dịch vụ
+                              </SelectItem>
+                            ) : (
+                              categories.map((c) => (
+                                <SelectItem key={c.id} value={c.id}>
+                                  {c.name}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-              {/* Dịch vụ */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-gray-700">Dịch vụ</Label>
-                <Select
-                  value={serviceId}
-                  onValueChange={onServiceChange}
-                  disabled={!part1Complete || !categoryId}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue
-                      placeholder={
-                        !part1Complete
-                          ? "Nhập thông tin KH trước"
-                          : categoryId
-                            ? "Chọn dịch vụ"
-                            : "Chọn nhóm trước"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {servicesInCategory.length === 0 ? (
-                      <SelectItem value="_none" disabled>
-                        Không có dịch vụ
-                      </SelectItem>
-                    ) : (
-                      servicesInCategory.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                          {s.price ? ` — ${new Intl.NumberFormat("vi-VN").format(Number(s.price))}đ` : ""}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
+                      {/* Dịch vụ */}
+                      <div className="space-y-1.5">
+                        <Label className="text-sm text-gray-700">Dịch vụ</Label>
+                        <Select
+                          value={row.serviceId}
+                          onValueChange={(v) => onRowServiceChange(row.id, v)}
+                          disabled={!part1Complete || !row.categoryId}
+                        >
+                          <SelectTrigger className="h-10">
+                            <SelectValue
+                              placeholder={
+                                !part1Complete
+                                  ? "Nhập thông tin KH trước"
+                                  : row.categoryId
+                                    ? "Chọn dịch vụ"
+                                    : "Chọn nhóm trước"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {rowServices.length === 0 ? (
+                              <SelectItem value="_none" disabled>
+                                Không có dịch vụ
+                              </SelectItem>
+                            ) : (
+                              rowServices.map((s) => (
+                                <SelectItem key={s.id} value={s.id}>
+                                  {s.name}
+                                  {s.price ? ` — ${new Intl.NumberFormat("vi-VN").format(Number(s.price))}đ` : ""}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-              {/* Kỹ thuật viên */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-gray-700">Kỹ thuật viên</Label>
-                <Select
-                  value={staffId}
-                  onValueChange={(v) => { setStaffId(v); setBookingTime(""); }}
-                  disabled={!part1Complete || !serviceId}
-                >
-                  <SelectTrigger className="h-10">
-                    <SelectValue
-                      placeholder={
-                        !part1Complete
-                          ? "Nhập thông tin KH trước"
-                          : serviceId
-                            ? "Chọn kỹ thuật viên"
-                            : "Chọn dịch vụ trước"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {staffForService.length === 0 ? (
-                      <SelectItem value="_none" disabled>
-                        Không có kỹ thuật viên
-                      </SelectItem>
-                    ) : (
-                      staffForService.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                          {s.groupName ? ` (${s.groupName})` : ""}
-                        </SelectItem>
-                      ))
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Khung giờ (locked until Nhóm DV + Dịch vụ + Kỹ thuật viên selected) */}
-              <div className="space-y-1.5">
-                <Label className="text-sm text-gray-700">Khung giờ</Label>
-                <div
-                  className={cn(
-                    "relative transition-opacity",
-                    !timePickerReady && "pointer-events-none opacity-40"
-                  )}
-                >
-                  <Clock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <div className="pl-9">
-                    <TimePicker
-                      value={bookingTime}
-                      onChange={setBookingTime}
-                      placeholder={
-                        timePickerReady ? "HH:MM" : "Chọn dịch vụ + NV trước"
-                      }
-                      hiddenHours={hiddenHours}
-                      hiddenMinutes={hiddenMinutes}
-                    />
+                      {/* Kỹ thuật viên */}
+                      <div className="space-y-1.5">
+                        <Label className="text-sm text-gray-700">Kỹ thuật viên</Label>
+                        <Select
+                          value={row.staffId}
+                          onValueChange={(v) => onRowStaffChange(row.id, v)}
+                          disabled={!part1Complete || !row.serviceId}
+                        >
+                          <SelectTrigger className="h-10">
+                            <SelectValue
+                              placeholder={
+                                !part1Complete
+                                  ? "Nhập thông tin KH trước"
+                                  : row.serviceId
+                                    ? "Chọn kỹ thuật viên"
+                                    : "Chọn dịch vụ trước"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {rowStaff.length === 0 ? (
+                              <SelectItem value="_none" disabled>
+                                Không có kỹ thuật viên
+                              </SelectItem>
+                            ) : (
+                              rowStaff.map((s) => (
+                                <SelectItem key={s.id} value={s.id}>
+                                  {s.name}
+                                  {s.groupName ? ` (${s.groupName})` : ""}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                {staffId && bookingDate && (dayBookings?.length ?? 0) > 0 && (
-                  <p className="text-xs text-gray-400">
-                    Các khung giờ bận đã được ẩn.
-                  </p>
-                )}
+                );
+              })}
+            </div>
+
+            {/* Add another service row */}
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addRow}
+                disabled={!part1Complete}
+                className="border-dashed"
+              >
+                <Plus className="mr-2 h-4 w-4" /> Thêm dịch vụ
+              </Button>
+            </div>
+
+            {/* Within-form duplicate-staff warning: in the parallel model two
+                services sharing the same staff would overlap at the start time.
+                The backend rejects this; we surface it here so the customer can
+                pick a different staff before submitting. */}
+            {duplicateStaff && (
+              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  Mỗi dịch vụ trong một lịch hẹn phải dùng thợ khác nhau. Vui lòng chọn thợ khác cho các dịch vụ trùng nhau.
+                </span>
               </div>
+            )}
+
+            {/* Khung giờ — shared across all services (parallel model: all
+                services start at the same time). Locked until at least one
+                complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên) exists. */}
+            <div className="mt-4 max-w-xs space-y-1.5">
+              <Label className="text-sm text-gray-700">Khung giờ</Label>
+              <div
+                className={cn(
+                  "relative transition-opacity",
+                  !timePickerReady && "pointer-events-none opacity-40"
+                )}
+              >
+                <Clock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <div className="pl-9">
+                  <TimePicker
+                    value={bookingTime}
+                    onChange={setBookingTime}
+                    placeholder={
+                      timePickerReady ? "HH:MM" : "Chọn dịch vụ + NV trước"
+                    }
+                    hiddenHours={hiddenHours}
+                    hiddenMinutes={hiddenMinutes}
+                  />
+                </div>
+              </div>
+              {completeRows.length >= 1 && bookingDate && (dayBookings?.length ?? 0) > 0 && (
+                <p className="text-xs text-gray-400">
+                  Các khung giờ bận đã được ẩn.
+                </p>
+              )}
             </div>
           </section>
 
           {/* Submit */}
           {error && (
-            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}
@@ -1022,7 +1160,24 @@ export default function DatLichPage() {
                     </div>
                     <div className="flex justify-between py-0.5">
                       <span className="text-emerald-700">Dịch vụ:</span>
-                      <span className="font-medium text-emerald-900">{selectedService?.name}</span>
+                      <span className="font-medium text-emerald-900">
+                        {completeRows
+                          .map((r) => allServices.find((s) => s.id === r.serviceId)?.name)
+                          .filter(Boolean)
+                          .join(", ")}
+                      </span>
+                    </div>
+                    <div className="flex justify-between py-0.5">
+                      <span className="text-emerald-700">Thợ:</span>
+                      <span className="font-medium text-emerald-900">
+                        {completeRows
+                          .map((r) => {
+                            const svc = allServices.find((s) => s.id === r.serviceId);
+                            const st = allStaff.find((s) => s.id === r.staffId);
+                            return `${svc?.name || "?"} (${st?.name || "?"})`;
+                          })
+                          .join(", ")}
+                      </span>
                     </div>
                   </div>
                   <div className="mt-4 flex justify-end">
