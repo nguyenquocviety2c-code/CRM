@@ -1,0 +1,469 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e15]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e16]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e17]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e18]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e19]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e20]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e21]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e22]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e23]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e24]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e25]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - heading "Quản lý nhân viên" [level=1, ref=e13]
+    - generic [ref=e14] clickable [onclick]
+      - combobox [expanded=false, ref=e26]: Chi nhánh: Level 1 Vạn Bảo icon: down
+        - generic
+          - generic
+            - StaticText "Chi nhánh: Level 1 Vạn Bảo"
+        - generic [ref=e27] clickable [cursor:pointer, onclick]
+    - generic
+      - tablist [ref=e28] focusable [tabindex]
+        - generic
+          - generic
+            - StaticText "  "
+            - generic
+              - tab "Chấm công" [ref=e35]
+                - StaticText "Chấm công"
+              - tab "Quản lý lương" [selected, ref=e36]
+                - StaticText "Quản lý lương"
+            - StaticText "  "
+      - tabpanel
+    - generic
+      - textbox "Tìm kiếm nhân viên..." [ref=e29]
+      - generic [ref=e30] clickable [onclick]
+        - textbox "Chọn thời điểm" [ref=e33]: 06/2026
+          - StaticText "06/2026"
+        - generic "icon: close-circle" [ref=e34] clickable [cursor:pointer, onclick]
+      - button "icon: download Xuất tổng hợp" [ref=e31]
+        - StaticText "Xuất tổng hợp"
+      - button "icon: setting Cài đặt lương" [ref=e32]
+        - StaticText "Cài đặt lương"
+      - main
+        - table
+          - rowgroup
+            - row
+              - columnheader "Tên nhân viên" [ref=e137]
+                - StaticText "Tên nhân viên"
+              - columnheader "Nghỉ có phép" [ref=e138]
+                - StaticText "Nghỉ có phép"
+              - columnheader "Nghỉ không phép" [ref=e139]
+                - StaticText "Nghỉ không phép"
+              - columnheader "..." [ref=e140]
+                - StaticText "..."
+          - row [ref=e37] clickable [onclick]
+            - cell "Nguyễn Tuấn Dũng" [ref=e57] clickable [onclick]
+              - link "Nguyễn Tuấn Dũng" [ref=e141]
+            - cell "0" [ref=e58] clickable [onclick]
+            - cell "0" [ref=e59] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e60] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e161]
+                - button "Thưởng/phạt" [ref=e162]
+                - button "Thanh toán" [ref=e163]
+          - row [ref=e38] clickable [onclick]
+            - cell "Nguyễn Xuân Việt Tân" [ref=e61] clickable [onclick]
+              - link "Nguyễn Xuân Việt Tân" [ref=e142]
+            - cell "0" [ref=e62] clickable [onclick]
+            - cell "0" [ref=e63] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e64] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e164]
+                - button "Thưởng/phạt" [ref=e165]
+                - button "Thanh toán" [ref=e166]
+          - row [ref=e39] clickable [onclick]
+            - cell "Trần Đức Anh" [ref=e65] clickable [onclick]
+              - link "Trần Đức Anh" [ref=e143]
+            - cell "0" [ref=e66] clickable [onclick]
+            - cell "0" [ref=e67] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e68] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e167]
+                - button "Thưởng/phạt" [ref=e168]
+                - button "Thanh toán" [ref=e169]
+          - row [ref=e40] clickable [onclick]
+            - cell "Trần Trung Kiên" [ref=e69] clickable [onclick]
+              - link "Trần Trung Kiên" [ref=e144]
+            - cell "0" [ref=e70] clickable [onclick]
+            - cell "0" [ref=e71] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e72] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e170]
+                - button "Thưởng/phạt" [ref=e171]
+                - button "Thanh toán" [ref=e172]
+          - row [ref=e41] clickable [onclick]
+            - cell "Đỗ Bảo Ngọc" [ref=e73] clickable [onclick]
+              - link "Đỗ Bảo Ngọc" [ref=e145]
+            - cell "0" [ref=e74] clickable [onclick]
+            - cell "0" [ref=e75] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e76] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e173]
+                - button "Thưởng/phạt" [ref=e174]
+                - button "Thanh toán" [ref=e175]
+          - row [ref=e42] clickable [onclick]
+            - cell "Đỗ Triệu Thành Duy" [ref=e77] clickable [onclick]
+              - link "Đỗ Triệu Thành Duy" [ref=e146]
+            - cell "0" [ref=e78] clickable [onclick]
+            - cell "0" [ref=e79] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e80] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e176]
+                - button "Thưởng/phạt" [ref=e177]
+                - button "Thanh toán" [ref=e178]
+          - row [ref=e43] clickable [onclick]
+            - cell "Mai Sơn Tùng" [ref=e81] clickable [onclick]
+              - link "Mai Sơn Tùng" [ref=e147]
+            - cell "0" [ref=e82] clickable [onclick]
+            - cell "0" [ref=e83] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e84] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e179]
+                - button "Thưởng/phạt" [ref=e180]
+                - button "Thanh toán" [ref=e181]
+          - row [ref=e44] clickable [onclick]
+            - cell "Trần Đức Phi Long" [ref=e85] clickable [onclick]
+              - link "Trần Đức Phi Long" [ref=e148]
+            - cell "0" [ref=e86] clickable [onclick]
+            - cell "0" [ref=e87] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e88] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e182]
+                - button "Thưởng/phạt" [ref=e183]
+                - button "Thanh toán" [ref=e184]
+          - row [ref=e45] clickable [onclick]
+            - cell "Phùng Trường Hiếu" [ref=e89] clickable [onclick]
+              - link "Phùng Trường Hiếu" [ref=e149]
+            - cell "0" [ref=e90] clickable [onclick]
+            - cell "0" [ref=e91] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e92] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e185]
+                - button "Thưởng/phạt" [ref=e186]
+                - button "Thanh toán" [ref=e187]
+          - row [ref=e46] clickable [onclick]
+            - cell "Nguyễn Thị Thùy Linh" [ref=e93] clickable [onclick]
+              - link "Nguyễn Thị Thùy Linh" [ref=e150]
+            - cell "0" [ref=e94] clickable [onclick]
+            - cell "0" [ref=e95] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e96] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e188]
+                - button "Thưởng/phạt" [ref=e189]
+                - button "Thanh toán" [ref=e190]
+          - row [ref=e47] clickable [onclick]
+            - cell "Phùng Đức Toàn" [ref=e97] clickable [onclick]
+              - link "Phùng Đức Toàn" [ref=e151]
+            - cell "0" [ref=e98] clickable [onclick]
+            - cell "0" [ref=e99] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e100] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e191]
+                - button "Thưởng/phạt" [ref=e192]
+                - button "Thanh toán" [ref=e193]
+          - row [ref=e48] clickable [onclick]
+            - cell "TEST thợ" [ref=e101] clickable [onclick]
+              - link "TEST thợ" [ref=e152]
+            - cell "0" [ref=e102] clickable [onclick]
+            - cell "0" [ref=e103] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e104] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e194]
+                - button "Thưởng/phạt" [ref=e195]
+                - button "Thanh toán" [ref=e196]
+          - row [ref=e49] clickable [onclick]
+            - cell "Nguyễn Trâm Anh" [ref=e105] clickable [onclick]
+              - link "Nguyễn Trâm Anh" [ref=e153]
+            - cell "0" [ref=e106] clickable [onclick]
+            - cell "0" [ref=e107] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e108] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e197]
+                - button "Thưởng/phạt" [ref=e198]
+                - button "Thanh toán" [ref=e199]
+          - row [ref=e50] clickable [onclick]
+            - cell "Nguyễn Yến Ngọc" [ref=e109] clickable [onclick]
+              - link "Nguyễn Yến Ngọc" [ref=e154]
+            - cell "0" [ref=e110] clickable [onclick]
+            - cell "0" [ref=e111] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e112] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e200]
+                - button "Thưởng/phạt" [ref=e201]
+                - button "Thanh toán" [ref=e202]
+          - row [ref=e51] clickable [onclick]
+            - cell "Nguyễn Trung Đức" [ref=e113] clickable [onclick]
+              - link "Nguyễn Trung Đức" [ref=e155]
+            - cell "0" [ref=e114] clickable [onclick]
+            - cell "0" [ref=e115] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e116] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e203]
+                - button "Thưởng/phạt" [ref=e204]
+                - button "Thanh toán" [ref=e205]
+          - row [ref=e52] clickable [onclick]
+            - cell "Đoàn Anh Tuấn" [ref=e117] clickable [onclick]
+              - link "Đoàn Anh Tuấn" [ref=e156]
+            - cell "0" [ref=e118] clickable [onclick]
+            - cell "0" [ref=e119] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e120] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e206]
+                - button "Thưởng/phạt" [ref=e207]
+                - button "Thanh toán" [ref=e208]
+          - row [ref=e53] clickable [onclick]
+            - cell "Nguyễn Thế Hải" [ref=e121] clickable [onclick]
+              - link "Nguyễn Thế Hải" [ref=e157]
+            - cell "0" [ref=e122] clickable [onclick]
+            - cell "0" [ref=e123] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e124] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e209]
+                - button "Thưởng/phạt" [ref=e210]
+                - button "Thanh toán" [ref=e211]
+          - row [ref=e54] clickable [onclick]
+            - cell "Khương Phú Phương" [ref=e125] clickable [onclick]
+              - link "Khương Phú Phương" [ref=e158]
+            - cell "0" [ref=e126] clickable [onclick]
+            - cell "0" [ref=e127] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e128] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e212]
+                - button "Thưởng/phạt" [ref=e213]
+                - button "Thanh toán" [ref=e214]
+          - row [ref=e55] clickable [onclick]
+            - cell "Tuấn Anh Nguyễn" [ref=e129] clickable [onclick]
+              - link "Tuấn Anh Nguyễn" [ref=e159]
+            - cell "0" [ref=e130] clickable [onclick]
+            - cell "0" [ref=e131] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e132] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e215]
+                - button "Thưởng/phạt" [ref=e216]
+                - button "Thanh toán" [ref=e217]
+          - row [ref=e56] clickable [onclick]
+            - cell "Phạm Thành" [ref=e133] clickable [onclick]
+              - link "Phạm Thành" [ref=e160]
+            - cell "0" [ref=e134] clickable [onclick]
+            - cell "0" [ref=e135] clickable [onclick]
+            - cell "Nghỉ Thưởng/phạt Thanh toán" [ref=e136] clickable [onclick]
+              - generic
+                - button "Nghỉ" [ref=e218]
+                - button "Thưởng/phạt" [ref=e219]
+                - button "Thanh toán" [ref=e220]
+- StaticText "  "
+- StaticText "  "

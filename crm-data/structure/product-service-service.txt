@@ -1,0 +1,553 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e13]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e14]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e15]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e16]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e17]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e18]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e19]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e20]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e21]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e22]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e23]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - generic
+      - StaticText "SẢN PHẨM VÀ DỊCH VỤ"
+      - StaticText "Sản phẩm"
+      - link "Danh sách sản phẩm" [ref=e24]
+      - link "Nhóm sản phẩm" [ref=e25]
+      - link "Kho hàng" [ref=e26]
+      - StaticText "Dịch vụ"
+      - link "Danh sách dịch vụ" [ref=e27]
+      - link "Nhóm dịch vụ" [ref=e28]
+      - StaticText "Gói dịch vụ"
+      - link "Danh sách gói dịch vụ" [ref=e29]
+      - link "Nhóm gói dịch vụ" [ref=e30]
+      - generic
+        - heading "Danh sách dịch vụ" [level=1, ref=e31]
+        - generic [ref=e32] clickable [onclick]
+          - combobox [expanded=false, ref=e33]: Chi nhánh: Level 1 Minh Khai icon: down
+            - generic
+              - generic
+                - StaticText "Chi nhánh: Level 1 Minh Khai"
+            - generic [ref=e35] clickable [cursor:pointer, onclick]
+        - button "icon: plus Tạo mới" [ref=e34]
+          - StaticText "Tạo mới"
+        - generic
+          - sectionheader
+            - textbox "Tìm kiếm..." [ref=e37]
+            - generic [ref=e36] clickable [onclick]
+              - combobox [expanded=false, ref=e38]: Lọc theo nhóm icon: down
+                - generic
+                  - generic [ref=e45] clickable [cursor:pointer, onclick]
+                    - StaticText "Lọc theo nhóm"
+                - generic [ref=e43] clickable [cursor:pointer, onclick]
+          - main
+            - generic
+              - table
+                - rowgroup
+                  - row
+                    - columnheader "Tên dịch vụ" [ref=e168]
+                      - StaticText "Tên dịch vụ"
+                    - columnheader "Nhóm" [ref=e169]
+                      - StaticText "Nhóm"
+                    - columnheader "Đơn giá" [ref=e170]
+                      - StaticText "Đơn giá"
+                    - columnheader "Sẵn sàng bán" [ref=e171]
+                      - StaticText "Sẵn sàng bán"
+                    - columnheader
+                - row [ref=e48] clickable [onclick]
+                  - cell "3-Chỉnh nếp từng vùng tóc by Creative Director" [ref=e68] clickable [onclick]
+                  - cell "3.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e69] clickable [onclick]
+                  - cell "330,000 Chỉnh nếp 2 bên: 330,000 Chỉnh nếp phía sau: 330,000" [ref=e70] clickable [onclick]
+                    - StaticText "330,000"
+                    - generic
+                      - StaticText "Chỉnh nếp 2 bên: 330,000"
+                    - generic
+                      - StaticText "Chỉnh nếp phía sau: 330,000"
+                  - cell "  " [ref=e71] clickable [onclick]
+                    - switch "  " [checked=true, ref=e172]
+                      - StaticText "  "
+                  - cell [ref=e72] clickable [onclick]
+                - row [ref=e49] clickable [onclick]
+                  - cell "3-Uốn Gợn Wavy by Creative Director" [ref=e73] clickable [onclick]
+                  - cell "3.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e74] clickable [onclick]
+                  - cell "770,000 Uốn Wavy by CD tóc mái chạm mắt (trên gò má): 880,000 Uốn Wavy by CD tóc mái dài qua gò má: 990,000" [ref=e75] clickable [onclick]
+                    - StaticText "770,000"
+                    - generic
+                      - StaticText "Uốn Wavy by CD tóc mái chạm mắt (trên gò má): 880,000"
+                    - generic
+                      - StaticText "Uốn Wavy by CD tóc mái dài qua gò má: 990,000"
+                  - cell "  " [ref=e76] clickable [onclick]
+                    - switch "  " [checked=true, ref=e173]
+                      - StaticText "  "
+                  - cell [ref=e77] clickable [onclick]
+                - row [ref=e50] clickable [onclick]
+                  - cell "1-Master Cut (tư vấn sâu cho KHM) - TẾT" [ref=e78] clickable [onclick]
+                  - cell "1.a-Dành cho khách hàng mới - DV Cắt" [ref=e79] clickable [onclick]
+                  - cell "220,000" [ref=e80] clickable [onclick]
+                    - StaticText "220,000"
+                  - cell "  " [ref=e81] clickable [onclick]
+                    - switch "  " [checked=false, ref=e174]
+                      - StaticText "  "
+                  - cell [ref=e82] clickable [onclick]
+                - row [ref=e51] clickable [onclick]
+                  - cell "1-Master Cut (tư vấn sâu cho KHM)" [ref=e83] clickable [onclick]
+                  - cell "1.a-Dành cho khách hàng mới - DV Cắt" [ref=e84] clickable [onclick]
+                  - cell "220,000" [ref=e85] clickable [onclick]
+                    - StaticText "220,000"
+                  - cell "  " [ref=e86] clickable [onclick]
+                    - switch "  " [checked=true, ref=e175]
+                      - StaticText "  "
+                  - cell [ref=e87] clickable [onclick]
+                - row [ref=e52] clickable [onclick]
+                  - cell "1-Master Cut KHM" [ref=e88] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e89] clickable [onclick]
+                  - cell "133,333" [ref=e90] clickable [onclick]
+                    - StaticText "133,333"
+                  - cell "  " [ref=e91] clickable [onclick]
+                    - switch "  " [checked=true, ref=e176]
+                      - StaticText "  "
+                  - cell [ref=e92] clickable [onclick]
+                - row [ref=e53] clickable [onclick]
+                  - cell "1-Senior Cut KHM" [ref=e93] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e94] clickable [onclick]
+                  - cell "100,000" [ref=e95] clickable [onclick]
+                    - StaticText "100,000"
+                  - cell "  " [ref=e96] clickable [onclick]
+                    - switch "  " [checked=false, ref=e177]
+                      - StaticText "  "
+                  - cell [ref=e97] clickable [onclick]
+                - row [ref=e54] clickable [onclick]
+                  - cell "1-Senior Cut Trẻ em dưới 6 tuổi" [ref=e98] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e99] clickable [onclick]
+                  - cell "99,000" [ref=e100] clickable [onclick]
+                    - StaticText "99,000"
+                  - cell "  " [ref=e101] clickable [onclick]
+                    - switch "  " [checked=false, ref=e178]
+                      - StaticText "  "
+                  - cell [ref=e102] clickable [onclick]
+                - row [ref=e55] clickable [onclick]
+                  - cell "1-Master Cut Trẻ em dưới 6 tuổi" [ref=e103] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e104] clickable [onclick]
+                  - cell "132,000" [ref=e105] clickable [onclick]
+                    - StaticText "132,000"
+                  - cell "  " [ref=e106] clickable [onclick]
+                    - switch "  " [checked=true, ref=e179]
+                      - StaticText "  "
+                  - cell [ref=e107] clickable [onclick]
+                - row [ref=e56] clickable [onclick]
+                  - cell "1-Phục hồi trước uốn" [ref=e108] clickable [onclick]
+                  - cell "1.d-DV Chăm Sóc Tóc" [ref=e109] clickable [onclick]
+                  - cell "220,000 Phục hồi cho KH từng uốn tại hệ thống: 110,000" [ref=e110] clickable [onclick]
+                    - StaticText "220,000"
+                    - generic
+                      - StaticText "Phục hồi cho KH từng uốn tại hệ thống: 110,000"
+                  - cell "  " [ref=e111] clickable [onclick]
+                    - switch "  " [checked=true, ref=e180]
+                      - StaticText "  "
+                  - cell [ref=e112] clickable [onclick]
+                - row [ref=e57] clickable [onclick]
+                  - cell "1-Uốn Đặc Biệt" [ref=e113] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e114] clickable [onclick]
+                  - cell "550,000 Uốn Spiky: 600,000" [ref=e115] clickable [onclick]
+                    - StaticText "550,000"
+                    - generic
+                      - StaticText "Uốn Spiky: 600,000"
+                  - cell "  " [ref=e116] clickable [onclick]
+                    - switch "  " [checked=false, ref=e181]
+                      - StaticText "  "
+                  - cell [ref=e117] clickable [onclick]
+                - row [ref=e58] clickable [onclick]
+                  - cell "1-Senior Cut" [ref=e118] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e119] clickable [onclick]
+                  - cell "165,000" [ref=e120] clickable [onclick]
+                    - StaticText "165,000"
+                  - cell "  " [ref=e121] clickable [onclick]
+                    - switch "  " [checked=false, ref=e182]
+                      - StaticText "  "
+                  - cell [ref=e122] clickable [onclick]
+                - row [ref=e59] clickable [onclick]
+                  - cell "1-Creative Director Cut" [ref=e123] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e124] clickable [onclick]
+                  - cell "550,000" [ref=e125] clickable [onclick]
+                    - StaticText "550,000"
+                  - cell "  " [ref=e126] clickable [onclick]
+                    - switch "  " [checked=true, ref=e183]
+                      - StaticText "  "
+                  - cell [ref=e127] clickable [onclick]
+                - row [ref=e60] clickable [onclick]
+                  - cell "1-Duỗi Tóc (dành cho tóc uốn)" [ref=e128] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e129] clickable [onclick]
+                  - cell "165,000" [ref=e130] clickable [onclick]
+                    - StaticText "165,000"
+                  - cell "  " [ref=e131] clickable [onclick]
+                    - switch "  " [checked=true, ref=e184]
+                      - StaticText "  "
+                  - cell [ref=e132] clickable [onclick]
+                - row [ref=e61] clickable [onclick]
+                  - cell "1-Chỉnh nếp từng vùng tóc" [ref=e133] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e134] clickable [onclick]
+                  - cell "275,000 Chỉnh nếp 2 bên: 275,000 Chỉnh nếp phía sau: 275,000" [ref=e135] clickable [onclick]
+                    - StaticText "275,000"
+                    - generic
+                      - StaticText "Chỉnh nếp 2 bên: 275,000"
+                    - generic
+                      - StaticText "Chỉnh nếp phía sau: 275,000"
+                  - cell "  " [ref=e136] clickable [onclick]
+                    - switch "  " [checked=true, ref=e185]
+                      - StaticText "  "
+                  - cell [ref=e137] clickable [onclick]
+                - row [ref=e62] clickable [onclick]
+                  - cell "1-Uốn Phồng Chân Tóc" [ref=e138] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e139] clickable [onclick]
+                  - cell "550,000" [ref=e140] clickable [onclick]
+                    - StaticText "550,000"
+                  - cell "  " [ref=e141] clickable [onclick]
+                    - switch "  " [checked=true, ref=e186]
+                      - StaticText "  "
+                  - cell [ref=e142] clickable [onclick]
+                - row [ref=e63] clickable [onclick]
+                  - cell "1-Uốn Trung" [ref=e143] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e144] clickable [onclick]
+                  - cell "350,000 Uốn thân tóc: 450,000 Uốn Ruffled: 500,000" [ref=e145] clickable [onclick]
+                    - StaticText "350,000"
+                    - generic
+                      - StaticText "Uốn thân tóc: 450,000"
+                    - generic
+                      - StaticText "Uốn Ruffled: 500,000"
+                  - cell "  " [ref=e146] clickable [onclick]
+                    - switch "  " [checked=false, ref=e187]
+                      - StaticText "  "
+                  - cell [ref=e147] clickable [onclick]
+                - row [ref=e64] clickable [onclick]
+                  - cell "1-Uốn Nhật" [ref=e148] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e149] clickable [onclick]
+                  - cell "400,000 Uốn cả đầu: 600,000" [ref=e150] clickable [onclick]
+                    - StaticText "400,000"
+                    - generic
+                      - StaticText "Uốn cả đầu: 600,000"
+                  - cell "  " [ref=e151] clickable [onclick]
+                    - switch "  " [checked=false, ref=e188]
+                      - StaticText "  "
+                  - cell [ref=e152] clickable [onclick]
+                - row [ref=e65] clickable [onclick]
+                  - cell "1-Uốn Mái" [ref=e153] clickable [onclick]
+                  - cell "1.b-DV Điều Chỉnh Nếp Tóc (QK vui lòng đặt qua Fanpage CN)" [ref=e154] clickable [onclick]
+                  - cell "200,000" [ref=e155] clickable [onclick]
+                    - StaticText "200,000"
+                  - cell "  " [ref=e156] clickable [onclick]
+                    - switch "  " [checked=false, ref=e189]
+                      - StaticText "  "
+                  - cell [ref=e157] clickable [onclick]
+                - row [ref=e66] clickable [onclick]
+                  - cell "1-Artist Cut" [ref=e158] clickable [onclick]
+                  - cell "1.a-Dịch Vụ Cắt" [ref=e159] clickable [onclick]
+                  - cell "330,000" [ref=e160] clickable [onclick]
+                    - StaticText "330,000"
+                  - cell "  " [ref=e161] clickable [onclick]
+                    - switch "  " [checked=true, ref=e190]
+                      - StaticText "  "
+                  - cell [ref=e162] clickable [onclick]
+                - row [ref=e67] clickable [onclick]
+                  - cell "1-Styling (gội và tạo kiểu)" [ref=e163] clickable [onclick]
+                  - cell "1.d-DV Chăm Sóc Tóc" [ref=e164] clickable [onclick]
+                  - cell "88,000 Cạo lại viền tóc: 55,000" [ref=e165] clickable [onclick]
+                    - StaticText "88,000"
+                    - generic
+                      - StaticText "Cạo lại viền tóc: 55,000"
+                  - cell "  " [ref=e166] clickable [onclick]
+                    - switch "  " [checked=true, ref=e191]
+                      - StaticText "  "
+                  - cell [ref=e167] clickable [onclick]
+          - sectionfooter
+            - list
+              - listitem [level=1]
+                - StaticText "Hiển thị từ 1 đến 20 trên tổng số 28"
+              - listitem "Trang Trước" [level=1, disabled, ref=e39] clickable [onclick]
+              - listitem [level=1, ref=e40] clickable [cursor:pointer, onclick, tabindex]
+                - StaticText "1"
+              - listitem [level=1, ref=e41] clickable [cursor:pointer, onclick, tabindex]
+                - StaticText "2"
+              - listitem "Trang Kế" [level=1, ref=e42] clickable [cursor:pointer, onclick, tabindex]
+              - listitem [level=1]
+                - generic [ref=e44] clickable [onclick]
+                  - combobox [expanded=false, ref=e46]: 20 / trang icon: down
+                    - generic
+                      - StaticText "20 / trang"
+                    - generic [ref=e47] clickable [cursor:pointer, onclick]

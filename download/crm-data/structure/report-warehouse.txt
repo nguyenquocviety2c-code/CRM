@@ -1,0 +1,591 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e16]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e17]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e18]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e19]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e20]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e21]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e22]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e23]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e24]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e25]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e26]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - heading "Báo cáo" [level=1, ref=e13]
+    - generic [ref=e14] clickable [onclick]
+      - combobox [expanded=false, ref=e27]: Chi nhánh: Level 1 Vạn Bảo icon: down
+        - generic
+          - generic
+            - StaticText "Chi nhánh: Level 1 Vạn Bảo"
+        - generic [ref=e30] clickable [cursor:pointer, onclick]
+    - generic [ref=e15] focusable [tabindex]
+      - generic [ref=e28] clickable [onclick]
+        - textbox "Ngày bắt đầu" [ref=e31]: 20/06/2026
+          - StaticText "20/06/2026"
+        - StaticText "~"
+        - textbox "Ngày kết thúc" [ref=e32]: 20/06/2026
+          - StaticText "20/06/2026"
+        - generic "icon: close-circle" [ref=e33] clickable [cursor:pointer, onclick]
+    - generic
+      - generic
+        - tablist [ref=e34] focusable [tabindex]
+          - generic
+            - generic
+              - StaticText "  "
+              - generic
+                - tab "DOANH THU" [ref=e279]
+                  - link "DOANH THU" [ref=e315]
+                - tab "NHÂN VIÊN" [ref=e280]
+                  - link "NHÂN VIÊN" [ref=e316]
+                - tab "KHÁCH HÀNG" [ref=e281]
+                  - link "KHÁCH HÀNG" [ref=e317]
+                - tab "CÔNG NỢ" [ref=e282]
+                  - link "CÔNG NỢ" [ref=e318]
+                - tab "THU CHI" [ref=e283]
+                  - link "THU CHI" [ref=e319]
+                - tab "KHO HÀNG" [selected, ref=e284]
+                  - link "KHO HÀNG" [ref=e320]
+                - tab "THẺ TIỀN MẶT" [ref=e285]
+                  - link "THẺ TIỀN MẶT" [ref=e321]
+                - tab "GÓI DỊCH VỤ" [ref=e286]
+                  - link "GÓI DỊCH VỤ" [ref=e322]
+                - tab "TÍCH ĐIỂM" [ref=e287]
+                  - link "TÍCH ĐIỂM" [ref=e323]
+              - StaticText "  "
+        - tabpanel
+      - generic [ref=e35] clickable [onclick]
+        - combobox [expanded=false, ref=e49]: Tồn kho icon: down
+          - generic
+            - StaticText "Tồn kho"
+          - generic [ref=e53] clickable [cursor:pointer, onclick]
+      - generic [ref=e36] clickable [onclick]
+        - combobox [expanded=false, ref=e50]: Chọn nhóm sản phẩm icon: down
+          - generic
+            - generic [ref=e56] clickable [cursor:pointer, onclick]
+              - StaticText "Chọn nhóm sản phẩm"
+          - generic [ref=e54] clickable [cursor:pointer, onclick]
+      - generic [ref=e37] clickable [onclick]
+        - combobox [expanded=false, ref=e51]: Tìm sản phẩm
+          - generic
+            - generic [ref=e57] clickable [cursor:pointer, onclick]
+              - StaticText "Tìm sản phẩm"
+      - button "icon: download Xuất excel" [ref=e29]
+        - StaticText "Xuất excel"
+      - generic
+        - button "Tình trạng sản phẩm" [ref=e38]
+        - button "icon: caret-down" [ref=e39]
+      - StaticText "TỒN KHO ĐẦU KỲ"
+      - StaticText "788"
+      - StaticText "NHẬP KHO"
+      - StaticText "0"
+      - StaticText "XUẤT KHO"
+      - StaticText "1"
+      - generic
+        - StaticText "Xuất sử dụng: 0 | Xuất bán: 1"
+      - StaticText "CHUYỂN KHO"
+      - StaticText "0"
+      - StaticText "NHẬN CHUYỂN KHO"
+      - StaticText "0"
+      - StaticText "TỒN KHO"
+      - StaticText "787"
+      - table
+        - rowgroup
+          - row
+            - columnheader "Mã sản phẩm" [ref=e288]
+              - StaticText "Mã sản phẩm"
+            - columnheader "Tên sản phẩm" [ref=e289]
+              - StaticText "Tên sản phẩm"
+            - columnheader "Tồn kho đầu kỳ" [ref=e290]
+              - StaticText "Tồn kho đầu kỳ"
+            - columnheader "Số lượng nhập" [ref=e291]
+              - StaticText "Số lượng nhập"
+            - columnheader "Số lượng xuất icon: info-circle" [ref=e292]
+              - StaticText "Số lượng xuất "
+            - columnheader "Số lượng bán ra" [ref=e293]
+              - StaticText "Số lượng bán ra"
+            - columnheader "Chuyển kho" [ref=e294]
+              - StaticText "Chuyển kho"
+            - columnheader "Nhận chuyển kho" [ref=e295]
+              - StaticText "Nhận chuyển kho"
+            - columnheader "Tồn kho cuối kỳ" [ref=e296]
+              - StaticText "Tồn kho cuối kỳ"
+            - columnheader
+        - row [ref=e58] clickable [onclick]
+          - cell "A000134" [ref=e79] clickable [onclick]
+          - cell "DAS" [ref=e80] clickable [onclick]
+          - cell "29" [ref=e81] clickable [onclick]
+          - cell "0" [ref=e82] clickable [onclick]
+          - cell "0" [ref=e83] clickable [onclick]
+          - cell "0" [ref=e84] clickable [onclick]
+          - cell "0" [ref=e85] clickable [onclick]
+          - cell "0" [ref=e86] clickable [onclick]
+          - cell "29" [ref=e87] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e88] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e297]
+        - row [ref=e59] clickable [onclick]
+          - cell "A000133" [ref=e89] clickable [onclick]
+          - cell "Dầu gội Yuki 2L" [ref=e90] clickable [onclick]
+          - cell "0" [ref=e91] clickable [onclick]
+          - cell "0" [ref=e92] clickable [onclick]
+          - cell "0" [ref=e93] clickable [onclick]
+          - cell "0" [ref=e94] clickable [onclick]
+          - cell "0" [ref=e95] clickable [onclick]
+          - cell "0" [ref=e96] clickable [onclick]
+          - cell "0" [ref=e97] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e98] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e298]
+        - row [ref=e60] clickable [onclick]
+          - cell "A000132" [ref=e99] clickable [onclick]
+          - cell "Dầu gội Yuna 2L" [ref=e100] clickable [onclick]
+          - cell "2" [ref=e101] clickable [onclick]
+          - cell "0" [ref=e102] clickable [onclick]
+          - cell "0" [ref=e103] clickable [onclick]
+          - cell "0" [ref=e104] clickable [onclick]
+          - cell "0" [ref=e105] clickable [onclick]
+          - cell "0" [ref=e106] clickable [onclick]
+          - cell "2" [ref=e107] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e108] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e299]
+        - row [ref=e61] clickable [onclick]
+          - cell "A000131" [ref=e109] clickable [onclick]
+          - cell "Mix đỏ Echosline" [ref=e110] clickable [onclick]
+          - cell "2" [ref=e111] clickable [onclick]
+          - cell "0" [ref=e112] clickable [onclick]
+          - cell "0" [ref=e113] clickable [onclick]
+          - cell "0" [ref=e114] clickable [onclick]
+          - cell "0" [ref=e115] clickable [onclick]
+          - cell "0" [ref=e116] clickable [onclick]
+          - cell "2" [ref=e117] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e118] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e300]
+        - row [ref=e62] clickable [onclick]
+          - cell "A000130" [ref=e119] clickable [onclick]
+          - cell "Mix tím Echosline" [ref=e120] clickable [onclick]
+          - cell "2" [ref=e121] clickable [onclick]
+          - cell "0" [ref=e122] clickable [onclick]
+          - cell "0" [ref=e123] clickable [onclick]
+          - cell "0" [ref=e124] clickable [onclick]
+          - cell "0" [ref=e125] clickable [onclick]
+          - cell "0" [ref=e126] clickable [onclick]
+          - cell "2" [ref=e127] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e128] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e301]
+        - row [ref=e63] clickable [onclick]
+          - cell "A000129" [ref=e129] clickable [onclick]
+          - cell "Mix Blue Audi" [ref=e130] clickable [onclick]
+          - cell "1" [ref=e131] clickable [onclick]
+          - cell "0" [ref=e132] clickable [onclick]
+          - cell "0" [ref=e133] clickable [onclick]
+          - cell "0" [ref=e134] clickable [onclick]
+          - cell "0" [ref=e135] clickable [onclick]
+          - cell "0" [ref=e136] clickable [onclick]
+          - cell "1" [ref=e137] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e138] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e302]
+        - row [ref=e64] clickable [onclick]
+          - cell "A000128" [ref=e139] clickable [onclick]
+          - cell "Bột tẩy tím Echosline" [ref=e140] clickable [onclick]
+          - cell "1" [ref=e141] clickable [onclick]
+          - cell "0" [ref=e142] clickable [onclick]
+          - cell "0" [ref=e143] clickable [onclick]
+          - cell "0" [ref=e144] clickable [onclick]
+          - cell "0" [ref=e145] clickable [onclick]
+          - cell "0" [ref=e146] clickable [onclick]
+          - cell "1" [ref=e147] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e148] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e303]
+        - row [ref=e65] clickable [onclick]
+          - cell "A000127" [ref=e149] clickable [onclick]
+          - cell "Bột tẩy xám Echosline" [ref=e150] clickable [onclick]
+          - cell "1" [ref=e151] clickable [onclick]
+          - cell "0" [ref=e152] clickable [onclick]
+          - cell "0" [ref=e153] clickable [onclick]
+          - cell "0" [ref=e154] clickable [onclick]
+          - cell "0" [ref=e155] clickable [onclick]
+          - cell "0" [ref=e156] clickable [onclick]
+          - cell "1" [ref=e157] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e158] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e304]
+        - row [ref=e66] clickable [onclick]
+          - cell "A000126" [ref=e159] clickable [onclick]
+          - cell "Oxy Echosline 12%" [ref=e160] clickable [onclick]
+          - cell "4" [ref=e161] clickable [onclick]
+          - cell "0" [ref=e162] clickable [onclick]
+          - cell "0" [ref=e163] clickable [onclick]
+          - cell "0" [ref=e164] clickable [onclick]
+          - cell "0" [ref=e165] clickable [onclick]
+          - cell "0" [ref=e166] clickable [onclick]
+          - cell "4" [ref=e167] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e168] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e305]
+        - row [ref=e67] clickable [onclick]
+          - cell "A000125" [ref=e169] clickable [onclick]
+          - cell "Oxy Echosline 9%" [ref=e170] clickable [onclick]
+          - cell "6" [ref=e171] clickable [onclick]
+          - cell "0" [ref=e172] clickable [onclick]
+          - cell "0" [ref=e173] clickable [onclick]
+          - cell "0" [ref=e174] clickable [onclick]
+          - cell "0" [ref=e175] clickable [onclick]
+          - cell "0" [ref=e176] clickable [onclick]
+          - cell "6" [ref=e177] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e178] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e306]
+        - row [ref=e68] clickable [onclick]
+          - cell "A000124" [ref=e179] clickable [onclick]
+          - cell "Oxy Echosline 6%" [ref=e180] clickable [onclick]
+          - cell "4" [ref=e181] clickable [onclick]
+          - cell "0" [ref=e182] clickable [onclick]
+          - cell "0" [ref=e183] clickable [onclick]
+          - cell "0" [ref=e184] clickable [onclick]
+          - cell "0" [ref=e185] clickable [onclick]
+          - cell "0" [ref=e186] clickable [onclick]
+          - cell "4" [ref=e187] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e188] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e307]
+        - row [ref=e69] clickable [onclick]
+          - cell "A000123" [ref=e189] clickable [onclick]
+          - cell "Oxy Echosline 3%" [ref=e190] clickable [onclick]
+          - cell "2" [ref=e191] clickable [onclick]
+          - cell "0" [ref=e192] clickable [onclick]
+          - cell "0" [ref=e193] clickable [onclick]
+          - cell "0" [ref=e194] clickable [onclick]
+          - cell "0" [ref=e195] clickable [onclick]
+          - cell "0" [ref=e196] clickable [onclick]
+          - cell "2" [ref=e197] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e198] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e308]
+        - row [ref=e70] clickable [onclick]
+          - cell "A000122" [ref=e199] clickable [onclick]
+          - cell "Echosline 5.66" [ref=e200] clickable [onclick]
+          - cell "0" [ref=e201] clickable [onclick]
+          - cell "0" [ref=e202] clickable [onclick]
+          - cell "0" [ref=e203] clickable [onclick]
+          - cell "0" [ref=e204] clickable [onclick]
+          - cell "0" [ref=e205] clickable [onclick]
+          - cell "0" [ref=e206] clickable [onclick]
+          - cell "0" [ref=e207] clickable [onclick]
+          - cell "..." [ref=e208] clickable [onclick]
+        - row [ref=e71] clickable [onclick]
+          - cell "A000121" [ref=e209] clickable [onclick]
+          - cell "Echosline 6.43" [ref=e210] clickable [onclick]
+          - cell "0" [ref=e211] clickable [onclick]
+          - cell "0" [ref=e212] clickable [onclick]
+          - cell "0" [ref=e213] clickable [onclick]
+          - cell "0" [ref=e214] clickable [onclick]
+          - cell "0" [ref=e215] clickable [onclick]
+          - cell "0" [ref=e216] clickable [onclick]
+          - cell "0" [ref=e217] clickable [onclick]
+          - cell "..." [ref=e218] clickable [onclick]
+        - row [ref=e72] clickable [onclick]
+          - cell "A000120" [ref=e219] clickable [onclick]
+          - cell "Echosline 11.12" [ref=e220] clickable [onclick]
+          - cell "0" [ref=e221] clickable [onclick]
+          - cell "0" [ref=e222] clickable [onclick]
+          - cell "0" [ref=e223] clickable [onclick]
+          - cell "0" [ref=e224] clickable [onclick]
+          - cell "0" [ref=e225] clickable [onclick]
+          - cell "0" [ref=e226] clickable [onclick]
+          - cell "0" [ref=e227] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e228] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e309]
+        - row [ref=e73] clickable [onclick]
+          - cell "A000119" [ref=e229] clickable [onclick]
+          - cell "Echosline 5.22" [ref=e230] clickable [onclick]
+          - cell "3" [ref=e231] clickable [onclick]
+          - cell "0" [ref=e232] clickable [onclick]
+          - cell "0" [ref=e233] clickable [onclick]
+          - cell "0" [ref=e234] clickable [onclick]
+          - cell "0" [ref=e235] clickable [onclick]
+          - cell "0" [ref=e236] clickable [onclick]
+          - cell "3" [ref=e237] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e238] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e310]
+        - row [ref=e74] clickable [onclick]
+          - cell "A000118" [ref=e239] clickable [onclick]
+          - cell "Echosline 6.666" [ref=e240] clickable [onclick]
+          - cell "0" [ref=e241] clickable [onclick]
+          - cell "0" [ref=e242] clickable [onclick]
+          - cell "0" [ref=e243] clickable [onclick]
+          - cell "0" [ref=e244] clickable [onclick]
+          - cell "0" [ref=e245] clickable [onclick]
+          - cell "0" [ref=e246] clickable [onclick]
+          - cell "0" [ref=e247] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e248] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e311]
+        - row [ref=e75] clickable [onclick]
+          - cell "A000117" [ref=e249] clickable [onclick]
+          - cell "Echosline 6.4" [ref=e250] clickable [onclick]
+          - cell "2" [ref=e251] clickable [onclick]
+          - cell "0" [ref=e252] clickable [onclick]
+          - cell "0" [ref=e253] clickable [onclick]
+          - cell "0" [ref=e254] clickable [onclick]
+          - cell "0" [ref=e255] clickable [onclick]
+          - cell "0" [ref=e256] clickable [onclick]
+          - cell "2" [ref=e257] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e258] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e312]
+        - row [ref=e76] clickable [onclick]
+          - cell "A000116" [ref=e259] clickable [onclick]
+          - cell "Echosline 9.3" [ref=e260] clickable [onclick]
+          - cell "1" [ref=e261] clickable [onclick]
+          - cell "0" [ref=e262] clickable [onclick]
+          - cell "0" [ref=e263] clickable [onclick]
+          - cell "0" [ref=e264] clickable [onclick]
+          - cell "0" [ref=e265] clickable [onclick]
+          - cell "0" [ref=e266] clickable [onclick]
+          - cell "1" [ref=e267] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e268] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e313]
+        - row [ref=e77] clickable [onclick]
+          - cell "A000115" [ref=e269] clickable [onclick]
+          - cell "Echosline 7.3" [ref=e270] clickable [onclick]
+          - cell "1" [ref=e271] clickable [onclick]
+          - cell "0" [ref=e272] clickable [onclick]
+          - cell "0" [ref=e273] clickable [onclick]
+          - cell "0" [ref=e274] clickable [onclick]
+          - cell "0" [ref=e275] clickable [onclick]
+          - cell "0" [ref=e276] clickable [onclick]
+          - cell "1" [ref=e277] clickable [onclick]
+          - cell "Lịch sử nhập/xuất" [ref=e278] clickable [onclick]
+            - link "Lịch sử nhập/xuất" [ref=e314]
+      - list
+        - listitem [level=1]
+          - StaticText "Hiển thị từ 1 đến 20 trên tổng số 187"
+        - listitem "Trang Trước" [level=1, disabled, ref=e40] clickable [onclick]
+        - listitem [level=1, ref=e41] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "1"
+        - listitem [level=1, ref=e42] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "2"
+        - listitem [level=1, ref=e43] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "3"
+        - listitem [level=1, ref=e44] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "4"
+        - listitem [level=1, ref=e45] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "5"
+        - listitem "Đến 5 Trang Kế" [level=1, ref=e46] clickable [cursor:pointer, onclick, tabindex]
+          - generic
+            - StaticText "•••"
+        - listitem [level=1, ref=e47] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "10"
+        - listitem "Trang Kế" [level=1, ref=e48] clickable [cursor:pointer, onclick, tabindex]
+        - listitem [level=1]
+          - generic [ref=e52] clickable [onclick]
+            - combobox [expanded=false, ref=e55]: 20 / trang icon: down
+              - generic
+                - StaticText "20 / trang"
+              - generic [ref=e78] clickable [cursor:pointer, onclick]
+- StaticText "  "
+- StaticText "  "

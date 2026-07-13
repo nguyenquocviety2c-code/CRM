@@ -1,0 +1,689 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e16]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e17]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e18]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e19]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e20]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e21]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e22]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e23]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e24]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e25]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e26]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - heading "Báo cáo" [level=1, ref=e13]
+    - generic [ref=e14] clickable [onclick]
+      - combobox [expanded=false, ref=e27]: Chi nhánh: Level 1 Minh Khai icon: down
+        - generic
+          - generic
+            - StaticText "Chi nhánh: Level 1 Minh Khai"
+        - generic [ref=e32] clickable [cursor:pointer, onclick]
+    - generic [ref=e15] focusable [tabindex]
+      - generic [ref=e28] clickable [onclick]
+        - textbox "Ngày bắt đầu" [ref=e33]: 19/06/2026
+          - StaticText "19/06/2026"
+        - StaticText "~"
+        - textbox "Ngày kết thúc" [ref=e34]: 19/06/2026
+          - StaticText "19/06/2026"
+        - generic "icon: close-circle" [ref=e35] clickable [cursor:pointer, onclick]
+    - generic
+      - generic
+        - tablist [ref=e36] focusable [tabindex]
+          - generic
+            - generic
+              - StaticText "  "
+              - generic
+                - tab "DOANH THU" [selected, ref=e246]
+                  - link "DOANH THU" [ref=e303]
+                - tab "NHÂN VIÊN" [ref=e247]
+                  - link "NHÂN VIÊN" [ref=e304]
+                - tab "KHÁCH HÀNG" [ref=e248]
+                  - link "KHÁCH HÀNG" [ref=e305]
+                - tab "CÔNG NỢ" [ref=e249]
+                  - link "CÔNG NỢ" [ref=e306]
+                - tab "THU CHI" [ref=e250]
+                  - link "THU CHI" [ref=e307]
+                - tab "KHO HÀNG" [ref=e251]
+                  - link "KHO HÀNG" [ref=e308]
+                - tab "THẺ TIỀN MẶT" [ref=e252]
+                  - link "THẺ TIỀN MẶT" [ref=e309]
+                - tab "GÓI DỊCH VỤ" [ref=e253]
+                  - link "GÓI DỊCH VỤ" [ref=e310]
+                - tab "TÍCH ĐIỂM" [ref=e254]
+                  - link "TÍCH ĐIỂM" [ref=e311]
+              - StaticText "  "
+        - tabpanel
+      - generic [ref=e29] clickable [onclick]
+        - combobox [expanded=false, ref=e37]: Hóa đơn icon: down
+          - generic
+            - StaticText "Hóa đơn"
+          - generic [ref=e42] clickable [cursor:pointer, onclick]
+      - button "icon: printer In tổng hợp" [ref=e30]
+        - StaticText "In tổng hợp"
+      - button "icon: download Xuất excel" [ref=e31]
+        - StaticText "Xuất excel"
+      - StaticText "SỐ LƯỢNG HOÁ ĐƠN"
+      - StaticText "29"
+      - StaticText "DOANH THU HOÁ ĐƠN"
+      - StaticText "6,380,000"
+      - StaticText "ĐÃ THANH TOÁN"
+      - StaticText "6,380,000"
+      - StaticText "NỢ"
+      - StaticText "0"
+      - table
+        - rowgroup
+          - row
+            - columnheader [ref=e255] clickable [cursor:pointer, onclick]
+            - columnheader "Mã hóa đơn" [ref=e256]
+              - StaticText "Mã hóa đơn"
+            - columnheader "Ngày tạo" [ref=e257]
+              - StaticText "Ngày tạo"
+            - columnheader "Khách hàng" [ref=e258]
+              - StaticText "Khách hàng"
+            - columnheader "Tổng tiền" [ref=e259]
+              - StaticText "Tổng tiền"
+            - columnheader "Phụ thu" [ref=e260]
+              - StaticText "Phụ thu"
+            - columnheader "Thuế VAT" [ref=e261]
+              - StaticText "Thuế VAT"
+            - columnheader "Đã thanh toán" [ref=e262]
+              - StaticText "Đã thanh toán"
+        - row [ref=e45] clickable [onclick]
+          - cell [ref=e66] clickable [onclick]
+          - cell "HD063619" [ref=e67] clickable [onclick]
+            - link "HD063619" [ref=e263]
+              - StaticText "HD063619"
+          - cell "19/06/2026 20:12" [ref=e68] clickable [onclick]
+          - cell "Kiên" [ref=e69] clickable [onclick]
+            - link "Kiên" [ref=e312]
+          - cell "220,000" [ref=e70] clickable [onclick]
+          - cell "0" [ref=e71] clickable [onclick]
+          - cell "0" [ref=e72] clickable [onclick]
+          - cell "220,000" [ref=e73] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e46] clickable [onclick]
+          - cell [ref=e74] clickable [onclick]
+          - cell "HD063613" [ref=e75] clickable [onclick]
+            - link "HD063613" [ref=e264]
+              - StaticText "HD063613"
+          - cell "19/06/2026 19:28" [ref=e76] clickable [onclick]
+          - cell "Trần Văn Đạt" [ref=e77] clickable [onclick]
+            - link "Trần Văn Đạt" [ref=e313]
+          - cell "220,000" [ref=e78] clickable [onclick]
+          - cell "0" [ref=e79] clickable [onclick]
+          - cell "0" [ref=e80] clickable [onclick]
+          - cell "220,000" [ref=e81] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e47] clickable [onclick]
+          - cell [ref=e82] clickable [onclick]
+          - cell "HD063610" [ref=e83] clickable [onclick]
+            - link "HD063610" [ref=e265]
+              - StaticText "HD063610"
+          - cell "19/06/2026 18:39" [ref=e84] clickable [onclick]
+          - cell "Huỳnh Dũng" [ref=e85] clickable [onclick]
+            - link "Huỳnh Dũng" [ref=e314]
+          - cell "220,000" [ref=e86] clickable [onclick]
+          - cell "0" [ref=e87] clickable [onclick]
+          - cell "0" [ref=e88] clickable [onclick]
+          - cell "220,000" [ref=e89] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e48] clickable [onclick]
+          - cell [ref=e90] clickable [onclick]
+          - cell "HD063609" [ref=e91] clickable [onclick]
+            - link "HD063609" [ref=e266]
+              - StaticText "HD063609"
+          - cell "19/06/2026 18:38" [ref=e92] clickable [onclick]
+          - cell "Nguyễn Hoàng Long" [ref=e93] clickable [onclick]
+            - link "Nguyễn Hoàng Long" [ref=e315]
+          - cell "220,000" [ref=e94] clickable [onclick]
+          - cell "0" [ref=e95] clickable [onclick]
+          - cell "0" [ref=e96] clickable [onclick]
+          - cell "220,000" [ref=e97] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e49] clickable [onclick]
+          - cell [ref=e98] clickable [onclick]
+          - cell "HD063611" [ref=e99] clickable [onclick]
+            - link "HD063611" [ref=e267]
+              - StaticText "HD063611"
+          - cell "19/06/2026 18:08" [ref=e100] clickable [onclick]
+          - cell "Quang Anh" [ref=e101] clickable [onclick]
+            - link "Quang Anh" [ref=e316]
+          - cell "220,000" [ref=e102] clickable [onclick]
+          - cell "0" [ref=e103] clickable [onclick]
+          - cell "0" [ref=e104] clickable [onclick]
+          - cell "220,000" [ref=e105] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e50] clickable [onclick]
+          - cell [ref=e106] clickable [onclick]
+          - cell "HD063606" [ref=e107] clickable [onclick]
+            - link "HD063606" [ref=e268]
+              - StaticText "HD063606"
+          - cell "19/06/2026 18:08" [ref=e108] clickable [onclick]
+          - cell "Trần Hồng Quân" [ref=e109] clickable [onclick]
+            - link "Trần Hồng Quân" [ref=e317]
+          - cell "220,000" [ref=e110] clickable [onclick]
+          - cell "0" [ref=e111] clickable [onclick]
+          - cell "0" [ref=e112] clickable [onclick]
+          - cell "220,000" [ref=e113] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e51] clickable [onclick]
+          - cell [ref=e114] clickable [onclick]
+          - cell "HD063601" [ref=e115] clickable [onclick]
+            - link "HD063601" [ref=e269]
+              - StaticText "HD063601"
+          - cell "19/06/2026 17:20" [ref=e116] clickable [onclick]
+          - cell "Đinh thế anh" [ref=e117] clickable [onclick]
+            - link "Đinh thế anh" [ref=e318]
+          - cell "220,000" [ref=e118] clickable [onclick]
+          - cell "0" [ref=e119] clickable [onclick]
+          - cell "0" [ref=e120] clickable [onclick]
+          - cell "220,000" [ref=e121] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e52] clickable [onclick]
+          - cell [ref=e122] clickable [onclick]
+          - cell "HD063598" [ref=e123] clickable [onclick]
+            - link "HD063598" [ref=e270]
+              - StaticText "HD063598"
+          - cell "19/06/2026 17:08" [ref=e124] clickable [onclick]
+          - cell "nguyễn xuân hữu" [ref=e125] clickable [onclick]
+            - link "nguyễn xuân hữu" [ref=e319]
+          - cell "220,000" [ref=e126] clickable [onclick]
+          - cell "0" [ref=e127] clickable [onclick]
+          - cell "0" [ref=e128] clickable [onclick]
+          - cell "220,000" [ref=e129] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e53] clickable [onclick]
+          - cell [ref=e130] clickable [onclick]
+          - cell "HD063604" [ref=e131] clickable [onclick]
+            - link "HD063604" [ref=e271]
+              - StaticText "HD063604"
+          - cell "19/06/2026 17:05" [ref=e132] clickable [onclick]
+          - cell "Nam" [ref=e133] clickable [onclick]
+            - link "Nam" [ref=e320]
+          - cell "220,000" [ref=e134] clickable [onclick]
+          - cell "0" [ref=e135] clickable [onclick]
+          - cell "0" [ref=e136] clickable [onclick]
+          - cell "220,000" [ref=e137] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e54] clickable [onclick]
+          - cell [ref=e138] clickable [onclick]
+          - cell "HD063596" [ref=e139] clickable [onclick]
+            - link "HD063596" [ref=e272]
+              - StaticText "HD063596"
+          - cell "19/06/2026 16:14" [ref=e140] clickable [onclick]
+          - cell "Kiên T.Nguyễn" [ref=e141] clickable [onclick]
+            - link "Kiên T.Nguyễn" [ref=e321]
+          - cell "220,000" [ref=e142] clickable [onclick]
+          - cell "0" [ref=e143] clickable [onclick]
+          - cell "0" [ref=e144] clickable [onclick]
+          - cell "220,000" [ref=e145] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e55] clickable [onclick]
+          - cell [ref=e146] clickable [onclick]
+          - cell "HD063595" [ref=e147] clickable [onclick]
+            - link "HD063595" [ref=e273]
+              - StaticText "HD063595"
+          - cell "19/06/2026 15:58" [ref=e148] clickable [onclick]
+          - cell "Hoàng Đại" [ref=e149] clickable [onclick]
+            - link "Hoàng Đại" [ref=e322]
+          - cell "220,000" [ref=e150] clickable [onclick]
+          - cell "0" [ref=e151] clickable [onclick]
+          - cell "0" [ref=e152] clickable [onclick]
+          - cell "220,000" [ref=e153] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e56] clickable [onclick]
+          - cell [ref=e154] clickable [onclick]
+          - cell "HD063602" [ref=e155] clickable [onclick]
+            - link "HD063602" [ref=e274]
+              - StaticText "HD063602"
+          - cell "19/06/2026 14:57" [ref=e156] clickable [onclick]
+          - cell "Hiếu" [ref=e157] clickable [onclick]
+            - link "Hiếu" [ref=e323]
+          - cell "220,000" [ref=e158] clickable [onclick]
+          - cell "0" [ref=e159] clickable [onclick]
+          - cell "0" [ref=e160] clickable [onclick]
+          - cell "220,000" [ref=e161] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e57] clickable [onclick]
+          - cell [ref=e162] clickable [onclick]
+          - cell "HD063593" [ref=e163] clickable [onclick]
+            - link "HD063593" [ref=e275]
+              - StaticText "HD063593"
+          - cell "19/06/2026 14:56" [ref=e164] clickable [onclick]
+          - cell "Lê Bình An" [ref=e165] clickable [onclick]
+            - link "Lê Bình An" [ref=e324]
+          - cell "220,000" [ref=e166] clickable [onclick]
+          - cell "0" [ref=e167] clickable [onclick]
+          - cell "0" [ref=e168] clickable [onclick]
+          - cell "220,000" [ref=e169] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e58] clickable [onclick]
+          - cell [ref=e170] clickable [onclick]
+          - cell "HD063590" [ref=e171] clickable [onclick]
+            - link "HD063590" [ref=e276]
+              - StaticText "HD063590"
+          - cell "19/06/2026 14:56" [ref=e172] clickable [onclick]
+          - cell "Ngoc Hiep" [ref=e173] clickable [onclick]
+            - link "Ngoc Hiep" [ref=e325]
+          - cell "220,000" [ref=e174] clickable [onclick]
+          - cell "0" [ref=e175] clickable [onclick]
+          - cell "0" [ref=e176] clickable [onclick]
+          - cell "220,000" [ref=e177] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e59] clickable [onclick]
+          - cell [ref=e178] clickable [onclick]
+          - cell "HD063583" [ref=e179] clickable [onclick]
+            - link "HD063583" [ref=e277]
+              - StaticText "HD063583"
+          - cell "19/06/2026 12:26" [ref=e180] clickable [onclick]
+          - cell "Nguyễn Xuân Đồng" [ref=e181] clickable [onclick]
+            - link "Nguyễn Xuân Đồng" [ref=e326]
+          - cell "220,000" [ref=e182] clickable [onclick]
+          - cell "0" [ref=e183] clickable [onclick]
+          - cell "0" [ref=e184] clickable [onclick]
+          - cell "220,000" [ref=e185] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e60] clickable [onclick]
+          - cell [ref=e186] clickable [onclick]
+          - cell "HD063587" [ref=e187] clickable [onclick]
+            - link "HD063587" [ref=e278]
+              - StaticText "HD063587"
+          - cell "19/06/2026 12:20" [ref=e188] clickable [onclick]
+          - cell "Phát" [ref=e189] clickable [onclick]
+            - link "Phát" [ref=e327]
+          - cell "220,000" [ref=e190] clickable [onclick]
+          - cell "0" [ref=e191] clickable [onclick]
+          - cell "0" [ref=e192] clickable [onclick]
+          - cell "220,000" [ref=e193] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e61] clickable [onclick]
+          - cell [ref=e194] clickable [onclick]
+          - cell "HD063582" [ref=e195] clickable [onclick]
+            - link "HD063582" [ref=e279]
+              - StaticText "HD063582"
+          - cell "19/06/2026 12:10" [ref=e196] clickable [onclick]
+          - cell "MInh Hải" [ref=e197] clickable [onclick]
+            - link "MInh Hải" [ref=e328]
+          - cell "220,000" [ref=e198] clickable [onclick]
+          - cell "0" [ref=e199] clickable [onclick]
+          - cell "0" [ref=e200] clickable [onclick]
+          - cell "220,000" [ref=e201] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e62] clickable [onclick]
+          - cell [ref=e202] clickable [onclick]
+          - cell "HD063588" [ref=e203] clickable [onclick]
+            - link "HD063588" [ref=e280]
+              - StaticText "HD063588"
+          - cell "19/06/2026 12:03" [ref=e204] clickable [onclick]
+          - cell "Nguyen Thai" [ref=e205] clickable [onclick]
+            - link "Nguyen Thai" [ref=e329]
+          - cell "220,000" [ref=e206] clickable [onclick]
+          - cell "0" [ref=e207] clickable [onclick]
+          - cell "0" [ref=e208] clickable [onclick]
+          - cell "220,000" [ref=e209] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e63] clickable [onclick]
+          - cell [ref=e210] clickable [onclick]
+          - cell "HD063578" [ref=e211] clickable [onclick]
+            - link "HD063578" [ref=e281]
+              - StaticText "HD063578"
+          - cell "19/06/2026 11:27" [ref=e212] clickable [onclick]
+          - cell "Vương Quý" [ref=e213] clickable [onclick]
+            - link "Vương Quý" [ref=e330]
+          - cell "220,000" [ref=e214] clickable [onclick]
+          - cell "0" [ref=e215] clickable [onclick]
+          - cell "0" [ref=e216] clickable [onclick]
+          - cell "220,000" [ref=e217] clickable [onclick]
+            - StaticText "220,000"
+        - row [ref=e64] clickable [onclick]
+          - cell [ref=e218] clickable [onclick]
+          - cell "HD063576" [ref=e219] clickable [onclick]
+            - link "HD063576" [ref=e282]
+              - StaticText "HD063576"
+          - cell "19/06/2026 11:13" [ref=e220] clickable [onclick]
+          - cell "Hoàng Dũng" [ref=e221] clickable [onclick]
+            - link "Hoàng Dũng" [ref=e331]
+          - cell "220,000" [ref=e222] clickable [onclick]
+          - cell "0" [ref=e223] clickable [onclick]
+          - cell "0" [ref=e224] clickable [onclick]
+          - cell "220,000" [ref=e225] clickable [onclick]
+            - StaticText "220,000"
+      - table
+        - rowgroup
+          - row
+            - columnheader "STT icon: caret-up icon: caret-down" [ref=e332] clickable [cursor:pointer, onclick]
+              - LayoutTable
+                - StaticText "STT"
+                - generic
+        - row [ref=e226] clickable [onclick]
+          - cell "34" [ref=e283] clickable [onclick]
+        - row [ref=e227] clickable [onclick]
+          - cell "32" [ref=e284] clickable [onclick]
+        - row [ref=e228] clickable [onclick]
+          - cell "30" [ref=e285] clickable [onclick]
+        - row [ref=e229] clickable [onclick]
+          - cell "29" [ref=e286] clickable [onclick]
+        - row [ref=e230] clickable [onclick]
+          - cell "28" [ref=e287] clickable [onclick]
+        - row [ref=e231] clickable [onclick]
+          - cell "27" [ref=e288] clickable [onclick]
+        - row [ref=e232] clickable [onclick]
+          - cell "24" [ref=e289] clickable [onclick]
+        - row [ref=e233] clickable [onclick]
+          - cell "23" [ref=e290] clickable [onclick]
+        - row [ref=e234] clickable [onclick]
+          - cell "21" [ref=e291] clickable [onclick]
+        - row [ref=e235] clickable [onclick]
+          - cell "20" [ref=e292] clickable [onclick]
+        - row [ref=e236] clickable [onclick]
+          - cell "19" [ref=e293] clickable [onclick]
+        - row [ref=e237] clickable [onclick]
+          - cell "18" [ref=e294] clickable [onclick]
+        - row [ref=e238] clickable [onclick]
+          - cell "17" [ref=e295] clickable [onclick]
+        - row [ref=e239] clickable [onclick]
+          - cell "16" [ref=e296] clickable [onclick]
+        - row [ref=e240] clickable [onclick]
+          - cell "15" [ref=e297] clickable [onclick]
+        - row [ref=e241] clickable [onclick]
+          - cell "14" [ref=e298] clickable [onclick]
+        - row [ref=e242] clickable [onclick]
+          - cell "13" [ref=e299] clickable [onclick]
+        - row [ref=e243] clickable [onclick]
+          - cell "12" [ref=e300] clickable [onclick]
+        - row [ref=e244] clickable [onclick]
+          - cell "11" [ref=e301] clickable [onclick]
+        - row [ref=e245] clickable [onclick]
+          - cell "10" [ref=e302] clickable [onclick]
+      - list
+        - listitem [level=1]
+          - StaticText "Hiển thị từ 1 đến 20 trên tổng số 29"
+        - listitem "Trang Trước" [level=1, disabled, ref=e38] clickable [onclick]
+        - listitem [level=1, ref=e39] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "1"
+        - listitem [level=1, ref=e40] clickable [cursor:pointer, onclick, tabindex]
+          - StaticText "2"
+        - listitem "Trang Kế" [level=1, ref=e41] clickable [cursor:pointer, onclick, tabindex]
+        - listitem [level=1]
+          - generic [ref=e43] clickable [onclick]
+            - combobox [expanded=false, ref=e44]: 20 / trang icon: down
+              - generic
+                - StaticText "20 / trang"
+              - generic [ref=e65] clickable [cursor:pointer, onclick]
+- StaticText "  "
+- StaticText "  "

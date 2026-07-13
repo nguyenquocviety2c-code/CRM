@@ -1,0 +1,93 @@
+import { Debt, DebtInvoice } from "@/types/debt";
+
+export const mockDebtInvoices: DebtInvoice[] = [
+  { id: "di-1", debtId: "d-1", invoiceCode: "HD063769", amount: 220000, datetime: "2026-06-20T10:00:00.000Z" },
+  { id: "di-2", debtId: "d-1", invoiceCode: "HD063770", amount: 150000, datetime: "2026-06-21T14:00:00.000Z" },
+  { id: "di-3", debtId: "d-2", invoiceCode: "HD063771", amount: 40000, datetime: "2026-06-19T09:00:00.000Z" },
+  { id: "di-4", debtId: "d-3", invoiceCode: "HD063772", amount: 120000, datetime: "2026-06-18T16:00:00.000Z" },
+  { id: "di-5", debtId: "d-3", invoiceCode: "HD063773", amount: 80000, datetime: "2026-06-17T11:00:00.000Z" },
+  { id: "di-6", debtId: "d-4", invoiceCode: "HD063774", amount: 85000, datetime: "2026-06-16T13:00:00.000Z" },
+  { id: "di-7", debtId: "d-5", invoiceCode: "HD063775", amount: 250000, datetime: "2026-06-15T10:00:00.000Z" },
+  { id: "di-8", debtId: "d-5", invoiceCode: "HD063776", amount: 100000, datetime: "2026-06-14T09:00:00.000Z" },
+  { id: "di-9", debtId: "d-5", invoiceCode: "HD063777", amount: 50000, datetime: "2026-06-13T15:00:00.000Z" },
+  { id: "di-10", debtId: "d-6", invoiceCode: "HD063778", amount: 50000, datetime: "2026-06-12T11:00:00.000Z" },
+  { id: "di-11", debtId: "d-7", invoiceCode: "HD063779", amount: 180000, datetime: "2026-06-11T10:00:00.000Z" },
+  { id: "di-12", debtId: "d-7", invoiceCode: "HD063780", amount: 90000, datetime: "2026-06-10T14:00:00.000Z" },
+  { id: "di-13", debtId: "d-8", invoiceCode: "HD063781", amount: 320000, datetime: "2026-06-09T09:00:00.000Z" },
+  { id: "di-14", debtId: "d-9", invoiceCode: "HD063782", amount: 75000, datetime: "2026-06-08T10:00:00.000Z" },
+  { id: "di-15", debtId: "d-9", invoiceCode: "HD063783", amount: 45000, datetime: "2026-06-07T11:00:00.000Z" },
+  { id: "di-16", debtId: "d-10", invoiceCode: "HD063784", amount: 500000, datetime: "2026-06-06T09:00:00.000Z" },
+];
+
+export const mockDebts: Debt[] = [
+  {
+    id: "d-1",
+    customerName: "Xu",
+    customerPhone: "0912345678",
+    totalAmount: 36000,
+    invoiceIds: ["di-1", "di-2"],
+  },
+  {
+    id: "d-2",
+    customerName: "Lê Trung Kiên",
+    customerPhone: "0987654321",
+    totalAmount: 40000,
+    invoiceIds: ["di-3"],
+  },
+  {
+    id: "d-3",
+    customerName: "Nguyễn Văn A",
+    customerPhone: "0905123456",
+    totalAmount: 120000,
+    invoiceIds: ["di-4", "di-5"],
+  },
+  {
+    id: "d-4",
+    customerName: "Trần Thị B",
+    customerPhone: "0978123456",
+    totalAmount: 85000,
+    invoiceIds: ["di-6"],
+  },
+  {
+    id: "d-5",
+    customerName: "Phạm Văn C",
+    customerPhone: "0936123456",
+    totalAmount: 250000,
+    invoiceIds: ["di-7", "di-8", "di-9"],
+  },
+  {
+    id: "d-6",
+    customerName: "Hoàng Thị D",
+    customerPhone: "0965123456",
+    totalAmount: 50000,
+    invoiceIds: ["di-10"],
+  },
+  {
+    id: "d-7",
+    customerName: "Vũ Đức E",
+    customerPhone: "0945123456",
+    totalAmount: 180000,
+    invoiceIds: ["di-11", "di-12"],
+  },
+  {
+    id: "d-8",
+    customerName: "Đặng Minh F",
+    customerPhone: "0925123456",
+    totalAmount: 320000,
+    invoiceIds: ["di-13"],
+  },
+  {
+    id: "d-9",
+    customerName: "Bùi Thanh G",
+    customerPhone: "0918123456",
+    totalAmount: 75000,
+    invoiceIds: ["di-14", "di-15"],
+  },
+  {
+    id: "d-10",
+    customerName: "Ngô Hữu H",
+    customerPhone: "0983123456",
+    totalAmount: 500000,
+    invoiceIds: ["di-16"],
+  },
+];

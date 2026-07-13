@@ -1,0 +1,727 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider   = "prisma-client-js"
+  output     = "../src/generated/prisma"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ============================================
+// Core Entities
+// ============================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      String   @default("staff") // admin, manager, staff
+  avatar    String?
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  invoices     Invoice[]
+  bookings     Booking[]
+  transactions Transaction[]
+  attendances  Attendance[]
+  commissions  Commission[]
+  activities   InvoiceActivity[]
+
+  @@map("users")
+}
+
+model Branch {
+  id      String  @id @default(cuid())
+  name    String
+  address String?
+  phone   String?
+  active  Boolean @default(true)
+
+  // Relations
+  invoices     Invoice[]
+  bookings     Booking[]
+  transactions Transaction[]
+  activities   InvoiceActivity[]
+  products     Product[]
+  services     Service[]
+
+  @@map("branches")
+}
+
+// ============================================
+// Module 3: Customers
+// ============================================
+
+model Customer {
+  id         String    @id @default(cuid())
+  code       String    @unique
+  name       String
+  phone      String
+  email      String?
+  gender     String? // male, female, other
+  birthday   DateTime?
+  address    String?
+  note       String?
+  totalSpent Decimal   @default(0)
+  debt       Decimal   @default(0)
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  sourceId String?
+  source   CustomerSource? @relation(fields: [sourceId], references: [id])
+  groupId  String?
+  group    CustomerGroup?  @relation(fields: [groupId], references: [id])
+  rankId   String?
+  rank     CustomerRank?   @relation(fields: [rankId], references: [id])
+
+  invoices         Invoice[]
+  bookings         Booking[]
+  cashCards        CashCard[] @relation(name: "CustomerCashCards")
+  coOwnerCashCards CashCard[] @relation(name: "CoOwnerCashCards")
+
+  @@map("customers")
+}
+
+model CustomerSource {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  customers Customer[]
+
+  @@map("customer_sources")
+}
+
+model CustomerGroup {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  customers Customer[]
+
+  @@map("customer_groups")
+}
+
+model CustomerRank {
+  id           String  @id @default(cuid())
+  name         String
+  minSpending  Decimal @default(0)
+  discountRate Decimal @default(0)
+  active       Boolean @default(true)
+
+  customers Customer[]
+
+  @@map("customer_ranks")
+}
+
+// ============================================
+// Module 6: Products & Services
+// ============================================
+
+model ProductCategory {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  price        Decimal  @default(0)
+  cost         Decimal  @default(0)
+  unit         String?
+  stock        Int      @default(0)
+  initialStock Int      @default(0)
+  image        String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Extended fields for Module 6
+  volume     Float?
+  volumeUnit String?
+  origin     String?
+  branchId   String?
+  detail     String?
+  showOnApp  Boolean @default(false)
+
+  categoryId String?
+  category   ProductCategory? @relation(fields: [categoryId], references: [id])
+  branch     Branch?          @relation(fields: [branchId], references: [id])
+
+  invoiceItems InvoiceItem[]
+  slipItems    SlipItem[]
+
+  @@map("products")
+}
+
+model ServiceCategory {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  services Service[]
+
+  @@map("service_categories")
+}
+
+model Service {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  price            Decimal  @default(0)
+  cost             Decimal  @default(0)
+  costType         String   @default("VND") // VND, PERCENT
+  subPrices        String? // JSON array of {label, price}
+  attachedProducts String? // JSON array of {productId}
+  duration         Int      @default(60) // minutes
+  commission       Decimal  @default(0)
+  active           Boolean  @default(true)
+  allowBooking     Boolean  @default(true)
+  showOnApp        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  categoryId String?
+  category   ServiceCategory? @relation(fields: [categoryId], references: [id])
+  branchId   String?
+  branch     Branch?          @relation(fields: [branchId], references: [id])
+
+  invoiceItems InvoiceItem[]
+  bookings     Booking[]
+  commissions  Commission[]
+  packageItems PackageItem[]
+
+  @@map("services")
+}
+
+model PackageCategory {
+  id     String  @id @default(cuid())
+  name   String
+  active Boolean @default(true)
+
+  packages Package[]
+
+  @@map("package_categories")
+}
+
+model Package {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  name          String
+  totalPrice    Decimal  @default(0)
+  discountPrice Decimal  @default(0)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  categoryId String?
+  category   PackageCategory? @relation(fields: [categoryId], references: [id])
+
+  items            PackageItem[]
+  invoiceItems     InvoiceItem[]
+  customerPackages CustomerPackage[]
+
+  @@map("packages")
+}
+
+model PackageItem {
+  id        String  @id @default(cuid())
+  packageId String
+  package   Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id])
+  quantity  Int     @default(1)
+
+  @@map("package_items")
+}
+
+// A package purchased by a customer. Backs the "Gói đã mua" report view.
+model CustomerPackage {
+  id            String    @id @default(cuid())
+  customerName  String
+  customerPhone String?
+  packageId     String
+  package       Package   @relation(fields: [packageId], references: [id])
+  packageName   String
+  status        String    @default("active") // active | expired | used_up
+  purchaseDate  DateTime  @default(now())
+  expiryDate    DateTime?
+  lastUsedDate  DateTime?
+  totalUses     Int       @default(0)
+  usedCount     Int       @default(0)
+  remaining     Int       @default(0)
+  invoiceCode   String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  usages PackageUsage[]
+
+  @@index([customerName])
+  @@map("customer_packages")
+}
+
+// Each time a customer uses a service from a purchased package. Backs the
+// "Lịch sử dùng gói" report view.
+model PackageUsage {
+  id                String          @id @default(cuid())
+  customerPackageId String
+  customerPackage   CustomerPackage @relation(fields: [customerPackageId], references: [id], onDelete: Cascade)
+  packageName       String
+  customerName      String
+  customerPhone     String?
+  serviceName       String
+  useDate           DateTime        @default(now())
+  quantity          Int             @default(1)
+  invoiceCode       String?
+  staffId           String?
+  staffName         String?
+  note              String?
+  createdAt         DateTime        @default(now())
+
+  @@index([useDate])
+  @@map("package_usages")
+}
+
+// ============================================
+// Module 1: Cashier (Invoices)
+// ============================================
+
+model Invoice {
+  id           String   @id @default(cuid())
+  code         String?  @unique
+  subtotal     Decimal  @default(0)
+  discount     Decimal  @default(0)
+  discountType String   @default("VND") // VND, %
+  surcharge    Decimal  @default(0)
+  vat          Decimal  @default(0)
+  total        Decimal  @default(0)
+  paid         Decimal  @default(0)
+  debt         Decimal  @default(0)
+  tip          Decimal  @default(0) // tiền khách thưởng cho thợ
+  status       String   @default("unpaid") // unpaid, partial, paid, cancelled
+  note         String?
+  printCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  branchId    String
+  branch      Branch   @relation(fields: [branchId], references: [id])
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+
+  items InvoiceItem[]
+
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id       String  @id @default(cuid())
+  name     String
+  quantity Int     @default(1)
+  price    Decimal @default(0)
+  discount Decimal @default(0)
+  total    Decimal @default(0)
+
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  serviceId String?
+  service   Service? @relation(fields: [serviceId], references: [id])
+  packageId String?
+  package   Package? @relation(fields: [packageId], references: [id])
+
+  @@map("invoice_items")
+}
+
+// ============================================
+// Module 1: Cashier (Activity Log)
+// ============================================
+
+model InvoiceActivity {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoiceCode String
+  action      String // CREATE_INVOICE, CREATE_INVOICE_FROM_BOOKING, DELETE_ITEM, CHANGE_PRICE, ASSIGN_STAFF, PAYMENT, CHANGE_PROMOTION
+  detail      String?
+  value       String?
+  branchId    String
+  branch      Branch   @relation(fields: [branchId], references: [id])
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([branchId])
+  @@index([invoiceId])
+  @@index([createdAt])
+  @@map("invoice_activities")
+}
+
+// ============================================
+// Module 2: Booking
+// ============================================
+
+model Booking {
+  id        String   @id @default(cuid())
+  dateTime  DateTime
+  duration  Int      @default(60)
+  status    String   @default("pending") // pending, confirmed, done, cancelled
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  staffId    String
+  staff      User     @relation(fields: [staffId], references: [id])
+  serviceId  String
+  service    Service  @relation(fields: [serviceId], references: [id])
+  branchId   String
+  branch     Branch   @relation(fields: [branchId], references: [id])
+
+  @@map("bookings")
+}
+
+// ============================================
+// Module 5: Cash Card
+// ============================================
+
+model CashCard {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  balance     Decimal   @default(0)
+  status      String    @default("active") // active, locked, expired
+  expiryDate  DateTime?
+  lockedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], name: "CustomerCashCards")
+
+  coOwnerId String?
+  coOwner   Customer? @relation(fields: [coOwnerId], references: [id], name: "CoOwnerCashCards")
+
+  topups       CashCardTopup[]
+  transactions CashCardTransaction[]
+
+  @@map("cash_cards")
+}
+
+model CashCardTopup {
+  id           String   @id @default(cuid())
+  method       String // cash, transfer, card
+  amount       Decimal  @default(0)
+  bonus        Decimal  @default(0)
+  total        Decimal  @default(0)
+  topupDate    DateTime @default(now())
+  topupCode    String?
+  recordedById String?
+  note         String?
+
+  cashCardId String
+  cashCard   CashCard @relation(fields: [cashCardId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("cash_card_topups")
+}
+
+// Records each time a cash card is used to pay for an invoice or to settle a
+// debt. Backs the "Lịch sử sử dụng" report view.
+model CashCardTransaction {
+  id            String   @id @default(cuid())
+  cashCardId    String
+  cashCard      CashCard @relation(fields: [cashCardId], references: [id], onDelete: Cascade)
+  customerName  String
+  customerPhone String?
+  type          String // "invoice" (thanh toán hóa đơn) | "debt" (thanh toán nợ)
+  paymentMethod String   @default("cashcard")
+  amount        Decimal  @default(0)
+  invoiceCode   String?
+  note          String?
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("cash_card_transactions")
+}
+
+// ============================================
+// Module 7: Revenue & Expenditure
+// ============================================
+
+model Transaction {
+  id          String   @id @default(cuid())
+  type        String // revenue, expense
+  category    String
+  amount      Decimal  @default(0)
+  description String?
+  createdAt   DateTime @default(now())
+
+  branchId    String
+  branch      Branch  @relation(fields: [branchId], references: [id])
+  createdById String
+  createdBy   User    @relation(fields: [createdById], references: [id])
+  invoiceId   String?
+  // invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  @@map("transactions")
+}
+
+// ============================================
+// Module 10: Worker Manager
+// ============================================
+
+model Shift {
+  id        String  @id @default(cuid())
+  name      String
+  startTime String // HH:mm
+  endTime   String // HH:mm
+  active    Boolean @default(true)
+
+  attendances Attendance[]
+
+  @@map("shifts")
+}
+
+model Attendance {
+  id       String    @id @default(cuid())
+  date     DateTime
+  checkIn  DateTime?
+  checkOut DateTime?
+  status   String    @default("missing") // onTime, late, early, missing, absent
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id])
+  shiftId String
+  shift   Shift  @relation(fields: [shiftId], references: [id])
+
+  @@unique([userId, date])
+  @@map("attendances")
+}
+
+model Commission {
+  id            String   @id @default(cuid())
+  rate          Decimal  @default(0)
+  effectiveDate DateTime
+
+  staffId   String
+  staff     User     @relation(fields: [staffId], references: [id])
+  serviceId String?
+  service   Service? @relation(fields: [serviceId], references: [id])
+
+  @@map("commissions")
+}
+
+// ============================================
+// Module 4: CSKH (Customer Care)
+// ============================================
+
+model CustomerSet {
+  id         String   @id @default(cuid())
+  name       String
+  note       String?
+  autoUpdate Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  conditions CustomerSetCondition[]
+
+  @@map("customer_sets")
+}
+
+model CustomerSetCondition {
+  id             String      @id @default(cuid())
+  customerSetId  String
+  customerSet    CustomerSet @relation(fields: [customerSetId], references: [id], onDelete: Cascade)
+  conditionType  String
+  conditionValue String?
+
+  @@map("customer_set_conditions")
+}
+
+model CustomerFeedback {
+  id         String   @id @default(cuid())
+  rating     Int      @default(5)
+  content    String?
+  customerId String
+  serviceId  String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("customer_feedbacks")
+}
+
+model Incentive {
+  id              String    @id @default(cuid())
+  code            String?
+  name            String
+  applyScope      String    @default("time_range") // time_range, all_customers, members_only
+  startDate       DateTime?
+  endDate         DateTime?
+  branchIds       String? // JSON array of branch IDs
+  discountType    String    @default("SERVICE_DISCOUNT") // SERVICE_DISCOUNT, PRODUCT_DISCOUNT, SERVICE_GIFT, PRODUCT_GIFT
+  serviceIds      String? // JSON array of service IDs
+  discountValue   Decimal   @default(0)
+  usageLimit      Int       @default(1)
+  autoApplyTarget String?
+  type            String    @default("promotion") // promotion, voucher
+  usedCount       Int       @default(0)
+  unusedCount     Int       @default(0)
+  expiredCount    Int       @default(0)
+  cost            Decimal   @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("incentives")
+}
+
+// ============================================
+// Module 6: Warehouse (Kho hàng)
+// ============================================
+
+model TransferSlip {
+  id             String   @id @default(cuid())
+  code           String?
+  createdByEmail String
+  transferDate   DateTime
+  fromBranchId   String
+  toBranchId     String
+  note           String?
+  status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items SlipItem[]
+
+  @@map("transfer_slips")
+}
+
+model ExportSlip {
+  id             String   @id @default(cuid())
+  code           String?
+  createdByEmail String
+  exportDate     DateTime
+  note           String?
+  exportType     String   @default("use")
+  receiverId     String?
+  status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items SlipItem[]
+
+  @@map("export_slips")
+}
+
+model ImportSlip {
+  id             String   @id @default(cuid())
+  code           String?
+  createdByEmail String
+  importDate     DateTime
+  note           String?
+  supplierId     String?
+  isPaid         Boolean  @default(false)
+  totalAmount    Decimal  @default(0)
+  status         String   @default("pending")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  items SlipItem[]
+
+  @@map("import_slips")
+}
+
+model SlipItem {
+  id        String  @id @default(cuid())
+  productId String
+  quantity  Int     @default(1)
+  price     Decimal @default(0)
+
+  transferSlipId String?
+  exportSlipId   String?
+  importSlipId   String?
+
+  transferSlip TransferSlip? @relation(fields: [transferSlipId], references: [id], onDelete: Cascade)
+  exportSlip   ExportSlip?   @relation(fields: [exportSlipId], references: [id], onDelete: Cascade)
+  importSlip   ImportSlip?   @relation(fields: [importSlipId], references: [id], onDelete: Cascade)
+  product      Product       @relation(fields: [productId], references: [id])
+
+  @@map("slip_items")
+}
+
+model WarehouseSettings {
+  id                    String   @id @default(cuid())
+  enableOutOfStockAlert Boolean  @default(false)
+  outOfStockThreshold   Int      @default(0)
+  enableLowStockAlert   Boolean  @default(false)
+  lowStockThreshold     Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("warehouse_settings")
+}
+
+// ============================================
+// Module 11: Settings
+// ============================================
+
+model Setting {
+  id        String   @id @default(cuid())
+  section   String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([section, key])
+  @@map("settings")
+}
+
+// ============================================
+// Module 5: Cash Card Settings
+// ============================================
+
+model BonusConfig {
+  id             String   @id @default(cuid())
+  minTopupAmount Decimal  @default(0)
+  bonusValue     Decimal  @default(0)
+  bonusType      String   @default("VND") // VND, PERCENT
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("bonus_configs")
+}
+
+model CardExpirySettings {
+  id          String   @id @default(cuid())
+  expiryType  String   @default("FIXED") // FIXED, CUSTOM
+  expiryValue Int      @default(1)
+  expiryUnit  String   @default("MONTH") // MONTH, YEAR
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("card_expiry_settings")
+}

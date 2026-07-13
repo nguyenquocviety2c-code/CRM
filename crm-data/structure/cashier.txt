@@ -1,0 +1,346 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e16]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e17]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+              - paragraph
+                - StaticText "0"
+              - paragraph
+                - StaticText "1"
+              - paragraph
+                - StaticText "2"
+              - paragraph
+                - StaticText "3"
+              - paragraph
+                - StaticText "4"
+              - paragraph
+                - StaticText "5"
+              - paragraph
+                - StaticText "6"
+              - paragraph
+                - StaticText "7"
+              - paragraph
+                - StaticText "8"
+              - paragraph
+                - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e18]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e19]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e20]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e21]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e22]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e23]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e24]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e25]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e26]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - heading "Thu ngân" [level=1, ref=e13]
+    - generic [ref=e14] clickable [onclick]
+      - combobox [expanded=false, ref=e27]: Chi nhánh: Level 1 Vạn Bảo icon: down
+        - generic
+          - generic
+            - StaticText "Chi nhánh: Level 1 Vạn Bảo"
+        - generic [ref=e31] clickable [cursor:pointer, onclick]
+    - generic [ref=e15] clickable [onclick]
+      - textbox "Chọn thời điểm" [ref=e28]
+    - generic
+      - button "Danh sách đơn hàng" [ref=e29]
+      - button "Tạo hóa đơn" [ref=e30]
+    - generic
+      - generic
+        - sectionheader
+          - generic
+            - tablist [ref=e38] focusable [tabindex]
+              - generic
+                - generic [ref=e53] clickable [cursor:pointer, onclick]
+                - generic
+                  - StaticText "  "
+                  - generic
+                    - tab "Đặng Phúc Hoàng (1) icon: close" [ref=e60]
+                      - StaticText "Đặng Phúc Hoàng (1)"
+                      - generic "icon: close" [ref=e66] clickable [cursor:pointer, onclick]
+                    - tab "Nguyễn Gia Phong (2) icon: close" [ref=e61]
+                      - StaticText "Nguyễn Gia Phong (2)"
+                      - generic "icon: close" [ref=e67] clickable [cursor:pointer, onclick]
+                    - tab "Võ Tá Dũng (3) icon: close" [ref=e62]
+                      - StaticText "Võ Tá Dũng (3)"
+                      - generic "icon: close" [ref=e68] clickable [cursor:pointer, onclick]
+                    - tab "trung dũng (4) icon: close" [ref=e63]
+                      - StaticText "trung dũng (4)"
+                      - generic "icon: close" [ref=e69] clickable [cursor:pointer, onclick]
+                    - tab "Trần Minh Quân (5) icon: close" [ref=e64]
+                      - StaticText "Trần Minh Quân (5)"
+                      - generic "icon: close" [ref=e70] clickable [cursor:pointer, onclick]
+                    - tab "Nguyễn Thế Vũ (6) icon: close" [selected, ref=e65]
+                      - StaticText "Nguyễn Thế Vũ (6)"
+                      - generic "icon: close" [ref=e71] clickable [cursor:pointer, onclick]
+                  - StaticText "  "
+            - tabpanel
+        - link "Nguyễn Thế Vũ" [ref=e32]
+        - StaticText "0916822188"
+        - main
+          - generic
+            - generic
+              - StaticText "Tên"
+              - StaticText "Số lượng"
+              - StaticText "Đơn giá"
+              - StaticText "Giảm giá"
+              - StaticText "Thành tiền"
+            - form
+              - StaticText "3-Master Cut"
+              - generic
+                - StaticText "Nv: Đoàn Anh Tuấn"
+              - StaticText "1"
+              - StaticText "220,000"
+              - StaticText "0"
+              - StaticText "220,000"
+          - button "icon: camera Tải ảnh lên" [ref=e50]
+            - button "icon: camera Tải ảnh lên" [ref=e54]
+              - StaticText "Tải ảnh lên"
+          - Iframe [ref=e39]
+        - sectionfooter
+          - generic
+            - StaticText "Thành tiền"
+            - StaticText "220,000"
+            - StaticText "Giảm giá hoá đơn"
+            - strong
+              - StaticText "0"
+            - generic
+              - StaticText "Tạm tính "
+              - link "(HD063630)" [ref=e51]
+                - StaticText "(HD063630)"
+              - StaticText "220,000"
+            - generic
+              - button "icon: delete Hủy thanh toán" [ref=e55]
+                - StaticText "Hủy thanh toán"
+              - button "icon: user Xếp nhân viên" [disabled, ref=e56]
+                - StaticText "Xếp nhân viên"
+              - button "icon: smile Mời đánh giá" [ref=e57]
+                - StaticText "Mời đánh giá"
+              - button "icon: printer In hóa đơn" [ref=e58]
+                - StaticText "In hóa đơn"
+              - button "icon: check Hoàn tất" [ref=e59]
+                - StaticText "Hoàn tất"
+      - generic
+        - generic
+          - form
+            - textbox "Tìm kiếm dịch vụ, sản phẩm hoặc gói..." [ref=e40]
+            - generic [ref=e41] clickable [onclick]
+              - generic "icon: search" [ref=e52] clickable [cursor:pointer, onclick]
+          - LabelText [ref=e33] clickable [cursor:pointer]
+            - radio "Dịch vụ" [checked=true, ref=e42]
+            - StaticText "Dịch vụ"
+          - LabelText [ref=e34] clickable [cursor:pointer]
+            - radio "Sản phẩm" [checked=false, ref=e43]
+            - StaticText "Sản phẩm"
+          - LabelText [ref=e35] clickable [cursor:pointer]
+            - radio "Gói dịch vụ" [checked=false, ref=e44]
+            - StaticText "Gói dịch vụ"
+        - main
+          - generic [ref=e45] clickable [cursor:pointer, onclick]
+            - StaticText "3.A-DÀNH CHO KHÁCH HÀNG MỚI - DV CẮT"
+          - generic [ref=e46] clickable [cursor:pointer, onclick]
+            - StaticText "3.A-DỊCH VỤ CẮT"
+          - generic [ref=e47] clickable [cursor:pointer, onclick]
+            - StaticText "3.B-DV ĐIỀU CHỈNH NẾP TÓC (QK VUI LÒNG ĐẶT QUA FANPAGE CN)"
+          - generic [ref=e48] clickable [cursor:pointer, onclick]
+            - StaticText "3.C-DV NHUỘM MÀU TÓC (QK VUI LÒNG ĐẶT QUA FANPAGE CN)"
+          - generic [ref=e49] clickable [cursor:pointer, onclick]
+            - StaticText "3.D-DV CHĂM SÓC TÓC"
+        - sectionfooter
+          - button "icon: plus Thu khác" [ref=e36]
+            - StaticText "Thu khác"
+          - button "icon: credit-card Bán/nạp thẻ" [ref=e37]
+            - StaticText "Bán/nạp thẻ"
+- StaticText "  "
+- StaticText "  "

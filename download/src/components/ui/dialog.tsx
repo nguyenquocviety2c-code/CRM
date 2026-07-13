@@ -1,0 +1,435 @@
+"use client"
+
+import * as React from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
+import { XIcon } from "lucide-react"
+
+import { cn } from "@/lib/utils"
+import { useAuthStore } from "@/stores/auth-store"
+
+/**
+ * Drag hook — press and hold on the dialog HEADER to move the dialog.
+ * The drag offset is applied via `marginLeft`/`marginTop` so it never
+ * conflicts with the open/close zoom animation (which uses `transform`).
+ * When `minimized` is true, dragging is disabled and the offset resets.
+ *
+ * PERF: during the drag we (1) attach NATIVE pointermove/up listeners on the
+ * `document` (bypassing React's synthetic event system, which adds latency),
+ * and (2) write the offset DIRECTLY to the DOM (no React state / re-render).
+ * This makes the dialog track the cursor with zero perceivable lag even on
+ * heavy dialogs (activity tables, selects, photos). React state is only
+ * updated ONCE on pointerup so the offset persists across later re-renders.
+ * We also set `transition: none` while dragging so no CSS transition smooths
+ * (slows) the margin changes.
+ */
+function useDraggable(minimized: boolean) {
+  const [offset, setOffset] = React.useState({ x: 0, y: 0 })
+  const contentRef = React.useRef<HTMLDivElement | null>(null)
+  // Mutable drag session state — kept in a ref so the native listeners can
+  // read/write it without being re-created.
+  const dragRef = React.useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null)
+
+  // Reset the drag offset whenever the minimized state flips so the dialog
+  // snaps back to its default (centered / bottom-docked) position. Uses the
+  // "adjust state during render" pattern (React docs) instead of an effect.
+  const [prevMinimized, setPrevMinimized] = React.useState(minimized)
+  if (minimized !== prevMinimized) {
+    setPrevMinimized(minimized)
+    setOffset({ x: 0, y: 0 })
+  }
+
+  const onPointerDown = React.useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (minimized) return
+    // Only start a drag when the pointer is on the header area.
+    const target = e.target as HTMLElement
+    const header = target.closest('[data-slot="dialog-header"]')
+    if (!header) return
+    // Don't start a drag when clicking interactive elements inside the header.
+    if (target.closest('button, input, select, [role="combobox"], [role="button"], a')) return
+    // Prevent text selection / native drag-and-drop image ghosting while dragging.
+    e.preventDefault()
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      baseX: offset.x,
+      baseY: offset.y,
+    }
+    const el = contentRef.current
+    if (el) {
+      // Disable transitions for the drag duration so margins apply INSTANTLY.
+      el.style.transition = "none"
+      el.style.willChange = "margin"
+    }
+    // Attach NATIVE listeners on document so move/up events fire even when the
+    // cursor leaves the dialog (and bypass React's synthetic event latency).
+    document.addEventListener("pointermove", onNativeMove, { passive: false })
+    document.addEventListener("pointerup", onNativeUp, { passive: false })
+    document.addEventListener("pointercancel", onNativeUp, { passive: false })
+  }, [offset.x, offset.y, minimized])
+
+  // Native (non-React) move handler — reads/writes the DOM directly.
+  const onNativeMove = React.useCallback((e: PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    e.preventDefault()
+    const nextX = d.baseX + (e.clientX - d.startX)
+    const nextY = d.baseY + (e.clientY - d.startY)
+    const el = contentRef.current
+    if (el) {
+      el.style.marginLeft = `${nextX}px`
+      el.style.marginTop = `${nextY}px`
+    }
+  }, [])
+
+  const onNativeUp = React.useCallback((e: PointerEvent) => {
+    const d = dragRef.current
+    if (!d) return
+    e.preventDefault()
+    const nextX = d.baseX + (e.clientX - d.startX)
+    const nextY = d.baseY + (e.clientY - d.startY)
+    // Commit the final offset to React state so the `style` prop matches the
+    // DOM and isn't clobbered by a later re-render (e.g. closing a nested dialog).
+    setOffset({ x: nextX, y: nextY })
+    dragRef.current = null
+    // Restore transitions and clean up the native listeners.
+    const el = contentRef.current
+    if (el) {
+      el.style.transition = ""
+      el.style.willChange = ""
+    }
+    document.removeEventListener("pointermove", onNativeMove)
+    document.removeEventListener("pointerup", onNativeUp)
+    document.removeEventListener("pointercancel", onNativeUp)
+  }, [onNativeMove])
+
+  // Clean up native listeners on unmount (in case the dialog unmounts mid-drag).
+  React.useEffect(() => {
+    return () => {
+      document.removeEventListener("pointermove", onNativeMove)
+      document.removeEventListener("pointerup", onNativeUp)
+      document.removeEventListener("pointercancel", onNativeUp)
+    }
+  }, [onNativeMove, onNativeUp])
+
+  return { offset, contentRef, onPointerDown }
+}
+
+/**
+ * Resize hook — gated by the `resize_table` permission. When the staff's group
+ * has that permission, the dialog renders 8 resize handles (4 edges + 4
+ * corners). Dragging an edge resizes one dimension; a corner resizes both.
+ * The content scales proportionally via the CSS `zoom` property (factor =
+ * currentWidth / baseWidth), so font sizes, line spacing, padding, etc. all
+ * grow/shrink together — fulfilling "cỡ chữ và khoảng cách các dòng tăng giảm
+ * theo tỷ lệ".
+ *
+ * Like the drag hook, resizing uses NATIVE document pointer listeners + direct
+ * DOM writes (no React state per move) for zero-lag tracking. The final
+ * width/height/zoom is committed to React state once on pointerup so it
+ * persists across re-renders.
+ *
+ * `contentRef` is shared with the drag hook (both target the same content el).
+ */
+function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
+  // `resize_table` permission gate. read once; permission changes are rare and
+  // a re-mount (after refreshSession) picks up new values.
+  const canResize = useAuthStore((s) => s.hasPermission("resize_table"))
+  // Base width captured on first resize (the dialog's natural CSS width).
+  const baseSizeRef = React.useRef<{ w: number; h: number } | null>(null)
+  const [size, setSize] = React.useState<{ width: number | null; height: number | null; zoom: number }>({
+    width: null,
+    height: null,
+    zoom: 1,
+  })
+  const resizeRef = React.useRef<{
+    startX: number;
+    startY: number;
+    baseW: number;
+    baseH: number;
+    baseZoom: number;
+    edge: string; // "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"
+  } | null>(null)
+
+  const onResizeMove = React.useCallback((e: PointerEvent) => {
+    const r = resizeRef.current
+    if (!r) return
+    e.preventDefault()
+    const el = contentRef.current
+    if (!el) return
+    const dx = e.clientX - r.startX
+    const dy = e.clientY - r.startY
+    let nextW = r.baseW
+    let nextH = r.baseH
+    // East edges change width; South edges change height. West/North also
+    // change width/height but we keep the top-left anchored (simpler + the
+    // dialog is centered, so anchoring top-left during a W/N drag is fine).
+    if (r.edge.includes("e")) nextW = Math.max(200, r.baseW + dx)
+    if (r.edge.includes("s")) nextH = Math.max(120, r.baseH + dy)
+    if (r.edge.includes("w")) nextW = Math.max(200, r.baseW - dx)
+    if (r.edge.includes("n")) nextH = Math.max(120, r.baseH - dy)
+    // zoom = current width / base width → everything scales with width.
+    const base = baseSizeRef.current
+    const zoom = base && base.w > 0 ? nextW / base.w : 1
+    el.style.width = `${nextW}px`
+    el.style.height = `${nextH}px`
+    // CSS `zoom` scales ALL content (px fonts, padding, line-height) by the
+    // factor — exactly "tăng giảm theo tỷ lệ". Supported in Chromium/WebKit.
+    el.style.zoom = String(zoom)
+  }, [contentRef])
+
+  const onResizeUp = React.useCallback((e: PointerEvent) => {
+    const r = resizeRef.current
+    if (!r) return
+    e.preventDefault()
+    const el = contentRef.current
+    // Commit final size to React state so it persists across re-renders.
+    if (el) {
+      const base = baseSizeRef.current
+      const w = parseFloat(el.style.width) || r.baseW
+      const h = parseFloat(el.style.height) || r.baseH
+      const zoom = base && base.w > 0 ? w / base.w : 1
+      setSize({ width: w, height: h, zoom })
+    }
+    resizeRef.current = null
+    document.body.style.cursor = ""
+    document.body.style.userSelect = ""
+    document.removeEventListener("pointermove", onResizeMove)
+    document.removeEventListener("pointerup", onResizeUp)
+    document.removeEventListener("pointercancel", onResizeUp)
+  }, [contentRef, onResizeMove])
+
+  const startResize = React.useCallback((edge: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!canResize) return
+    e.preventDefault()
+    e.stopPropagation()
+    const el = contentRef.current
+    if (!el) return
+    // Capture the base size on first resize; reuse for subsequent ones so the
+    // zoom factor stays relative to the ORIGINAL width (consistent scaling).
+    if (!baseSizeRef.current) {
+      const rect = el.getBoundingClientRect()
+      baseSizeRef.current = { w: rect.width, h: rect.height }
+    }
+    const base = baseSizeRef.current
+    // Current rendered width/height (may differ from base after a prior resize).
+    const rect = el.getBoundingClientRect()
+    resizeRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      baseW: rect.width,
+      baseH: rect.height,
+      baseZoom: base.w > 0 ? rect.width / base.w : 1,
+      edge,
+    }
+    // Cursor hint while dragging.
+    const cursors: Record<string, string> = {
+      n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
+      ne: "nesw-resize", sw: "nesw-resize", nw: "nwse-resize", se: "nwse-resize",
+    }
+    document.body.style.cursor = cursors[edge] || "default"
+    document.body.style.userSelect = "none"
+    document.addEventListener("pointermove", onResizeMove, { passive: false })
+    document.addEventListener("pointerup", onResizeUp, { passive: false })
+    document.addEventListener("pointercancel", onResizeUp, { passive: false })
+  }, [canResize, contentRef, onResizeMove, onResizeUp])
+
+  // Clean up native listeners on unmount.
+  React.useEffect(() => {
+    return () => {
+      document.removeEventListener("pointermove", onResizeMove)
+      document.removeEventListener("pointerup", onResizeUp)
+      document.removeEventListener("pointercancel", onResizeUp)
+    }
+  }, [onResizeMove, onResizeUp])
+
+  return { canResize, size, startResize }
+}
+
+function Dialog({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+}
+
+function DialogTrigger({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
+  return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
+}
+
+function DialogPortal({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Portal>) {
+  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+}
+
+function DialogClose({
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Close>) {
+  return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
+}
+
+function DialogOverlay({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+  return (
+    <DialogPrimitive.Overlay
+      data-slot="dialog-overlay"
+      className={cn(
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function DialogContent({
+  className,
+  children,
+  showCloseButton = true,
+  minimized = false,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  showCloseButton?: boolean
+  /** When true, the dialog docks to the bottom of the screen as a thin bar
+   *  (used by the Booking dialog's minimize feature). Drag is disabled and
+   *  the offset resets. */
+  minimized?: boolean
+}) {
+  const { offset, contentRef, onPointerDown } = useDraggable(minimized)
+  // Resize is only enabled for non-minimized dialogs AND when the staff has
+  // the "resize_table" permission (checked inside the hook).
+  const { canResize, size, startResize } = useResizable(contentRef)
+  const showResizeHandles = canResize && !minimized
+
+  return (
+    <DialogPortal data-slot="dialog-portal">
+      <DialogOverlay />
+      <DialogPrimitive.Content
+        ref={contentRef}
+        data-slot="dialog-content"
+        data-minimized={minimized ? "true" : undefined}
+        className={cn(
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          minimized
+            ? "bottom-4 left-[50%] top-auto translate-x-[-50%] translate-y-0"
+            : "top-[50%] left-[50%] translate-x-[-50%] translate-y-[-50%]",
+          className
+        )}
+        style={{
+          marginLeft: `${offset.x}px`,
+          marginTop: `${offset.y}px`,
+          // Apply committed width/height/zoom (set on pointerup). During an
+          // active resize these are overridden directly on the DOM by the
+          // native move handler; the committed values keep the size stable
+          // across re-renders between drags.
+          ...(size.width != null ? { width: `${size.width}px` } : {}),
+          ...(size.height != null ? { height: `${size.height}px` } : {}),
+          ...(size.zoom !== 1 ? { zoom: size.zoom } : {}),
+        }}
+        onPointerDown={onPointerDown}
+        {...props}
+      >
+        {children}
+        {showCloseButton && (
+          <DialogPrimitive.Close
+            data-slot="dialog-close"
+            className={cn(
+              "ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0",
+              minimized
+                ? "top-1 right-1 flex h-5 w-5 items-center justify-center [&_svg:not([class*='size-'])]:size-3"
+                : "top-4 right-4 [&_svg:not([class*='size-'])]:size-4"
+            )}
+          >
+            <XIcon />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
+        {/* Resize handles — 4 edges + 4 corners. Each is an absolutely-
+            positioned transparent strip on the dialog's border. Dragging
+            resizes the dialog (edges = one dimension, corners = both) and
+            scales all content via CSS `zoom` (see useResizable). */}
+        {showResizeHandles && (
+          <>
+            <div onPointerDown={startResize("n")} style={{ position: "absolute", top: -3, left: 8, right: 8, height: 6, cursor: "ns-resize", zIndex: 60 }} />
+            <div onPointerDown={startResize("s")} style={{ position: "absolute", bottom: -3, left: 8, right: 8, height: 6, cursor: "ns-resize", zIndex: 60 }} />
+            <div onPointerDown={startResize("w")} style={{ position: "absolute", left: -3, top: 8, bottom: 8, width: 6, cursor: "ew-resize", zIndex: 60 }} />
+            <div onPointerDown={startResize("e")} style={{ position: "absolute", right: -3, top: 8, bottom: 8, width: 6, cursor: "ew-resize", zIndex: 60 }} />
+            <div onPointerDown={startResize("nw")} style={{ position: "absolute", top: -4, left: -4, width: 12, height: 12, cursor: "nwse-resize", zIndex: 61 }} />
+            <div onPointerDown={startResize("ne")} style={{ position: "absolute", top: -4, right: -4, width: 12, height: 12, cursor: "nesw-resize", zIndex: 61 }} />
+            <div onPointerDown={startResize("sw")} style={{ position: "absolute", bottom: -4, left: -4, width: 12, height: 12, cursor: "nesw-resize", zIndex: 61 }} />
+            <div onPointerDown={startResize("se")} style={{ position: "absolute", bottom: -4, right: -4, width: 12, height: 12, cursor: "nwse-resize", zIndex: 61 }} />
+          </>
+        )}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  )
+}
+
+function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-header"
+      className={cn(
+        "flex flex-col gap-2 text-center sm:text-left cursor-move select-none",
+        className
+      )}
+      style={{ touchAction: "none" }}
+      {...props}
+    />
+  )
+}
+
+function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-footer"
+      className={cn(
+        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function DialogTitle({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Title>) {
+  return (
+    <DialogPrimitive.Title
+      data-slot="dialog-title"
+      className={cn("text-lg leading-none font-semibold", className)}
+      {...props}
+    />
+  )
+}
+
+function DialogDescription({
+  className,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Description>) {
+  return (
+    <DialogPrimitive.Description
+      data-slot="dialog-description"
+      className={cn("text-muted-foreground text-sm", className)}
+      {...props}
+    />
+  )
+}
+
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+}
