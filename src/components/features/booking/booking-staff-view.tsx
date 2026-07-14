@@ -403,10 +403,19 @@ export function BookingStaffView({
     }
   }
 
-  // Build the CSS grid-template-columns string from the widths array.
-  const gridTemplate = columnWidths.map((w) => `${w}px`).join(" ");
-  // Total scrollable width = sum of all column widths.
-  const totalWidth = columnWidths.reduce((s, w) => s + w, 0);
+  // Build the CSS grid-template-columns string. The "Giờ" column uses its
+  // persisted pixel width (resizable); ALL staff columns use `1fr` so they
+  // are ALWAYS EQUAL WIDTH and fill the remaining container space evenly.
+  // This implements the user's request: "chỉnh lại kích thước chiều ngang các
+  // cột bằng nhau" (make the staff columns equal width). Previously each staff
+  // column had its own pixel width (resizable individually), which could make
+  // them uneven — especially when persisted widths from an old session were
+  // loaded. Now they're always uniform.
+  const gridTemplate = `${columnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
+  // Total scrollable width — no longer used for a fixed-width scroll container
+  // (1fr fills the container). Kept for compatibility with any code that reads
+  // it; the value is approximate (time col + staff cols * default width).
+  const totalWidth = (columnWidths[0] || TIME_COL_WIDTH) + staffColumns.length * STAFF_COL_WIDTH;
 
   // Start dragging a column's right edge. `idx` is the column index in
   // columnWidths (0 = "Giờ", 1..N = staff columns).
@@ -535,9 +544,11 @@ export function BookingStaffView({
       {(!dateRange || !useMultiDayLayout) && (
       <div className="border bg-white">
         {/* Horizontal-scroll container — the time column is sticky-left so it
-            stays visible while the user scrolls through the staff columns. */}
+            stays visible while the user scrolls through the staff columns.
+            With 1fr staff columns, the grid fills 100% of the container width
+            (no fixed pixel width) so the columns are always equal. */}
         <div className="overflow-x-auto">
-          <div style={{ width: `${totalWidth}px`, minWidth: `${totalWidth}px` }}>
+          <div style={{ width: "100%", minWidth: "100%" }}>
             {/* Header row: "Giờ" + staff names. The "Giờ" cell is sticky-left. */}
             <div
               className="grid border-b-2 border-gray-400 bg-gray-50"

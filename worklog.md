@@ -1032,3 +1032,58 @@ Stage Summary:
   * `verify-walkin-after-add-new.png` (86,602 bytes) — Scenario 3: after adding new customer "Khach Test 16C", both hidden, "Đổi khách" button visible.
   * `verify-walkin-after-doi-khach.png` (83,380 bytes) — Bonus: after clicking "Đổi khách", search + button reappear.
   * `verify-walkin-persisted-stale-shows-doi-khach.png` (83,606 bytes) — Bonus: persisted stale walk-in tab (with customerId) shows "Đổi khách" on page load → click → search/button reappear.
+
+---
+Task ID: 17
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Verify 2 changes (no push/deploy): (1) equal-width staff columns in View nhân viên single-day; (2) empty phone+name → default Khách vãng lai (guest customer) when creating a booking.
+
+Work Log:
+- Read worklog.md (Tasks 1-16). Confirmed context: CRM app at /home/z/my-project, PM2 `crm-app` port 3000, login `ductran / 123456`. Both source files were already edited by the user — verification only.
+
+- Step 1 — Equal-width staff columns (PASS):
+  * Logged in at http://localhost:3000/login with `ductran / 123456` (session was already authenticated from prior tasks — redirected to /cashier). Navigated to http://localhost:3000/booking. Confirmed date range = single day (`14/07/2026 ~ 14/07/2026`).
+  * Switched to **View nhân viên** (staff view). Note: the snapshot refs for the View toggle buttons were off — the toggle had to be clicked via JS: `Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === "View nhân viên").click()`. The `agent-browser click @e11` and `find text "View nhân viên" click` commands did not flip the view (the e11 ref pointed to a different button after re-snapshot).
+  * DOM eval confirmed all 8 staff columns are equal width:
+    - Grid template: `64px repeat(8, minmax(0px, 1fr))` (1 time col 64px + 8 staff cols at `1fr` each).
+    - Container width: 1062px (100% of parent — no fixed pixel width).
+    - All 8 staff column widths: **125px each** (uniform, equal).
+    - All `.staff-grid-header-cell` widths: `[64, 125, 125, 125, 125, 125, 125, 125, 125]` (first = time col, rest = 8 staff cols).
+    - Header cells: "Nguyễn Khánh Linh", "Nguyễn Trường Đan", "Bùi Đức Lâm", "Nguyễn Thế Mạnh", "Phan Phúc Thành (Xiu)", "Phạm Thành", "Tuấn Anh Nguyễn", "TEST thợ".
+  * User-provided DOM eval expression also returned equal widths for `.staff-grid-header-cell.border-r` (125px each — the 8 staff column headers).
+  * Screenshot: `/home/z/my-project/verify-equal-columns.png` (69,738 bytes).
+
+- Step 2 — Empty phone+name → Khách vãng lai (PASS):
+  * Still on /booking, single-day View nhân viên. Clicked "Tạo mới" to open the booking dialog (had to click via JS — `agent-browser click @e4` did not register).
+  * Left phone + name fields EMPTY. Set date = 14/07/2026 (default) + time = 13:00. Picked service = "Master Cut (tư vấn sau cho KHM)" from "Dành cho khách hàng mới - DV Cắt" category. Picked staff = "Nguyễn Thế Mạnh". All combobox selections required JS click (`agent-browser click @eX` did not register; selecting via JS `opt.click()` worked).
+  * Clicked "Lưu" (Save) via JS (`luu.click()` — the `agent-browser click @e5` ref did not trigger the form submit). Network log shows:
+    - POST /api/supabase/customers → 201 (guest customer created with name="Khách vãng lai", phone="", customer_type="guest" in the body, source_id=WALKIN_SOURCE_ID).
+    - POST /api/supabase/bookings → 201 (booking created successfully).
+  * NO "Vui lòng chọn khách hàng" error displayed. The dialog closed and the booking page reloaded showing the new booking.
+  * API verification (filtered by date 2026-07-14 since the API sorts by date_time DESC and there were pre-existing bookings dated 2026-07-15 through 2026-07-20):
+    ```
+    LH000062 | huy2            | confirmed | 2026-07-14T10:00
+    LH000059 | Hoàng Vũ        | cancelled | 2026-07-14T09:30
+    LH000058 | An Vũ           | checkin   | 2026-07-14T07:30
+    LH000064 | Khách vãng lai  | confirmed | 2026-07-14T06:00  ← newly created (06:00 UTC = 13:00 VN)
+    ...
+    ```
+    The newly created booking `LH000064` has customer name = "Khách vãng lai" ✓, status = "confirmed" ✓, date_time = "2026-07-14T06:00:00+00:00" (= 13:00 Vietnam time) ✓.
+  * Note: the task's exact `curl ... limit=3` returned different bookings (LH000021 Test Customer / LH000011 Đức / LH000063 ADD) because the API sorts by date_time DESC and there are pre-existing bookings dated 2026-07-15 through 2026-07-20. The newly created booking is the most-recently-CREATED booking on 2026-07-14, not the topmost by date — verified by filtering the API with date_from/date_to for 2026-07-14.
+  * Screenshot: `/home/z/my-project/verify-walkin-default.png` (69,723 bytes) — shows the new LH000064 booking on the View nhân viên grid.
+  * CLEANUP (PASS): deleted the test booking via `curl -X DELETE /api/supabase/bookings/21dc5097-2784-46c1-9d5e-06fa4e81a8ab` → response `{ok:true, data:{id:"21dc5097-..."}}`. Verified LH000064 is no longer present in the 2026-07-14 booking list.
+
+- Step 3 — Dev log + lint (PASS):
+  * `.pm2-logs/crm-out.log`: all HTTP routes returned 200 (including the POST /api/supabase/bookings → 201 and DELETE /api/supabase/bookings/<id> → 200). Compile log shows `✓ Compiled in 325ms` at 14:30:56 — the file finished saving in a valid state.
+  * `.pm2-logs/crm-error.log`: 251 lines total. All error entries are timestamped 14:30:45 — a TRANSIENT parse error `Expected '}', got '<eof>'` at booking-dialog.tsx:2431 that occurred while the user was actively saving the file mid-edit (the file momentarily existed in an incomplete state during the editor's atomic save). It was resolved by 14:30:56 when the file finished saving and recompiled cleanly. NO errors after 14:30:56 — my verification ran from 14:34 onwards and produced no new errors. The booking dialog successfully opened and the booking was successfully created at 14:38, proving the file is now in a valid state.
+  * `npx eslint src/components/features/booking/booking-staff-view.tsx src/components/features/booking/booking-dialog.tsx`: **0 errors, 1 warning** (the warning is the pre-existing `react-hooks/incompatible-library` warning at line 2097 of booking-dialog.tsx — "React Hook Form's `useForm()` API returns a `watch()` function which cannot be memoized safely" — same warning described in the task as OK). booking-staff-view.tsx has 0 warnings.
+
+Stage Summary:
+- **Step 1 PASS** — All 8 staff columns in View nhân viên (single-day) have EQUAL WIDTH (125px each). Grid template = `64px repeat(8, minmax(0px, 1fr))`. Container width = 100% (1062px) — no fixed pixel width. Screenshot: `/home/z/my-project/verify-equal-columns.png`.
+- **Step 2 PASS** — Empty phone+name → booking creates successfully with customer name "Khách vãng lai" (a guest customer record was created via POST /api/supabase/customers with customer_type:"guest" in the body). No "Vui lòng chọn khách hàng" error. Booking LH000064 was created at 13:00 VN time on 2026-07-14, customer = "Khách vãng lai", status = "confirmed". Screenshot: `/home/z/my-project/verify-walkin-default.png`. Test booking was CLEANED UP via DELETE API (LH000064 no longer present in the booking list).
+- **Step 3 PASS** — Compile clean (`✓ Compiled in 325ms` at 14:30:56). One transient parse error in `.pm2-logs/crm-error.log` at 14:30:45 (during the user's mid-edit save) — resolved by 14:30:56; no errors during the verification window. ESLint: 0 errors, 1 pre-existing React Hook Form `watch()` warning (acknowledged in the task as OK).
+- **No git push, no Vercel deploy** — verified locally only, per user's explicit instruction.
+- **Behavioral note**: The user's POST body includes `customer_type: "guest"`, but the `/api/supabase/customers` route does NOT persist this field — `customer_type` is COMPUTED in the API response (returns "old" if customer has ≥1 completed invoice, else "new"). So in the API response, the guest record shows `customer_type: "new"`, not "guest". The `customer_type: "guest"` in the POST body is effectively a no-op (it's just metadata describing intent). This is fine for the task's purpose — the booking is still created with a customer named "Khách vãng lai" and no phone, which is the desired walk-in behavior. If the user wants to actually persist a "guest" type to distinguish walk-in records from regular new customers in the Customers module, that would require a separate schema change (adding a `customer_type` column to the customers table) — outside this task's scope.
+- **Screenshots** (all in /home/z/my-project/, auto-ignored by .gitignore pattern `verify-*.png`):
+  * `/home/z/my-project/verify-equal-columns.png` (69,738 bytes) — Step 1: View nhân viên single-day grid showing 8 equal-width staff columns (125px each).
+  * `/home/z/my-project/verify-walkin-default.png` (69,723 bytes) — Step 2: View nhân viên grid showing the newly created LH000064 booking (13:00, Khách vãng lai, Master Cut, Nguyễn Thế Mạnh) before cleanup.

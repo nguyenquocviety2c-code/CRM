@@ -1437,13 +1437,42 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     // auto-resolve: match an existing customer by exact phone, else create a
     // new customer with the typed phone + name. This lets the staff just type
     // and save without forcing a dropdown click (matches the kiosk flow).
+    //
+    // NEW: if the staff left BOTH phone AND name empty (didn't type anything),
+    // default to a "Khách vãng lai" guest customer — same as the explicit
+    // walk-in flow. The user's request: "nếu thêm dịch vụ mà không nhập thông
+    // tin Số điện thoại và Tên khách hàng thì mặc định đơn tạo ra là đơn Khách
+    // vãng lai". Previously this showed "Vui lòng chọn khách hàng" and blocked
+    // the submit; now it creates a guest record so the booking can proceed.
     if (!isWalkIn && !data.customerId) {
       const typedPhone = phoneSearch.trim();
       const typedName = nameSearch.trim();
       if (!typedPhone && !typedName) {
-        setConflictMessage("Vui lòng chọn khách hàng");
-        return;
-      }
+        // No phone + no name → default to Khách vãng lai (guest customer).
+        try {
+          const res = await fetch("/api/supabase/customers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: WALKIN_SOURCE_NAME,
+              phone: "",
+              customer_type: "guest",
+              source_id: WALKIN_SOURCE_ID,
+              branch_id: selectedBranchId || null,
+            }),
+          });
+          const json = await res.json();
+          if (json.ok && json.data?.id) {
+            data.customerId = json.data.id;
+          } else {
+            setConflictMessage(json.error || "Không thể tạo khách vãng lai");
+            return;
+          }
+        } catch {
+          setConflictMessage("Không thể tạo khách vãng lai");
+          return;
+        }
+      } else {
       try {
         // 1. Try to match an existing customer by exact phone (or name when no phone).
         const params = new URLSearchParams();
@@ -1485,6 +1514,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         setConflictMessage("Không thể tạo khách hàng");
         return;
       }
+      } // end else (typedPhone || typedName)
     }
     const error = await validateBooking(data);
     if (error) {
