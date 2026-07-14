@@ -974,3 +974,61 @@ Stage Summary:
 - Info bar hiển thị đầy đủ "dd/MM/yyyy HH:MM" (trước chỉ hiện ngày). Hoàng Vũ LH000059 giờ hiện "14/07/2026 16:30".
 - KHÔNG push GitHub, KHÔNG deploy Vercel (theo yêu cầu user).
 - Screenshots: verify-datetime-hoang-vu.png, verify-x-button-empty-tab.png, verify-no-x-with-items.png, verify-no-x-terminal-status.png.
+
+---
+Task ID: 16
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Diagnose + fix walkin search — in module Thu ngân (cashier), when the user clicks "Tạo hóa đơn", the info bar below the tab row should show BOTH the inline search input ("Tìm SĐT khách cũ...") AND the "Thêm khách mới" button on a fresh walk-in tab. After selecting/creating a customer, both should disappear. KHÔNG push/deploy.
+
+Work Log:
+- Read worklog.md (Tasks 1-15). Confirmed context: CRM app at /home/z/my-project, PM2 `crm-app` port 3000. Task 10 added the auto-link logic in `handleSelectInlineResult` (flips walk-in tab type "walkin" → "booking" when the picked customer has an existing day booking). Task 14 added change-staff conflict-check (left a pre-existing `changeStaffChecking is not defined` runtime error in invoice-summary.tsx at 08:02:45 — NOT related to this task, error log is 821 bytes and stale).
+
+- Step 1 — Reproduce the bug (PASS — root cause = persisted state, exactly as the task hypothesis predicted):
+  * Logged in at http://localhost:3000/login with `ductran / 123456`. Redirected to /cashier.
+  * Ran `localStorage.removeItem("cashier-store")` via agent-browser eval, reloaded /cashier.
+  * BEFORE clicking "Tạo hóa đơn": `hasTaoHoaDon:true, hasSearch:false, hasAddNew:false` (no walk-in tab open yet → no info bar at all).
+  * Clicked "Tạo hóa đơn" → DOM eval returned: `{"hasSearch":true,"hasAddNew":true,"activeTabId":"walkin-ad532b1a-...","tabMetaKeys":["walkin-ad532b1a-..."],"tabMetaForActive":{"type":"walkin","customerType":"new"}}`.
+  * **Conclusion: after clearing localStorage, the fresh walk-in tab DOES show both the search input + "Thêm khách mới" button.** The 3 visibility rules are already correctly implemented via `isWalkinTab` (line 610) + `walkinHasCustomer` (line 614) + the `!walkinHasCustomer` gate (line 960). No deeper render bug — Zustand's synchronous `set` calls in `handleAddCustomer` (openCustomerTab + setTabMeta) take effect atomically before React's batched re-render.
+  * **Root cause confirmed = persisted state.** A walk-in tab from a previous session whose `tabMeta[walkinId]` has `customerId` set (from "Thêm khách mới" OR from picking a customer without a booking) → on page load `walkinHasCustomer=true` → search/button hide. The user sees no search/button and reports "Tạo hóa đơn doesn't show them" — but they're looking at the OLD tab. Clicking "Tạo hóa đơn" creates a NEW fresh tab that DOES show them, but the user may not notice the tab switch.
+  * Screenshot: `/home/z/my-project/verify-walkin-search-repro.png` (83,380 bytes) — fresh walk-in tab after clearing localStorage, showing both search + button.
+
+- Step 2 — Implement the fix (PASS — 1 file, 80 insertions / 5 deletions):
+  * File: `src/components/features/cashier/customer-tabs.tsx`.
+  * **No change to the core 3-rule logic** — `isWalkinTab`, `walkinHasCustomer`, and the `!walkinHasCustomer` gate already implement all 3 rules correctly (verified end-to-end in Step 1).
+  * **Added `handleResetWalkinCustomer` function** (line ~393): resets a walk-in tab's customer link (clears `customerId`/`customerInfo` via `updateTabMeta`, resets name/phone to "Khách vãng lai"/"" via `updateCustomerTab`, clears inline search state). Guards: only allowed when `type==="walkin"` AND no invoice items AND no booking created — once services are added or a booking exists, the customer link can't be undone without losing data. Auto-linked walk-in tabs (type flipped to "booking" by `handleSelectInlineResult`) are excluded because their booking link is real.
+  * **Added "Đổi khách" button** in the JSX (line ~1086): the MIRROR of the `!walkinHasCustomer` block — shown ONLY when `walkinHasCustomer && (!activeTabItems || activeTabItems.length === 0) && !activeMeta?.bookingCreated`. Styled amber (border-amber-200 / text-amber-700) to visually distinguish from the emerald "Thêm khách mới" button. Icon: `RotateCcw` (added to the lucide-react import). `title="Xóa liên kết khách hàng để chọn lại"`.
+  * **Directly addresses the persisted-state confusion**: if a walk-in tab from an earlier session still has a `customerId` set in localStorage, the cashier now sees a "Đổi khách" button on page load and can click it to bring the search + "Thêm khách mới" button back — instead of having to close the tab and click "Tạo hóa đơn" again (which the user reported as confusing).
+  * **Clarifying comments added** to `handleAddCustomer` (line ~354): explicitly documents that the two Zustand `set` calls (openCustomerTab + setTabMeta) are synchronous and React batches the re-render, so the fresh walk-in tab renders with `isWalkinTab=true` + `walkinHasCustomer=false` on the very first render after the click — no race condition. Also notes that `setTabMeta` OVERWRITES the entry (no merge) and the UUID tabId guarantees no stale persisted entry is clobbered.
+
+- Step 3 — Verify the fix (PASS — all 3 rules + the new "Đổi khách" button verified end-to-end):
+  * **Scenario 1 (fresh walk-in tab → both show)**: cleared localStorage, reloaded, clicked "Tạo hóa đơn". DOM: `{"hasSearch":true,"hasAddNew":true,"hasDoiKhach:false}`. Screenshot: `/home/z/my-project/verify-walkin-search-shows.png` (83,380 bytes).
+  * **Scenario 2 (pick existing customer → both hide)**: typed "0634845123" in the inline search → autocomplete returned "Hoàng Vũ 0634845123 • KH000097". Clicked it → auto-linked to LH000059 (type flipped "walkin"→"booking"). DOM: `{"hasSearch":false,"hasAddNew":false,"hasDoiKhach":false,"hasBookingCode":true}`. The info bar shows "Hoàng Vũ • 0634845123 • Lịch hẹn: LH000059". Screenshot: `/home/z/my-project/verify-walkin-after-pick-customer.png` (103,538 bytes).
+  * **Scenario 3 (add new customer → both hide, "Đổi khách" shows)**: clicked "Tạo hóa đơn" again (fresh tab), clicked "Thêm khách mới", filled dialog (name "Khach Test 16C", phone "0988111222"), clicked "Lưu". DOM: `{"dialogOpen":false,"hasSearch":false,"hasAddNew":false,"hasDoiKhach":true}`. The walk-in tab now shows "Khach Test 16C • 0988111222" + the amber "Đổi khách" button (type stayed "walkin", customerId set). Screenshot: `/home/z/my-project/verify-walkin-after-add-new.png` (86,602 bytes).
+  * **Bonus — "Đổi khách" resets the tab**: clicked "Đổi khách" → DOM: `{"hasSearch":true,"hasAddNew":true,"hasDoiKhach":false}`. The tab reverted to "Khách vãng lai" (no phone) and the search + "Thêm khách mới" button reappeared. Screenshot: `/home/z/my-project/verify-walkin-after-doi-khach.png` (83,380 bytes).
+  * **Bonus — persisted stale state recovered**: manually set localStorage `cashier-store` to a walk-in tab with `customerId` set (simulating a previous session), reloaded /cashier. DOM on page load: `{"hasSearch":false,"hasAddNew":false,"hasDoiKhach":true,"activeCustomerName":"Khach Test 16B"}`. The "Đổi khách" button appeared immediately → clicked it → search + "Thêm khách mới" button reappeared. Screenshot: `/home/z/my-project/verify-walkin-persisted-stale-shows-doi-khach.png` (83,606 bytes).
+  * **Multiple walk-in tabs independence**: created a 2nd walk-in tab while the 1st had a customer linked. The 2nd tab showed search + button (no customerId) — per-tab scoping via `activeMeta = tabMeta[activeTabId]` works correctly.
+  * Note: 4 test customers were created in Supabase during verification ("Test Khách Mới", "Khach Moi 16", "Khach Test 16B", "Khach Test 16C"). They're harmless test data; left in place (the task didn't require cleanup).
+
+- Step 4 — Dev log + lint (PASS):
+  * `.pm2-logs/crm-out.log`: `✓ Compiled in 681ms` after my edits. All HTTP routes returned 200. No new `error|warn|exception|fail|⨯` matches.
+  * `.pm2-logs/crm-error.log`: 821 bytes — all entries are the PRE-EXISTING `changeStaffChecking is not defined` error from Task 14 (timestamped 08:02:45, before this task started at 09:27). No new errors from my changes.
+  * `npx eslint src/components/features/cashier/customer-tabs.tsx`: 0 errors, 1 pre-existing warning (`Unused eslint-disable directive` at line 305 — was there before my changes, from Task 10's AUTO-REBUILD useEffect). No new warnings introduced.
+
+Stage Summary:
+- **Root cause = persisted state** (confirmed). The 3 visibility rules (fresh tab → both show; pick customer → both hide; add new → both hide) were ALREADY correctly implemented in the existing code via `isWalkinTab` + `walkinHasCustomer` + the `!walkinHasCustomer` gate. After clearing localStorage, a fresh walk-in tab DOES show both the search input + "Thêm khách mới" button — no deeper render bug, no race condition between `openCustomerTab` and `setTabMeta` (Zustand `set` is synchronous, React batches the re-render).
+- **The user's reported symptom** ("Tạo hóa đơn doesn't show search/button") is most likely a misreport: they were looking at an OLD walk-in tab from a previous session whose `customerId` was still set in `localStorage["cashier-store"]` (so `walkinHasCustomer=true` → search/button hidden). Clicking "Tạo hóa đơn" DOES create a new fresh tab that shows them, but the user may not have noticed the tab switch.
+- **Fix = added a "Đổi khách" (Change customer) button** on walk-in tabs that have a customer linked (and no items/booking yet). This gives the cashier an explicit, visible way to reset a stale walk-in tab back to a fresh state — bringing the search + "Thêm khách mới" button back — without having to close the tab and click "Tạo hóa đơn" again. The button is amber-colored to distinguish it from the emerald "Thêm khách mới" button, and uses the `RotateCcw` (undo) icon. Guarded to only appear on truly fresh walk-in drafts (type="walkin", no invoice items, no booking created) — auto-linked walk-in tabs (type flipped to "booking") and tabs with services are excluded to prevent data loss.
+- **Changes in 1 file** (`src/components/features/cashier/customer-tabs.tsx`, +80/-5):
+  1. Import: added `RotateCcw` to the lucide-react import (line 5).
+  2. `handleAddCustomer` (line 354): expanded the clarifying comment to explicitly document that the two Zustand `set` calls are synchronous and React batches the re-render (no race condition), and that `setTabMeta` overwrites the entry with a fresh UUID (no stale persisted clobber). No logic change.
+  3. NEW `handleResetWalkinCustomer` function (line 393): clears `customerId`/`customerInfo` via `updateTabMeta`, resets name/phone via `updateCustomerTab`, clears inline search state. Guards: type must be "walkin", no invoice items, no booking created.
+  4. NEW "Đổi khách" button in the JSX (line 1086): the mirror of the `!walkinHasCustomer` block — shown ONLY when `walkinHasCustomer && no items && no bookingCreated`. Amber styling, `RotateCcw` icon, `title="Xóa liên kết khách hàng để chọn lại"`.
+- **No new lint errors or warnings**. Pre-existing `Unused eslint-disable directive` warning at line 305 unchanged. No new compile or runtime errors.
+- **No git push or Vercel deploy** (per user's explicit instruction).
+- **Screenshots** (all in /home/z/my-project/):
+  * `verify-walkin-search-repro.png` (83,380 bytes) — Step 1 repro: fresh walk-in tab after clearing localStorage, both search + button appear.
+  * `verify-walkin-search-shows.png` (83,380 bytes) — Scenario 1: fresh walk-in tab shows both (re-verified after code changes).
+  * `verify-walkin-after-pick-customer.png` (103,538 bytes) — Scenario 2: after picking Hoàng Vũ (auto-linked LH000059), both hidden, booking code shown.
+  * `verify-walkin-after-add-new.png` (86,602 bytes) — Scenario 3: after adding new customer "Khach Test 16C", both hidden, "Đổi khách" button visible.
+  * `verify-walkin-after-doi-khach.png` (83,380 bytes) — Bonus: after clicking "Đổi khách", search + button reappear.
+  * `verify-walkin-persisted-stale-shows-doi-khach.png` (83,606 bytes) — Bonus: persisted stale walk-in tab (with customerId) shows "Đổi khách" on page load → click → search/button reappear.

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
-import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2 } from "lucide-react";
+import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2, RotateCcw } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCashierStore, type InvoiceItem, type TabMeta } from "@/stores/cashier-store";
 import { useBranchStore } from "@/stores/branch-store";
@@ -351,10 +351,22 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     return `${colors.bg} ${colors.text}`;
   };
 
-  // "Thêm khách hàng" — open a new customer tab immediately with a synthetic
-  // id. A guest customer + booking are only created lazily when a service is
-  // added to the tab. (Previously this opened a 3-option dropdown: Khách vãng
-  // lai / Khách mới / Khách cũ — the latter two were removed per request.)
+  // "Tạo hóa đơn" — open a new walk-in customer tab immediately with a
+  // synthetic id ("walkin-<uuid>"). A guest customer + booking are only
+  // created lazily when a service is added to the tab.
+  //
+  // Two store updates happen here: openCustomerTab (sets activeTabId + adds
+  // the tab to activeCustomers) and setTabMeta (sets tabMeta[tabId]). Both
+  // are Zustand `set` calls, which are SYNCHRONOUS — they immediately mutate
+  // the store. React (via useSyncExternalStore) batches the resulting
+  // re-render, so by the time the component re-renders, BOTH activeTabId and
+  // tabMeta[tabId] are set. This guarantees the fresh walk-in tab renders
+  // with isWalkinTab=true and walkinHasCustomer=false on the very first
+  // render after the click — the inline search + "Thêm khách mới" button
+  // appear immediately. No race condition.
+  //
+  // (Previously this opened a 3-option dropdown: Khách vãng lai / Khách mới /
+  // Khách cũ — the latter two were removed per request.)
   const handleAddCustomer = () => {
     const tabId = `walkin-${crypto.randomUUID()}`;
     openCustomerTab({
@@ -363,7 +375,45 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
       phone: "",
     });
     // Walk-in = not a "Khách cũ" → treated as new for service filtering.
+    // setTabMeta OVERWRITES the entry at tabId (no merge) — and since tabId
+    // is a brand-new UUID, there's no stale persisted entry to clobber.
     setTabMeta(tabId, { type: "walkin", customerType: "new" });
+  };
+
+  // "Đổi khách" — reset a walk-in tab's customer link so the inline search +
+  // "Thêm khách mới" button reappear. Lets the cashier recover from a
+  // previously-linked customer (e.g. a walk-in tab from an earlier session
+  // whose customerId is still set in the persisted cashier-store, OR simply
+  // picking the wrong customer via search / add-new). Only allowed when the
+  // tab is still a fresh walk-in draft (type="walkin", NO invoice items, NO
+  // booking created) — once services are added or a booking exists, the
+  // customer link can't be undone without losing data. Auto-linked walk-in
+  // tabs (type flipped to "booking" by handleSelectInlineResult) are also
+  // excluded: their booking link is real and shouldn't be reset here.
+  const handleResetWalkinCustomer = () => {
+    if (!activeTabId || !activeMeta) return;
+    if (activeMeta.type !== "walkin") return;
+    const items = invoices[activeTabId]?.items || [];
+    if (items.length > 0 || activeMeta.bookingCreated) {
+      alert(
+        "Không thể đổi khách khi đã thêm dịch vụ/sản phẩm hoặc đã tạo lịch hẹn."
+      );
+      return;
+    }
+    // Clear the customer link (customerId → undefined makes walkinHasCustomer
+    // false → search + "Thêm khách mới" button reappear). Reset the displayed
+    // name/phone back to the walk-in defaults. customerType stays "new".
+    updateTabMeta(activeTabId, {
+      customerId: undefined,
+      customerInfo: undefined,
+      customerType: "new",
+    });
+    updateCustomerTab(activeTabId, {
+      customerName: "Khách vãng lai",
+      phone: "",
+    });
+    setInlineSearch("");
+    setShowInlineResults(false);
   };
 
   // Pick a day's booking → opens a customer tab AND adds the booking's services
@@ -1021,6 +1071,31 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
               </button>
               </>
               )}
+              {/* "Đổi khách" button — the MIRROR of the above block: shown
+                  ONLY when a customer IS linked (walkinHasCustomer=true).
+                  Lets the cashier reset the walk-in tab back to a fresh
+                  state so the search + "Thêm khách mới" button reappear.
+                  Restricted to truly fresh walk-in drafts (no items, no
+                  booking created, type still "walkin") — see
+                  handleResetWalkinCustomer for the guard logic. This
+                  directly addresses the persisted-state confusion: if a
+                  walk-in tab from an earlier session still has a
+                  customerId set in localStorage, the cashier can click
+                  "Đổi khách" to bring the search/button back instead of
+                  having to close the tab and click "Tạo hóa đơn" again. */}
+              {walkinHasCustomer &&
+                (!activeTabItems || activeTabItems.length === 0) &&
+                !activeMeta?.bookingCreated && (
+                  <button
+                    type="button"
+                    onClick={handleResetWalkinCustomer}
+                    className="flex items-center gap-1 rounded border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
+                    title="Xóa liên kết khách hàng để chọn lại"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Đổi khách
+                  </button>
+                )}
             </>
           ) : (
             <>
