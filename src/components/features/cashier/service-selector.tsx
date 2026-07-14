@@ -192,6 +192,13 @@ export function ServiceSelector() {
     Array<{ id: string; date: string; time: string; status: string; branchName: string; services: Array<{ name: string; staffName: string }> }>
   >([]);
   const [skipExistingBookingsCheck, setSkipExistingBookingsCheck] = useState(false);
+  // Staff-picker dialog for PRODUCT and PACKAGE items. Unlike services (which
+  // have a date/time dialog), products/packages just need a staff name before
+  // they're added — the cashier MUST pick a staff before OK is enabled. We
+  // reuse the same state + Dialog for both product and package clicks (the
+  // active tab determines the item type at add time via `handleAddItem`).
+  const [simpleStaffDialogItem, setSimpleStaffDialogItem] = useState<ServiceItem | null>(null);
+  const [simpleStaffPickStaffId, setSimpleStaffPickStaffId] = useState<string>("");
 
   // Fetch services from Supabase
   const { data: servicesData, isLoading: servicesLoading } = useQuery({
@@ -589,6 +596,32 @@ export function ServiceSelector() {
       setIsParallelService(false);
     }
     setServiceDialogOpen(true);
+  };
+
+  // Clicking a product OR a package opens a SIMPLE staff-picker dialog (no
+  // date/time — those item types aren't booked into Lịch hẹn). The cashier
+  // must select a staff before OK is enabled. The item is added on OK with
+  // the picked staff's name; on Cancel it is NOT added.
+  const handleProductOrPackageClick = (item: ServiceItem) => {
+    if (!canAssignStaff) {
+      // No permission to assign staff → fall back to the old direct-add
+      // behavior (item added with no staff assignment).
+      handleAddItem(item);
+      return;
+    }
+    setSimpleStaffDialogItem(item);
+    setSimpleStaffPickStaffId("");
+  };
+
+  // OK on the simple staff-picker dialog: add the product/package to the
+  // invoice with the picked staff's name, then close.
+  const handleSimpleStaffDialogConfirm = () => {
+    if (!simpleStaffDialogItem) return;
+    const staff = allStaff.find((s) => s.id === simpleStaffPickStaffId);
+    if (!staff) return; // safety — OK button is disabled in this case anyway
+    handleAddItem(simpleStaffDialogItem, { staffName: staff.name });
+    setSimpleStaffDialogItem(null);
+    setSimpleStaffPickStaffId("");
   };
 
   // OK on the service dialog: ALWAYS adds the service to the invoice. A booking
@@ -1256,7 +1289,7 @@ export function ServiceSelector() {
                 expandedCategoryProducts.map((item) => (
                   <button
                     key={item.id}
-                    onClick={() => handleAddItem(item)}
+                    onClick={() => handleProductOrPackageClick(item)}
                     className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
                   >
                     <div className="min-w-0 flex-1">
@@ -1310,7 +1343,7 @@ export function ServiceSelector() {
             {items.map((item) => (
               <button
                 key={item.id}
-                onClick={() => handleAddItem(item)}
+                onClick={() => handleProductOrPackageClick(item)}
                 className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
               >
                 <div className="min-w-0 flex-1">
@@ -1360,7 +1393,9 @@ export function ServiceSelector() {
 
             {canAssignStaff && (
             <div className="space-y-2">
-              <Label htmlFor="svc-staff">Nhân viên</Label>
+              <Label htmlFor="svc-staff">
+                Nhân viên<span className="ml-0.5 text-red-500">*</span>
+              </Label>
               <Select
                 value={selectedStaffId}
                 onValueChange={(v) => setSelectedStaffId(v)}
@@ -1382,6 +1417,9 @@ export function ServiceSelector() {
                   )}
                 </SelectContent>
               </Select>
+              {!selectedStaffId && (
+                <p className="text-xs text-red-500">Vui lòng chọn nhân viên</p>
+              )}
             </div>
             )}
 
@@ -1439,7 +1477,8 @@ export function ServiceSelector() {
             </Button>
             <Button
               onClick={handleDialogConfirm}
-              disabled={addingFromDialog}
+              disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}
+              title={canAssignStaff && !selectedStaffId ? "Vui lòng chọn nhân viên" : undefined}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               {addingFromDialog ? "Đang lưu..." : "OK"}
@@ -1510,6 +1549,89 @@ export function ServiceSelector() {
               }}
             >
               OK, đặt tiếp
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Simple staff-picker dialog for PRODUCT and PACKAGE items. The cashier
+          MUST pick a staff before OK is enabled — the item is only added on OK.
+          Cancel closes the dialog without adding anything. Uses `allStaff`
+          (the hairdresser list fetched regardless of active tab) so the dialog
+          works on the product and package tabs too. */}
+      <Dialog
+        open={!!simpleStaffDialogItem}
+        onOpenChange={(v) => {
+          if (!v) {
+            setSimpleStaffDialogItem(null);
+            setSimpleStaffPickStaffId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {activeTab === "package" ? "Thêm gói dịch vụ" : "Thêm sản phẩm"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {simpleStaffDialogItem && (
+              <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
+                <span className="font-medium text-gray-900">
+                  {simpleStaffDialogItem.name}
+                </span>
+                <span className="ml-2 font-semibold text-emerald-600">
+                  {formatPrice(simpleStaffDialogItem.price)}đ
+                </span>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="simple-staff">
+                Nhân viên<span className="ml-0.5 text-red-500">*</span>
+              </Label>
+              <Select
+                value={simpleStaffPickStaffId}
+                onValueChange={setSimpleStaffPickStaffId}
+              >
+                <SelectTrigger id="simple-staff" className="w-full">
+                  <SelectValue placeholder="Chọn nhân viên" />
+                </SelectTrigger>
+                <SelectContent>
+                  {allStaff.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-gray-500">
+                      Không có nhân viên ở cửa hàng này
+                    </div>
+                  ) : (
+                    allStaff.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              {!simpleStaffPickStaffId && (
+                <p className="text-xs text-red-500">Vui lòng chọn nhân viên</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSimpleStaffDialogItem(null);
+                setSimpleStaffPickStaffId("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              onClick={handleSimpleStaffDialogConfirm}
+              disabled={!simpleStaffPickStaffId}
+              title={!simpleStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              OK
             </Button>
           </DialogFooter>
         </DialogContent>

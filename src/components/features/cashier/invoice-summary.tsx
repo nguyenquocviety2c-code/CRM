@@ -12,6 +12,7 @@ import {
   Loader2,
   X,
   CheckSquare,
+  UserCog,
 } from "lucide-react";
 import { useCashierStore } from "@/stores/cashier-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
@@ -473,6 +474,12 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // product items in the invoice (services keep their own per-line staff).
   const [showStaffPicker, setShowStaffPicker] = useState(false);
   const [pickedStaffId, setPickedStaffId] = useState<string>("");
+  // Per-item "change staff" dialog state. Opens when the cashier clicks the
+  // small square button next to a line item's staff name. Tracks WHICH item
+  // id is being edited (so OK only updates that one line) and the picked
+  // staff id. The dialog is REQUIRED — OK is disabled until a staff is picked.
+  const [changeStaffItemId, setChangeStaffItemId] = useState<string | null>(null);
+  const [changeStaffPickStaffId, setChangeStaffPickStaffId] = useState<string>("");
   // Whether the active invoice has at least one product item (gates the button).
   const hasProductItems = !!(invoice && invoice.items.some((it) => it.type === "product"));
   // The currently-assigned advisory staff name on product items (for display on
@@ -1403,10 +1410,45 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                   {/* Service name 12px + leading-tight to reduce the name slot's
                       line/row height. Staff name 11px, also leading-tight. */}
                   <p className="font-medium text-gray-900 text-xs leading-tight">{item.name}</p>
-                  {item.staffName && (
-                    <p className="text-[11px] text-gray-500 leading-tight">
-                      Nv: {item.staffName}
-                    </p>
+                  {editableDisplay ? (
+                    <div className="flex items-center gap-1 leading-tight">
+                      {/* Small square button — clicking opens a per-item staff
+                          picker. Visible for ALL item types (service/product/
+                          package). Pre-fills with the current staff's id (if
+                          any). OK is required (disabled until a staff is
+                          picked). */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Pre-fill with the current staff's id (lookup by
+                          // name in the eligible branch staff list). When no
+                          // staff is assigned yet, leave the picker empty so
+                          // the cashier MUST pick one (OK disabled).
+                          const current = (eligibleBranchStaff || []).find(
+                            (s) => s.name === item.staffName
+                          );
+                          setChangeStaffPickStaffId(current?.id || "");
+                          setChangeStaffItemId(item.id);
+                        }}
+                        title={
+                          item.staffName
+                            ? `Đổi nhân viên (hiện: ${item.staffName})`
+                            : "Chọn nhân viên cho mặt hàng này"
+                        }
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-gray-300 text-gray-500 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-600"
+                      >
+                        <UserCog className="h-3 w-3" />
+                      </button>
+                      <p className="text-[11px] text-gray-500">
+                        {item.staffName ? `Nv: ${item.staffName}` : "Nv: (chưa có)"}
+                      </p>
+                    </div>
+                  ) : (
+                    item.staffName && (
+                      <p className="text-[11px] text-gray-500 leading-tight">
+                        Nv: {item.staffName}
+                      </p>
+                    )
                   )}
                 </div>
                 <div className="flex items-center justify-center">
@@ -1988,6 +2030,86 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                     setInvoiceItemStaff(activeTabId, it.id, staffName)
                   );
                 setShowStaffPicker(false);
+              }}
+            >
+              Xác nhận
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Per-item "Đổi nhân viên" dialog — opened by the small square button
+          next to each line item's staff name. Updates ONLY the one item
+          identified by `changeStaffItemId`. Unlike the bulk "Xếp nhân viên"
+          dialog above, this one is REQUIRED — OK is disabled until a staff is
+          picked (no "Không chọn" option), matching the add-flow requirement. */}
+      <Dialog
+        open={!!changeStaffItemId}
+        onOpenChange={(v) => {
+          if (!v) {
+            setChangeStaffItemId(null);
+            setChangeStaffPickStaffId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-[320px] sm:max-w-[320px] p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm">Đổi nhân viên</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1">
+            <p className="text-[11px] text-gray-500">
+              Chọn nhân viên cho mặt hàng này. Bắt buộc.
+            </p>
+            <Select
+              value={changeStaffPickStaffId}
+              onValueChange={setChangeStaffPickStaffId}
+            >
+              <SelectTrigger className="w-full h-8 text-xs">
+                <SelectValue placeholder="Chọn nhân viên" />
+              </SelectTrigger>
+              <SelectContent>
+                {(eligibleBranchStaff || []).length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-500">
+                    Không có nhân viên ở cửa hàng này
+                  </div>
+                ) : (
+                  (eligibleBranchStaff || []).map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {!changeStaffPickStaffId && (
+              <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setChangeStaffItemId(null);
+                setChangeStaffPickStaffId("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              size="sm"
+              disabled={!changeStaffPickStaffId || !activeTabId || !changeStaffItemId}
+              title={!changeStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              onClick={() => {
+                if (!activeTabId || !changeStaffItemId) return;
+                const staffName =
+                  (eligibleBranchStaff || []).find(
+                    (s) => s.id === changeStaffPickStaffId
+                  )?.name || "";
+                if (!staffName) return; // safety — OK is disabled in this case
+                setInvoiceItemStaff(activeTabId, changeStaffItemId, staffName);
+                setChangeStaffItemId(null);
+                setChangeStaffPickStaffId("");
               }}
             >
               Xác nhận
