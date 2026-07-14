@@ -612,15 +612,22 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // walk-in tab. Once linked, the inline search + "Thêm khách mới" button
   // are hidden — the customer is already chosen.
   const walkinHasCustomer = isWalkinTab && Boolean(activeMeta?.customerId);
-  // Whether the active walk-in tab is still an empty draft (no items added,
-  // no pending invoice created yet). Only empty drafts show the X close
-  // button — once an item is added the tab is a real (pending) invoice and
-  // can no longer be discarded from the info bar.
+  // Whether the active tab is still an EMPTY order (no items, no pending
+  // invoice, no booking services). Applies to BOTH walk-in drafts AND booking
+  // tabs (e.g. a booking whose services were all removed, or a freshly-picked
+  // booking the cashier wants to dismiss). Empty tabs show the X close button
+  // in the info bar so the cashier can discard them. Once an item is added
+  // (or an invoice is created, or the booking has services) the tab becomes a
+  // real order and the X disappears. Terminal statuses never show X.
   const activeTabItems = activeTabId ? invoices[activeTabId]?.items : undefined;
-  const isEmptyWalkinDraft =
-    isWalkinTab &&
+  const activeBookingHasServices = (activeBooking?.services || []).length > 0;
+  const isEmptyTab =
     (!activeTabItems || activeTabItems.length === 0) &&
-    !activeMeta?.invoiceId;
+    !activeMeta?.invoiceId &&
+    !activeBookingHasServices &&
+    activeBooking?.status !== "checkout" &&
+    activeBooking?.status !== "cancelled" &&
+    activeBooking?.status !== "no_show";
 
   // Select an inline search result → link the walk-in tab to the real customer.
   //
@@ -829,9 +836,24 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
             const isStandalone = (b.services || []).length === 0;
             // Walk-in draft tab: id starts with "walkin-".
             const isWalkinDraft = b.id.startsWith("walkin-");
-            // Walk-in tabs with no items can be closed via X button.
-            const walkinItems = isWalkinDraft ? (invoices[b.id]?.items || []) : [];
-            const canCloseWalkin = isWalkinDraft && walkinItems.length === 0 && !tabMeta[b.id]?.invoiceId;
+            // ANY tab (walk-in OR booking) that has NO invoice items, NO pending
+            // invoice, AND NO booking services can be closed via X. The user
+            // wants to discard empty orders (no service/product/package) from
+            // the sidebar. We check BOTH the local invoice items (loaded when
+            // the tab is active) AND the booking's own services array (from
+            // the day's bookings query) — this covers non-active tabs whose
+            // local invoice state hasn't been loaded yet. Terminal statuses
+            // (checkout/cancelled/no_show) never show X.
+            const tabItems = invoices[b.id]?.items || [];
+            const tabHasInvoice = !!tabMeta[b.id]?.invoiceId;
+            const bookingHasServices = (b.services || []).length > 0;
+            const canCloseWalkin =
+              tabItems.length === 0 &&
+              !tabHasInvoice &&
+              !bookingHasServices &&
+              b.status !== "checkout" &&
+              b.status !== "cancelled" &&
+              b.status !== "no_show";
             return (
               <div
                 key={b.id}
@@ -1049,19 +1071,27 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                 </div>
               )}
 
-              {/* Booking date — the appointment's date_time. Shown alongside the
-                  booking code so the cashier sees when the appointment is for. */}
+              {/* Booking date + time — the appointment's full date_time
+                  (dd/MM/yyyy HH:MM). Shown alongside the booking code so the
+                  cashier sees EXACTLY when the appointment is for. Previously
+                  only the date was shown (no time), which left the cashier
+                  guessing the hour — especially for walk-in tabs auto-linked
+                  to a booking, where the booking's date_time is the only
+                  source of the appointment time. Now shows "dd/MM/yyyy HH:MM". */}
               {activeBooking?.date_time && (
                 <div className="flex items-center gap-1 text-gray-500">
                   <Calendar className="h-4 w-4" />
                   <span className="text-xs">
                     {(() => {
                       try {
-                        // Timezone-safe Vietnam day (Supabase stores +00:00; the
-                        // ISO segments are UTC, not the VN day the user entered).
+                        // Timezone-safe Vietnam day + time (Supabase stores
+                        // +00:00; the ISO segments are UTC, not the VN time
+                        // the user entered). toVietnamDay/toVietnamTime convert
+                        // the epoch to the VN wall-clock values.
                         const iso = toVietnamDay(activeBooking.date_time).split("-");
+                        const t = toVietnamTime(activeBooking.date_time);
                         return iso.length === 3
-                          ? `${iso[2]}/${iso[1]}/${iso[0]}`
+                          ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
                           : "—";
                       } catch {
                         return "—";
@@ -1089,11 +1119,11 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
             </div>
           )}
 
-          {/* X close button — only for EMPTY walk-in drafts (no items, no
-              pending invoice). Lets the cashier discard a mistakenly opened
-              tab. Once an item is added the tab becomes a real (pending)
-              invoice and the X disappears. */}
-          {isEmptyWalkinDraft && (
+          {/* X close button — for ANY empty tab (no items, no pending invoice).
+              Lets the cashier discard a mistakenly opened tab OR an empty
+              booking tab (no service/product/package). Once an item is added
+              the tab becomes a real (pending) invoice and the X disappears. */}
+          {isEmptyTab && (
             <button
               type="button"
               onClick={() => closeCustomerTab(activeCustomer.customerId)}

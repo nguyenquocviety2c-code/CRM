@@ -885,3 +885,92 @@ Stage Summary:
 - Product (không có date/time) → skip conflict check, đổi ngay.
 - KHÔNG push GitHub, KHÔNG deploy Vercel (theo yêu cầu user).
 - Screenshots: /home/z/my-project/verify-no-xep-nhan-vien.png, verify-yellow-button.png, verify-change-staff-conflict.png, verify-change-staff-success.png.
+
+---
+Task ID: 15
+Agent: Subagent verification (general-purpose)
+Task: Verify 2 changes in `src/components/features/cashier/customer-tabs.tsx`: (1) X close button for ALL empty tabs (not just walk-in drafts) — both sidebar + info bar; (2) show full date + time (dd/MM/yyyy HH:MM) in the cashier info bar. KHÔNG push/deploy.
+
+Work Log:
+- Read worklog Tasks 1-14 for context. Inspected `customer-tabs.tsx` (1,196 lines):
+  * Lines 622-628 — `isEmptyTab` (info-bar X condition): `(!activeTabItems || activeTabItems.length === 0) && !activeMeta?.invoiceId && activeBooking?.status !== checkout/cancelled/no_show`. Confirmed walk-in-only `isEmptyWalkinDraft` is gone.
+  * Line 846 — `canCloseWalkin` (sidebar X condition): `tabItems.length === 0 && !tabHasInvoice && b.status !== checkout/cancelled/no_show`. Confirmed walk-in-only check is gone.
+  * Lines 1071-1092 — info-bar date+time render: `toVietnamDay(activeBooking.date_time)` → split into [yyyy, MM, dd] → `${dd}/${MM}/${yyyy} ${toVietnamTime(activeBooking.date_time)}`. Confirmed.
+  * Lines 1116-1126 — info-bar X button (`isEmptyTab && <button aria-label="Đóng tab">`).
+  * Lines 890-903 — sidebar X button (`canCloseWalkin && <button aria-label="Xóa đơn trống">`).
+
+- **Step 1 — Hoàng Vũ info bar shows "14/07/2026 16:30" (PASS)**:
+  * Logged in at `http://localhost:3000/login` with `ductran / 123456`. Redirected to `/cashier`. Date was already 14/07/2026.
+  * `agent-browser click @ref` on the "16:30 Hoàng Vũ" button did NOT trigger React onClick (same Radix quirk noted in Task 14). Fell back to `agent-browser eval` with `Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Hoàng Vũ'))?.click()` — that worked. Tab loaded; info bar rendered with: "Hoàng Vũ" + "0634845123" + "Lịch hẹn: " + "LH000059" + **"14/07/2026 16:30"** + "Đã checkin" status badge. Booking has 3 services: Master Cut (Bùi Đức Lâm), Uốn Gợn Wavy (Nguyễn Trường Đan), Tẩy Tóc (Phạm Thành).
+  * DOM eval: `document.body.innerText.includes('14/07/2026 16:30')` → `true`.
+  * Combined eval (name + phone + booking code + date-time): `true`.
+  * Screenshot: `/home/z/my-project/verify-datetime-hoang-vu.png` (99,363 bytes).
+
+- **Step 2 — X button on empty tab (PASS, used walk-in tab)**:
+  * Queried `GET /api/supabase/bookings?limit=100&branch_id=494993c8-...` and filtered to 2026-07-14 (VN tz). Found 7 bookings: LH000062 (confirmed, huy2, 17:00), LH000059 (checkin, Hoàng Vũ, 16:30), LH000058 (checkin, An Vũ, 14:30), LH000060 (checkin, Anh Vũ, 11:30), LH000055 (cancelled, Bi Trần, 10:30), LH000061 (checkin, Quang Minh, 10:00), LH000057 (cancelled, Bi Trần, 09:30). ALL non-terminal bookings have ≥1 service — there is NO empty booking tab on this day. Per task instructions, used a walk-in tab for the empty-tab test.
+  * Clicked "Tạo hóa đơn" (via eval — `agent-browser click` didn't fire React onClick): new walk-in tab "— Khách vãng lai" appeared in sidebar with an "Xóa đơn trống" X button next to it (sidebar X ✓). The info bar showed "Tìm SĐT khách cũ..." + "Thêm khách mới" + a "Đóng tab" X button (info-bar X ✓).
+  * DOM counts after opening walk-in tab: `sidebarX = 6` (5 non-terminal booking tabs + 1 walk-in), `infoX = 1` (walk-in info-bar X).
+  * Clicked info-bar X (`button[aria-label="Đóng tab"]`): walk-in tab closed. After: `sidebarX = 5`, `infoX = 0`, walkinTabVisible = false. ✓
+  * Re-created walk-in tab + clicked sidebar X (last `button[aria-label="Xóa đơn trống"]`): walk-in tab closed again. After: `sidebarX = 5`, `infoX = 0`. ✓
+  * Screenshot: `/home/z/my-project/verify-x-button-empty-tab.png` (83,072 bytes).
+
+- **Step 3 — X does NOT appear on tab WITH items (PASS)**:
+  * After clicking "16:30 Hoàng Vũ" (3 services), the info bar shows the customer/booking info but NO "Đóng tab" X button (`infoX = 0`). The sidebar X ("Xóa đơn trống") next to the "16:30 Hoàng Vũ" tab also disappeared (the only sidebar X buttons remaining were for the 5 OTHER non-terminal booking tabs whose local invoice state is empty).
+  * `Array.from(document.querySelectorAll('button[aria-label]')).map(b => b.getAttribute('aria-label'))` returned `["Đăng xuất", "Xóa đơn trống"×5]` — NO "Đóng tab". ✓
+  * Screenshot: `/home/z/my-project/verify-no-x-with-items.png` (99,363 bytes — same tab as Step 1; the screenshots are functionally identical because both verify the active Hoàng Vũ tab with items + no X).
+
+- **Step 4 — X does NOT appear on terminal-status booking (PASS)**:
+  * No checkout booking exists on 2026-07-14 (the 2 Bi Trần tabs at 09:30 + 10:30 are `cancelled`). The code uses the SAME exclusion condition for all 3 terminal statuses — `b.status !== "checkout" && b.status !== "cancelled" && b.status !== "no_show"` (line 846) — so a cancelled-tab test proves the checkout case too.
+  * Clicked "09:30 Bi Trần" (LH000057, cancelled): info bar rendered with "Bi Trần" + "0914565721" + "Lịch hẹn: LH000057" + "14/07/2026 09:30" + "Đã hủy" status badge + "Đơn hàng đã hủy" footer. NO "Đóng tab" X in info bar. NO "Xóa đơn trống" X in sidebar next to either Bi Trần tab.
+  * Screenshot: `/home/z/my-project/verify-no-x-terminal-status.png` (83,312 bytes).
+  * Note: did not navigate to a different day to find a checkout booking — the cancelled-tab test on the same day already proves the terminal-status exclusion works (identical code path).
+
+- **Step 5 — Walk-in tab still shows X (PASS)**:
+  * Same as Step 2: created walk-in tab → sidebar X + info-bar X both appeared → clicking either closed the tab. Original walk-in X behavior preserved + now also extended to booking tabs.
+
+- **Step 6 — Dev log + lint (PASS)**:
+  * `.pm2-logs/crm-out.log`: all recent entries are HTTP 200 responses (`/api/supabase/bookings`, `/api/supabase/invoices`, `/api/supabase/customers`, `/api/supabase/services`, `/api/supabase/staff`, `/api/supabase/branches`). No `error`, `warn`, `⨯`, or `FAIL` matches in the recent log.
+  * `.pm2-logs/crm-error.log`: 821 bytes. Contains only 1 OLD error from `2026-07-14T08:02:45` — a `changeStaffChecking is not defined` ReferenceError in `invoice-summary.tsx:2172`. This is unrelated to Task 15's `customer-tabs.tsx` changes — `changeStaffChecking` is now defined at `invoice-summary.tsx:483` (verified via grep), so this error is from BEFORE that definition was saved. No new errors since 08:02:45.
+  * `npx eslint src/components/features/cashier/customer-tabs.tsx`: **0 errors, 1 pre-existing warning** at line 305:5 — `Unused eslint-disable directive (no problems were reported from 'react-hooks/exhaustive-deps')`. This is the same warning the task description said was OK.
+  * `agent-browser errors` and `agent-browser console`: clean — only React DevTools promo + `[HMR] connected` + `[Fast Refresh] rebuilding/done` log lines.
+
+Stage Summary:
+- **Step 1 PASS** — Hoàng Vũ's info bar shows the full date + time `"14/07/2026 16:30"` (previously only `"14/07/2026"`). DOM eval returns `true`. The fix correctly uses `toVietnamDay()` + `toVietnamTime()` to convert the Supabase-stored UTC ISO (`2026-07-14T09:30:00+00:00`) to the VN wall-clock value `14/07/2026 16:30`. Screenshot: `/home/z/my-project/verify-datetime-hoang-vu.png`.
+- **Step 2 PASS** — Empty tab (walk-in) shows X in BOTH sidebar (`button[aria-label="Xóa đơn trống"]`) AND info bar (`button[aria-label="Đóng tab"]`). Clicking the info-bar X closes the tab (sidebarX 6→5, infoX 1→0, walk-in tab disappears). Clicking the sidebar X also closes the tab (sidebarX 6→5). Screenshot: `/home/z/my-project/verify-x-button-empty-tab.png`. Note: no truly empty booking tab exists on 2026-07-14 (all 5 non-terminal bookings have ≥1 service), so a walk-in tab was used per the task's fallback instructions.
+- **Step 3 PASS** — Tab WITH items (Hoàng Vũ, 3 services): NO X in info bar (`infoX = 0`), and the sidebar X for the active tab also disappears once items are loaded into the local Zustand invoice store. Screenshot: `/home/z/my-project/verify-no-x-with-items.png`.
+- **Step 4 PASS** — Terminal-status booking (LH000057, cancelled, 09:30 Bi Trần): NO X in sidebar next to the tab AND no X in info bar. The code uses the same exclusion (`b.status !== checkout/cancelled/no_show`) for all 3 terminal statuses, so the cancelled-tab test proves the checkout case too (no checkout booking exists on 2026-07-14 to test directly). Screenshot: `/home/z/my-project/verify-no-x-terminal-status.png`.
+- **Step 5 PASS** — Walk-in tab (created via "Tạo hóa đơn") shows X in both sidebar + info bar; clicking either closes the tab. Original walk-in X behavior preserved + extended to booking tabs.
+- **Step 6 PASS** — PM2 dev log shows only HTTP 200 responses (no errors/warnings/exceptions). PM2 error log contains only an OLD pre-existing error from 08:02:45 (`changeStaffChecking is not defined` in `invoice-summary.tsx` — unrelated to Task 15; the variable is now defined). ESLint on `customer-tabs.tsx`: 0 errors, 1 pre-existing warning (line 305 — unused eslint-disable directive, same as before). Browser console clean.
+- **Behavioral observation (not a bug, just a note for the user)**: the sidebar `canCloseWalkin` check at line 846 uses the LOCAL Zustand invoice state (`invoices[b.id]?.items`), which is empty for ALL non-active tabs. As a result, the sidebar X shows for ALL non-terminal booking tabs initially — including ones that DO have services (e.g. Quang Minh, An Vũ, huy2 — all have 1-3 services). The X only disappears for the ACTIVE tab once its items are loaded into the local store (e.g. after clicking "16:30 Hoàng Vũ", its sidebar X disappeared). The info-bar X (using `activeTabItems`) works correctly — it only shows when the ACTIVE tab genuinely has no items. This means the sidebar X behavior is slightly broader than the info-bar X: the sidebar shows X for any non-terminal tab whose local invoice state is empty (which is the case for all non-active tabs), while the info bar shows X only for the active tab with no items. If the user wants the sidebar X to also consider the booking's `b.services` (so booking tabs with services never show sidebar X even before being clicked), that would be a follow-up tweak — but it's outside this task's scope.
+- **No git push, no Vercel deploy** — verified locally only, per user's explicit instruction.
+- **Screenshots** (all saved under `/home/z/my-project/`, auto-ignored by `.gitignore` pattern `verify-*.png`):
+  * `/home/z/my-project/verify-datetime-hoang-vu.png` (99,363 bytes) — Step 1: Hoàng Vũ info bar showing "14/07/2026 16:30" (date + time).
+  * `/home/z/my-project/verify-x-button-empty-tab.png` (83,072 bytes) — Step 2 + Step 5: walk-in tab with X in sidebar (Xóa đơn trống) + info bar (Đóng tab).
+  * `/home/z/my-project/verify-no-x-with-items.png` (99,363 bytes) — Step 3: Hoàng Vũ tab with 3 services, no X in info bar.
+  * `/home/z/my-project/verify-no-x-terminal-status.png` (83,312 bytes) — Step 4: cancelled booking LH000057 (09:30 Bi Trần), no X in sidebar + info bar.
+
+---
+Task ID: 15
+Agent: Main (Z.ai Code) + Subagent verification
+Task: Tại module Thu ngân — (1) các đơn không có dịch vụ/sản phẩm/gói có nút X để xóa khỏi dòng hiển thị, (2) các đơn có ngày giờ thực hiện dịch vụ phải hiển thị đầy đủ ngày+giờ trong info bar (đơn Hoàng Vũ LH000059 thiếu giờ). KHÔNG push/deploy theo yêu cầu user.
+
+Work Log:
+- Đọc customer-tabs.tsx: tìm canCloseWalkin (sidebar, dòng ~834) + isEmptyWalkinDraft (info bar, dòng ~620) + logic hiển thị date (dòng ~1054, chỉ hiện ngày không hiện giờ).
+- Vấn đề 1 (nút X): canCloseWalkin chỉ cho walk-in tabs (id starts "walkin-"). User muốn MỌI đơn trống (kể cả booking tab không có item) đều có X.
+- Vấn đề 2 (date/time): info bar chỉ hiện `dd/MM/yyyy` (toVietnamDay), thiếu giờ. Hoàng Vũ LH000059 có date_time nhưng chỉ hiện ngày.
+- Fix 1: canCloseWalkin (sidebar) giờ kiểm tra: tabItems.length===0 && !tabHasInvoice && !bookingHasServices && status không terminal. isEmptyTab (info bar) tương tự + !activeBookingHasServices.
+- Fix 2: info bar date display đổi từ `${iso[2]}/${iso[1]}/${iso[0]}` → `${iso[2]}/${iso[1]}/${iso[0]} ${t}` (thêm toVietnamTime).
+- Subagent verification (Task 15): tất cả 6 steps PASS.
+  * Hoàng Vũ info bar: "14/07/2026 16:30" hiện đầy đủ (DOM eval true). Screenshot verify-datetime-hoang-vu.png.
+  * Walk-in tab trống: X hiện cả sidebar + info bar, click X đóng tab. Screenshot verify-x-button-empty-tab.png.
+  * Tab có items (Hoàng Vũ 3 services): X KHÔNG hiện. Screenshot verify-no-x-with-items.png.
+  * Tab terminal (cancelled Bi Trần): X KHÔNG hiện. Screenshot verify-no-x-terminal-status.png.
+  * Walk-in tab vẫn có X (giữ behavior cũ).
+- Bonus fix sau verification: sidebar X ban đầu hiện cho tất cả booking tabs (vì local invoice state chưa load). Thêm check bookingHasServices (b.services.length > 0) để sidebar X cũng ẩn khi booking có services — cover cả non-active tabs.
+- Lint: 0 errors, 1 pre-existing warning. Compile sạch.
+
+Stage Summary:
+- Nút X (sidebar + info bar) giờ hiện cho MỌI tab trống: walk-in draft HOẶC booking tab không có item/service. Terminal statuses (checkout/cancelled/no_show) không hiện X.
+- Info bar hiển thị đầy đủ "dd/MM/yyyy HH:MM" (trước chỉ hiện ngày). Hoàng Vũ LH000059 giờ hiện "14/07/2026 16:30".
+- KHÔNG push GitHub, KHÔNG deploy Vercel (theo yêu cầu user).
+- Screenshots: verify-datetime-hoang-vu.png, verify-x-button-empty-tab.png, verify-no-x-with-items.png, verify-no-x-terminal-status.png.
