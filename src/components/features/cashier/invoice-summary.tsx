@@ -1456,10 +1456,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                   {item.price.toLocaleString("vi-VN")}
                 </div>
                 <div className="flex items-center justify-center gap-1">
-                  {/* Only products can be manually discounted. Services/packages
-                      show a read-only value (0 by default, or the promo share
-                      applied by handlePromoSelect). */}
-                  {editableDisplay && item.type === "product" ? (
+                  {/* All item types (service/product/package) can be manually
+                      discounted with either đ (VND) or % (PERCENT) — matching
+                      the product behavior. Previously only products had the
+                      editable discount input; services/packages showed a
+                      read-only value. Now the cashier can apply per-line
+                      discounts to services and packages too. */}
+                  {editableDisplay ? (
                     <>
                       <input
                         type="number"
