@@ -301,6 +301,35 @@ export function BookingStaffView({
     if (unassigned.length > 0) {
       columns.push({ staff: null, segments: unassigned });
     }
+    // Sort each column's segments by PRIORITY so that overlapping segments
+    // stack with UNPAID bookings (pending/new/confirmed/checkin) ON TOP of
+    // cancelled/no_show ones. In the single-day staff view, segments are
+    // absolutely positioned and later-in-DOM renders on top — so we sort
+    // cancelled FIRST (bottom) and unpaid LAST (top). This implements the
+    // user's requirement: "lịch chưa thanh toán hiển thị đè lên lịch đã hủy"
+    // (a cancelled booking at 10:30-12:00 should NOT cover an unpaid booking
+    // at 10:00-11:30; the unpaid one must be fully visible).
+    const SEG_PRIORITY: Record<string, number> = {
+      // cancelled / no-show → priority 0 (rendered FIRST → at the BOTTOM)
+      cancelled: 0,
+      no_show: 0,
+      // paid → priority 1
+      checkout: 1,
+      // unpaid / active → priority 2 (rendered LAST → ON TOP)
+      pending: 2,
+      new: 2,
+      confirmed: 2,
+      checkin: 2,
+    };
+    for (const col of columns) {
+      col.segments.sort((a, b) => {
+        const pa = SEG_PRIORITY[a.booking.status] ?? 1;
+        const pb = SEG_PRIORITY[b.booking.status] ?? 1;
+        if (pa !== pb) return pa - pb; // lower priority first (rendered below)
+        // Same priority → keep chronological order (earlier start first).
+        return a.startMin - b.startMin;
+      });
+    }
     return columns;
   }, [allStaff, bookings]);
 
@@ -825,10 +854,27 @@ function SegmentBlock({
     statusOptions = ["cancelled"];
   }
 
+  // z-index by booking-status priority so UNPAID bookings always stack ON TOP
+  // of cancelled/no_show ones when their segments overlap (mirrors the segment
+  // sort in the column builder). Without this, a cancelled booking's block
+  // could cover an unpaid booking's block, hiding its content. Hovering bumps
+  // the z-index further so the hovered block's popover is always on top.
+  const SEG_Z: Record<string, number> = {
+    cancelled: 10,
+    no_show: 10,
+    checkout: 20,
+    pending: 30,
+    new: 30,
+    confirmed: 30,
+    checkin: 30,
+  };
+  const baseZ = SEG_Z[booking.status] ?? 20;
+  const zIndex = hovered ? 50 : baseZ;
+
   return (
     <div
       className="absolute left-1 right-1"
-      style={{ top: `${topPx}px`, height: `${heightPx}px` }}
+      style={{ top: `${topPx}px`, height: `${heightPx}px`, zIndex }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         // Keep popover open while the status select dropdown is open (it portals outside).
