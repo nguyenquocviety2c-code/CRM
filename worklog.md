@@ -668,3 +668,109 @@ Stage Summary:
   * `/home/z/my-project/step1a-booking-tab-shows-code.png` — booking tab BEFORE fix shows the code (control case proving the booking tab path was always working).
   * `/home/z/my-project/step1b-walkin-tab-empty.png` — walk-in tab empty (no customer selected yet).
   * `/home/z/my-project/step1c-walkin-tab-no-code.png` — walk-in tab AFTER selecting Hoàng Vũ BEFORE fix (NO booking code badge — the bug).
+
+---
+Task ID: 11
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Verify the checkin hover invoice flow — in View nhân viên (and View khách hàng Khung giờ), the hover popover's order link + segment-block click behavior should now distinguish 3 booking statuses (checkout → "Xem hóa đơn" → PaidInvoiceView; checkin → "Xem hóa đơn" → InvoiceDialog; confirmed/new/cancelled/no_show → "Đơn hàng" → BookingDialog edit form).
+
+Work Log:
+- Read worklog.md (Tasks 1-10). Confirmed context: CRM app at /home/z/my-project running via PM2 (crm-app, port 3000). Production on Vercel at https://crm-nguyenquocviety2c-8529s-projects.vercel.app. Git `main` → remote `master`. Git author already configured (`nguyenquocviety2c-8529 <nguyenquocviety2c@gmail.com>` — verified before commit).
+
+- Pre-verification code inspection (PASS — task's stated changes are present):
+  * `src/components/features/booking/booking-staff-view.tsx`:
+    - Line 1590: `const showInvoiceLabel = isPaid || isCheckin;` where `isCheckin = booking.status === "checkin"` (line 1589) — was just `isPaid` before.
+    - Line 1672: `{showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}` — was `{isPaid ? "Xem hóa đơn" : "Đơn hàng"}`.
+    - Lines 736-745 (SegmentBlock onClick in single-day DayColumnGrid): `const isPaid = status === "checkout"; const isCheckin = status === "checkin"; if ((isPaid || isCheckin) && onShowInvoice) { onShowInvoice(seg.booking); } else { onBookingClick(seg.booking); }` — was only `isPaid`.
+  * `src/components/features/booking/booking-time-grid.tsx`:
+    - Lines 188-192 (renderCard onClick): same `(isPaid || isCheckin) && onShowInvoice` checkin handling added.
+    - Lines 1298-1302 (handleChipClick): same checkin handling added.
+  * `src/app/booking/page.tsx` lines 476-498 (routing logic — unchanged): `invoiceBooking.status === "checkout" && invoiceBooking.invoice?.id ? <PaidInvoiceView/> : <InvoiceDialog/>`. A `checkin` booking naturally falls into the InvoiceDialog branch (status !== "checkout"). Confirmed no changes needed here.
+
+- Step 1 — Find or create a checkin booking (PASS — found 5 existing checkin bookings; no need to create one):
+  * Queried `GET /api/supabase/bookings?limit=100&branch_id=494993c8-19e6-4dd4-b119-26299b4ef54f`. Status counts: checkout=39, confirmed=10, cancelled=7, checkin=5.
+  * Existing checkin bookings (all on 2026-07-14 except LH000048):
+    - LH000059 | Hoàng Vũ (0634845123) | 2026-07-14T09:30:00+00:00 (= 16:30 ICT) | id=96944807-ca89-474c-8888-4c170a1574f8
+    - LH000058 | An Vũ (0914876545) | 2026-07-14T07:30:00+00:00 (= 14:30 ICT)
+    - LH000060 | Anh Vũ (0914567512) | 2026-07-14T04:30:00+00:00 (= 11:30 ICT)
+    - LH000061 | Quang Minh (0914561234) | 2026-07-14T03:00:00+00:00 (= 10:00 ICT)
+    - LH000048 | Khách vãng lai | 2026-07-12T07:00:00+00:00
+  * Used LH000059 (Hoàng Vũ) for the checkin-booking test (Steps 2-4). LH000059 was `confirmed` at the end of Task 10; it was transitioned to `checkin` between Task 10 and Task 11 (not by me — I did NOT transition anything in Step 1). LH000059 has 3 services: Master Cut (90) by Bùi Đức Lâm, Uốn Gợn Wavy (90) by Nguyễn Trường Đan, Tẩy Tóc (50) by Phạm Thành — total 1.070.000đ.
+  * Used LH000062 (huy2, confirmed, 2026-07-14 17:00 ICT) for the Step 5 confirmed-booking test.
+  * Used LH000050 (Ninh Nguyễn, checkout, 2026-07-13 09:15 ICT) for the Step 6 checkout-booking test. Navigated to 2026-07-13 via the dual-calendar date range picker.
+
+- Step 2 — Verify hover popover label for checkin booking in View nhân viên (single-day) (PASS):
+  * Logged in at http://localhost:3000/login with `ductran / 123456`. Redirected to /cashier. Navigated to /booking. Date was already 14/07/2026.
+  * Switched to View nhân viên via JS click (the standard agent-browser `click @e11` ref click did NOT trigger React's onClick — a known quirk; falling back to `btn.click()` in eval worked). Staff grid rendered 9 staff columns × 14 hours with all 6 bookings' segments positioned correctly.
+  * Hovered over the Hoàng Vũ segment (Uốn Gợn Wavy, 16:30-18:00, NV Nguyễn Trường Đan). Note: the popover is React-state-driven (`hovered` useState + onMouseEnter/onMouseLeave on the outer div, line 885-890), NOT CSS :hover — agent-browser's `hover @e35` did NOT trigger it. Workaround: dispatch synthetic `mouseover` + `mouseenter` events on the outer div + inner button via `el.dispatchEvent(new MouseEvent(...))` — this triggered React's onMouseEnter reliably.
+  * Popover content (Line 4): "Hoàng Vũ | 0634845123 | Đã checkin | Master Cut (90) Bùi Đức Lâm | Uốn Gợn Wavy (90) Nguyễn Trường Đan | Tẩy Tóc (50) Phạm Thành | Tạo bởi: Khách hàng | **Xem hóa đơn** 1.070.000đ". The link button text is `Xem hóa đơn` (not `Đơn hàng`). Link button class `text-blue-600 hover:text-blue-800 hover:underline` — correct.
+  * Screenshot: `/home/z/my-project/verify-checkin-hover-label.png` (73,308 bytes).
+
+- Step 3 — Verify clicking the checkin segment opens InvoiceDialog (PASS):
+  * With popover closed (after dispatching mouseout), clicked the Hoàng Vũ segment block (inner button) via `btn.click()`. The SegmentBlock onClick handler fired → `onShowInvoice(seg.booking)` (because `isCheckin=true`) → set `invoiceBooking` state in /booking/page.tsx → since `status !== "checkout"`, the InvoiceDialog branch rendered.
+  * Dialog opened with `[role="dialog"]` containing: "Hóa đơn" header, "Khách hàng: Hoàng Vũ", "Số điện thoại: 0634845123", "Mã lịch hẹn: LH000059", "Ngày giờ: 16:30 14/07/2026", "DỊCH VỤ: Master Cut (220.000đ, NV Bùi Đức Lâm), Uốn Gợn Wavy (550.000đ, NV Nguyễn Trường Đan), Tẩy Tóc (300.000đ, NV Phạm Thành)", "Tổng tiền: 1.070.000đ", "SẢN PHẨM: Thêm sản phẩm", "Phương thức thanh toán: Tiền mặt / Chuyển khoản", buttons "Hủy" + "Thanh toán", "ẢNH ĐÍNH KÈM: Tải ảnh lên", "Lịch sử thao tác: Checkin 14/07/2026 05:11:10 by Khách hàng: Hoàng Vũ".
+  * Verification: `hasThanhToan: true`, `hasChinhSua: false` (NOT the edit dialog), `hasHoaDonHoanTat: false` (NOT the paid invoice view). PASS — InvoiceDialog is the dialog opened.
+  * Screenshot: `/home/z/my-project/verify-checkin-click-invoice-dialog.png` (81,795 bytes).
+
+- Step 4 — Verify clicking the popover's "Xem hóa đơn" link ALSO opens InvoiceDialog (PASS):
+  * Closed the dialog (Escape key). Re-hovered over the Hoàng Vũ segment (synthetic mouseover). Clicked the "Xem hóa đơn" link button inside the popover. The link's onClick has `e.stopPropagation()` then calls `onOpenInvoice()` — which is set to the same `onClick` handler as the segment block (line 962 in BookingHoverDetails). So clicking the link triggers the same `onShowInvoice(seg.booking)` → InvoiceDialog opens.
+  * Verification: `numDialogs: 1`, `hasThanhToan: true`, `hasChinhSua: false`, dialog header "Hóa đơn" + Hoàng Vũ + LH000059 + 3 services + 1.070.000đ total + "Thanh toán" button. Same content as Step 3.
+  * No additional screenshot needed (identical content to Step 3).
+
+- Step 5 — Verify confirmed booking shows "Đơn hàng" and opens edit dialog (PASS):
+  * On the same date (14/07/2026) in View nhân viên, found the confirmed booking segment: LH000062 (huy2, 17:00-18:00, Master Cut 60, NV Nguyễn Thế Mạnh). Hovered (synthetic mouseover).
+  * Popover content (Line 4): "huy2 | 0343218682 | **Đã xác nhận** | Master Cut (60) Nguyễn Thế Mạnh | Tạo bởi: Trần Anh Đức | **Đơn hàng**". The link button text is `Đơn hàng` (NOT "Xem hóa đơn") — confirmed label distinction works for `confirmed` status.
+  * Screenshot: `/home/z/my-project/verify-confirmed-hover-label.png` (68,660 bytes).
+  * Closed the popover, clicked the huy2 segment. Dialog opened with `[role="dialog"]` containing: "Chỉnh sửa lịch hẹn" header, "THÔNG TIN KHÁCH HÀNG" section (Số điện thoại, Tên KH hoặc Mã KH), "THÔNG TIN LỊCH HẸN" section (Nguồn khách hàng dropdown). This is the BookingDialog (edit form), NOT the InvoiceDialog.
+  * Verification: `hasChinhSua: true`, `hasChonNhanVien: true`, `hasChonDichVu: true`, `hasThanhToan: false`. PASS — BookingDialog is the dialog opened.
+
+- Step 6 — Verify checkout booking shows "Xem hóa đơn" and opens PaidInvoiceView (PASS):
+  * No checkout bookings exist on 2026-07-14 or 2026-07-15 (initially mis-read the API output; those 5 bookings on 2026-07-15 are all `confirmed`). Navigated to 2026-07-13 via the dual-calendar date range picker (which has 6 checkout bookings: LH000047, LH000049, LH000050, LH000051, LH000052, LH000053).
+  * In View nhân viên on 13/07/2026, hovered over the Ninh Nguyễn segment (LH000050, 09:15-10:45, Master Cut 90, NV Nguyễn Khánh Linh). Popover Line 4: "Ninh Nguyễn | 0965412354 | **Đã checkout** | Master Cut (90) Nguyễn Khánh Linh | Uốn Xoăn Curly (120) Phạm Thành | Tạo bởi: Khách hàng | **Xem hóa đơn** 1.045.000đ". Link button text is `Xem hóa đơn` — correct for `checkout` status.
+  * Clicked the Ninh Nguyễn segment. The SegmentBlock onClick fired `onShowInvoice(seg.booking)` (because `isPaid=true`). Since `invoiceBooking.status === "checkout"` AND `invoiceBooking.invoice?.id` is truthy, the PaidInvoiceView branch rendered (NOT the InvoiceDialog).
+  * PaidInvoiceView rendered as a fixed-position overlay (`div.fixed.top-14.right-0.bottom-0.z-50.overflow-y-auto.bg-white.shadow-2xl`) containing: "Hóa đơn #HD000062" header, "Đóng" close button, "Ninh Nguyễn", "📞 0965412354", "🕒 03:15 13/07/2026", "**Đã thanh toán**" status, full invoice table (Tên | Loại | Nhân viên | Đơn giá | SL | Giảm giá | Tổng tiền) with itemized services.
+  * Verification: `hasHoaDonHash: true` (HD000062), `hasHoaDonHoanTat: true` (Đã thanh toán), `hasThanhToan: false` (no Payment button — already paid), `hasInHoaDon: true` (print/download button). PASS — PaidInvoiceView is the view opened.
+  * Screenshot: `/home/z/my-project/verify-checkout-hover-paid-invoice.png` (121,138 bytes).
+  * Closed the PaidInvoiceView via its "Đóng" button.
+
+- Additional verification — View khách hàng → Khung giờ mode (PASS — bonus, not in required steps):
+  * Switched back to View khách hàng, navigated to today (14/07/2026), opened the "Danh sách / Khung giờ" dropdown (had to use synthetic PointerEvent dispatch — agent-browser's `click` did NOT trigger the Radix DropdownMenu; this is a known Radix + Playwright quirk), selected "Khung giờ" to render BookingTimeGrid.
+  * The Hoàng Vũ segments appeared at 16:30-18:00 (Master Cut, Uốn Gợn Wavy) and 16:30-17:20 (Tẩy Tóc) in the time-grid chips.
+  * Clicked the Hoàng Vũ segment. The `renderCard` onClick (line 183-192 of booking-time-grid.tsx) fired `onShowInvoice(segment.booking)` (because `isCheckin=true`). InvoiceDialog opened with the same content as Step 3: "Hóa đơn" + Hoàng Vũ + LH000059 + 3 services + 1.070.000đ total + "Thanh toán" button.
+  * Verification: `numDialogs: 1`, `hasThanhToan: true`, `hasChinhSua: false`, `hasHoaDonHash: false`, `hasLH000059: true`, `has1070000: true`. PASS — the time-grid's checkin handling also opens InvoiceDialog (not BookingDialog, not PaidInvoiceView).
+
+- Step 7 — Dev log + lint check (PASS):
+  * `.pm2-logs/crm-out.log`: most recent 30 compile messages all "✓ Compiled in XXX ms" (ranging 195ms-850ms). No `error`, `warn`, `⨯`, `Exception`, or `FAIL` matches. All HTTP routes returned 200 (login, bookings, services, invoices, etc.). The `/booking`, `/api/supabase/bookings`, `/api/supabase/invoices`, `/api/supabase/invoice-activities` routes were all hit successfully during my testing.
+  * `.pm2-logs/crm-error.log`: 0 bytes (empty) — no runtime errors.
+  * `npx eslint src/components/features/booking/booking-staff-view.tsx src/components/features/booking/booking-time-grid.tsx`: exit code 0, 0 errors, 0 warnings (no output at all). PASS.
+
+- Step 8 — Cleanup (N/A — did not transition any booking):
+  * I used existing checkin bookings (LH000059, LH000058, LH000060, LH000061) for testing; I did NOT transition any booking to `checkin` in Step 1. Therefore no cleanup is needed.
+  * Note on the state of LH000059 (Hoàng Vũ): per Task 10's worklog, LH000059 was `confirmed` (Đã xác nhận) at the end of Task 10. It is now `checkin` (Đã checkin) — the transition was made between Task 10 and Task 11, NOT by me. The task author's hint ("Find a `confirmed` booking (e.g. LH000059 Hoàng Vũ, or any confirmed booking)") suggests they EXPECTED LH000059 to still be confirmed, so the transition may have been intentional setup for this Task 11 verification (to make a checkin booking available without needing to create one). Leaving the state as-is — the user can revert if needed via `PUT /api/supabase/bookings/96944807-ca89-474c-8888-4c170a1574f8 -d '{"status":"confirmed"}'`.
+
+- Step 9 — Push to GitHub + deploy to Vercel (PASS):
+  * `git status`: 2 modified files (booking-staff-view.tsx, booking-time-grid.tsx). Screenshots auto-ignored by `.gitignore` pattern `verify-*.png`.
+  * `git add -A` staged only the 2 source files (49 insertions, 13 deletions).
+  * `git commit -m "feat(booking): checkin bookings show 'Xem hóa đơn' and open invoice dialog ..."` → commit hash `3ffb072003433cdc41080e0e7425fc2157620330` (author: `nguyenquocviety2c-8529 <nguyenquocviety2c@gmail.com>` — verified before commit).
+  * `git push origin main:master` → `ea7095b..3ffb072 main -> master` (push succeeded).
+  * `vercel --prod --yes --token <token>` — the bash command timed out after 5 minutes (context deadline exceeded), BUT the deploy continued on Vercel's server. Verified via Vercel API: 2 READY deployments exist for commit `3ffb072`:
+    1. `dpl_7NgxCMDA7Ya59bADPzK6ntxXER9Y` — git auto-deploy (created 1784010854803 = 2026-07-14 06:34:14 UTC, READY).
+    2. `dpl_DniHkwvSpsLi6RtWPZfEHcrn1Qzb` — CLI deploy (created 1784010844476 = 2026-07-14 06:34:04 UTC, READY — this is the one whose bash command "timed out" but actually succeeded on Vercel's side).
+  * Production URL `https://crm-nguyenquocviety2c-8529s-projects.vercel.app` verified: `GET /` → HTTP 307 (redirect to /dat-lich, expected). `GET /api/supabase/branches?active=true` → HTTP 200 with 2 branches ("Level 1 Minh Khai", "Level 1 Vạn Bảo") — Supabase works on Vercel. Fix is live in production.
+  * Local PM2 dev server (crm-app, port 3000) unaffected — still online (4h+ uptime).
+
+Stage Summary:
+- **All 6 verification steps PASS** (Steps 2-6 + bonus View khách hàng Khung giờ test). The checkin hover invoice flow works exactly as the task describes:
+  - **checkin** booking → hover popover Line 4 shows **"Xem hóa đơn"** (not "Đơn hàng"); clicking the segment block OR the popover link opens the **InvoiceDialog** (payment dialog with services, total, "Thanh toán" button).
+  - **confirmed** booking → hover popover Line 4 shows **"Đơn hàng"** (not "Xem hóa đơn"); clicking the segment opens the **BookingDialog** (edit form with "Chỉnh sửa lịch hẹn" header).
+  - **checkout** (paid) booking → hover popover Line 4 shows **"Xem hóa đơn"**; clicking the segment opens the **PaidInvoiceView** (full-page invoice view with "Hóa đơn #HDxxx" header, "Đã thanh toán" status, itemized invoice table, print/download buttons).
+- **2 source files changed, 49 insertions / 13 deletions**: `src/components/features/booking/booking-staff-view.tsx` (3 changes: showInvoiceLabel computation, label rendering, SegmentBlock onClick) + `src/components/features/booking/booking-time-grid.tsx` (2 changes: renderCard onClick, handleChipClick). The routing logic in `src/app/booking/page.tsx` (lines 476-498) was already correct — a `checkin` booking naturally falls into the InvoiceDialog branch (`status !== "checkout"`), so no changes were needed there.
+- **No new lint errors or runtime errors.** ESLint exit code 0 on both edited files (0 errors, 0 warnings). PM2 dev log shows all "✓ Compiled in XXX ms" with no errors/warnings/exceptions; PM2 error log is 0 bytes.
+- **Production deployment SUCCESSFUL.** Commit `3ffb072` pushed to GitHub `master`. 2 READY Vercel deployments: git auto-deploy `dpl_7NgxCMDA7Ya59bADPzK6ntxXER9Y` + CLI deploy `dpl_DniHkwvSpsLi6RtWPZfEHcrn1Qzb` (the CLI command "timed out" in bash but actually completed successfully on Vercel's server). Production URL responds correctly (HTTP 307 on /, HTTP 200 + 2 branches on /api/supabase/branches).
+- **2 agent-browser quirks worked around**: (1) `agent-browser click @ref` did NOT trigger React's onClick on toggle buttons (View nhân viên, Ngày mai, Hôm nay) — fell back to `btn.click()` inside `eval`. (2) The hover popover is React-state-driven (`useState` + onMouseEnter/onMouseLeave), NOT CSS :hover — agent-browser's `hover @ref` and `mouse move X Y` did NOT trigger it. Worked around by dispatching synthetic `MouseEvent('mouseover')` + `MouseEvent('mouseenter')` on the outer div + inner button via `el.dispatchEvent(...)`. Similarly for the Radix DropdownMenu (Danh sách / Khung giờ) — used synthetic `PointerEvent('pointerdown'/'pointerup')` + `MouseEvent('mousedown'/'mouseup'/'click')` with clientX/clientY coordinates. These are Radix UI + Playwright interaction quirks, NOT bugs in the CRM code.
+- **Cleanup note**: I did NOT transition any booking to `checkin` in Step 1 — there were already 5 checkin bookings available. So no cleanup is needed. However, LH000059 (Hoàng Vũ) was `confirmed` at the end of Task 10 and is now `checkin` (transition happened between Task 10 and Task 11, not by me). Leaving it as `checkin` since the task setup likely intended that.
+- **Screenshots** (all saved under /home/z/my-project/, auto-ignored by .gitignore):
+  * `/home/z/my-project/verify-checkin-hover-label.png` (73,308 bytes) — Step 2: popover for checkin (Hoàng Vũ LH000059) shows "Xem hóa đơn".
+  * `/home/z/my-project/verify-checkin-click-invoice-dialog.png` (81,795 bytes) — Step 3: InvoiceDialog opened after clicking checkin segment.
+  * `/home/z/my-project/verify-confirmed-hover-label.png` (68,660 bytes) — Step 5: popover for confirmed (huy2 LH000062) shows "Đơn hàng".
+  * `/home/z/my-project/verify-checkout-hover-paid-invoice.png` (121,138 bytes) — Step 6: PaidInvoiceView opened after clicking checkout segment (Ninh Nguyễn LH000050, invoice #HD000062).
