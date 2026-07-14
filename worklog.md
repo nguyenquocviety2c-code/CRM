@@ -1169,3 +1169,103 @@ Stage Summary:
   * `/home/z/my-project/verify-after-checkin.png` (69,412 bytes) — Step 2: LH000062 huy2 (checkin) popover showing NO Checkin button + status Select with only 1 option (Đã hủy) + "Xem hóa đơn" link.
   * `/home/z/my-project/verify-checkin-no-button.png` (72,326 bytes) — Step 3: LH000059 Hoàng Vũ (checkin) popover showing NO Checkin button + status Select with only 1 option (Đã hủy) + "Xem hóa đơn" link.
   * `/home/z/my-project/verify-checkout-no-button.png` (85,570 bytes) — Step 4: LH000013 ADD (checkout) popover showing NO Checkin button + NO status Select + "Xem hóa đơn" link.
+
+---
+Task ID: 19
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Verify 2 changes in `src/components/features/booking/booking-staff-view.tsx` (no push/deploy): (1) Checkin button no longer uses `ml-auto` — sits IMMEDIATELY NEXT TO "Đơn hàng" (and the final amount if present) instead of being pushed to the far right of Line 4. (2) Column resize gated by `resize_table` permission — when TRUE the grid uses pixel widths + drag handles are rendered + dragging any staff column resizes ALL staff columns synchronously (sync mode); when FALSE the grid uses `1fr` (equal width, no drag handles, fills container).
+
+Work Log:
+- Read worklog.md (Tasks 1-18). Confirmed context: CRM app at /home/z/my-project, PM2 `crm-app` port 3000 (online, uptime 14h, 71.8mb), login `ductran / 123456`. The user already edited `booking-staff-view.tsx` (now 1767 lines) — verification only.
+- Code inspection of `booking-staff-view.tsx`:
+  * Lines 1699-1734 — Line 4 container: `<div className="flex items-center gap-2">` containing "Đơn hàng"/"Xem hóa đơn" button (1700-1709), then `finalAmount` span (1710-1714), then Checkin button (1720-1733) with classes `flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100`. NO `ml-auto` class on the Checkin button — confirmed by re-reading the JSX (the className is exactly `flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100`). The parent flex container uses `gap-2` (8px gap), so children are laid out left-to-right with 8px gaps and NO `margin-left:auto` pushing the last child to the right.
+  * Lines 406-412 — `canResizeTable = hasPermission("resize_table")`.
+  * Lines 421-423 — `gridTemplate` ternary: `canResizeTable ? columnWidths.map(w => \`${w}px\`).join(" ") : \`${columnWidths[0] || TIME_COL_WIDTH}px repeat(${...}, minmax(0, 1fr))\``.
+  * Line 426 — `totalWidth = columnWidths.reduce((s, w) => s + w, 0)`.
+  * Line 560 — container width: `canResizeTable ? { width: \`${totalWidth}px\`, minWidth: \`${totalWidth}px\` } : { width: "100%", minWidth: "100%" }`.
+  * Lines 574-580 — "Giờ" header drag handle: `{canResizeTable && (<div className="staff-grid-resizer absolute top-0 right-0 z-30" style={...} onMouseDown={(e) => startColumnResize(e, 0)} />)}`.
+  * Lines 606-612 — staff header drag handle: same pattern, `onMouseDown={(e) => startColumnResize(e, idx + 1)}`.
+  * Lines 438-497 — `startColumnResize` callback. SYNC MODE confirmed: `idx === 0` branch (lines 455-462) resizes only the "Giờ" column. `else` branch (lines 463-477) iterates `for (let i = 1; i < next.length; i++)` and applies `next[i] = Math.max(MIN_COL_WIDTH, base + delta)` to EVERY staff column synchronously (using `staffStartWidths = columnWidths.slice(1)` captured at drag start). All staff columns share the same `delta` and the same `base`, so they all change identically and stay uniform.
+- Code inspection of `src/components/features/setting/staff-group-create-dialog.tsx` line 40: `{ key: "resize_table", label: "Chỉnh sửa kích thước bảng" }` is present in `GROUP_PERMISSIONS` catalog (16 entries total, line 24-41).
+
+- Step 1 — Checkin button position next to Đơn hàng (PASS):
+  * Logged in at http://localhost:3000/login with `ductran / 123456` via agent-browser (filled @e3/@e4, clicked @e5 → redirected to /cashier, then opened /booking).
+  * Date was 14/07/2026 (single-day, "View khách hàng" by default). Switched to "View nhân viên" via `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'View nhân viên').click()` (agent-browser's `click @ref` does not flip Radix toggle buttons — same quirk noted in Tasks 14/15/17/18).
+  * Pre-flight API check: `curl /api/supabase/bookings?limit=50` → `LH000062 confirmed 2026-07-14T10:00:00+00:00` (status is still `confirmed` after Task 18's cleanup revert — good for Step 1 testing).
+  * Hovered over LH000062 huy2 segment (17:00-18:00, NV: Nguyễn Thế Mạnh) via `seg.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true}))` on the outer `div.absolute.left-1.right-1` (same approach as Task 18).
+  * Popover rendered with class `absolute left-0 top-full z-50 mt-1 w-[255px] border bg-white shadow-xl`. Full popover text: "huy2 0343218682 Đã xác nhận Chọn trạng thái Master Cut (60) Nguyễn Thế Mạnh Tạo bởi: Trần Anh Đức Đơn hàng 220.000đ Checkin".
+  * **Line 4 layout** (left → right, via `getBoundingClientRect().x`):
+    - "Đơn hàng" button: x=810, right=857, width=47
+    - "220.000đ" span (final amount): x=865, right=910, width=45
+    - "Checkin" button: x=918, right=989, width=71
+    - 8px gap between each (matches `gap-2`)
+    - Popover container right edge = 1056 → Checkin button right edge (989) is 67px BEFORE the container's right edge → button is NOT pushed to the far right.
+  * Task-specified DOM eval result: `[{"text":"Đơn hàng","rect":810},{"text":"Checkin","rect":918}]`. Checkin's x (918) > Đơn hàng's x (810) by 108px (47 for Đơn hàng width + 8 gap + 45 for amount span + 8 gap = 108). The button is positioned IMMEDIATELY NEXT TO the final amount span, which is immediately next to the Đơn hàng button — exactly as the task expects.
+  * Screenshot: `/home/z/my-project/verify-checkin-position.png` (66,840 bytes).
+
+- Step 2 — resize_table=true for Admin user (PASS):
+  * Logged in via `curl -c /tmp/cookies.txt -X POST /api/auth/login -d '{"login":"ductran","password":"123456"}'` (NOTE: the API expects `login` field, NOT `username` — the route.ts file at line 18 reads `body.login`).
+  * Login response `data.permissions` includes all 16 permissions: `assign_staff`, `view_all_invoices`, `upload_photo`, `delete_past_photos`, `view_customer_photo`, `view_customer_phone`, `create_invoice`, `edit_unpaid_invoice`, `invoice_discount`, `cancel_payment`, `print_temp_bill`, `hide_revenue`, `book_past_date`, `confirm_old_invoice`, `edit_reminder`, **`resize_table: true`**.
+  * User profile: name="Trần Anh Đức", username="ductran", email="ductran@gmail.com", role="staff", groupName="Admin", groupId="e5dc6e7c-f157-412d-975b-b9001f20b90e".
+  * Task-specified `curl /api/auth/me` (with cookie) → `resize_table: True`.
+  * The Admin group has the `resize_table` permission — confirmed at both the login response and the /api/auth/me endpoint.
+
+- Step 3 — Drag handles appear (resizerCount > 0, gridTemplate has px) (PASS):
+  * On /booking, View nhân viên, single-day 14/07/2026. Logged-in user = ductran (Admin, resize_table=true).
+  * DOM eval (task-specified expression): `{"resizerCount":9,"gridTemplate":"64px 180px 180px 180px 180px 180px 180px 180px 180px","hasStaffGridHeader":true}`.
+    - `resizerCount = 9` = 1 (Giờ header) + 8 (staff column headers). Drag handles ARE rendered.
+    - `gridTemplate = "64px 180px 180px 180px 180px 180px 180px 180px 180px"` — pixel values, NOT "1fr". Matches `columnWidths.map(w => \`${w}px\`).join(" ")` with default widths `[64, 180, 180, 180, 180, 180, 180, 180, 180]`.
+  * Per-cell inspection: each of the 9 `.staff-grid-header-cell` elements has `hasResizer: true` (verified via `c.querySelector('.staff-grid-resizer')`).
+  * 8 staff columns visible: Nguyễn Khánh Linh, Nguyễn Trường Đan, Bùi Đức Lâm, Nguyễn Thế Mạnh, Phan Phúc Thành (Xiu), Phạm Thành, Tuấn Anh Nguyễn, TEST thợ.
+  * localStorage check: no `crm-staff-grid-widths:*` keys present at start → defaults were used (180px each).
+  * Screenshot: `/home/z/my-project/verify-resize-handles.png` (66,840 bytes).
+
+- Step 4 — Sync resize (all staff columns same width after drag) (PASS — DRAG SUCCESSFULLY SIMULATED):
+  * Located the drag handle on staff column 1 (Nguyễn Khánh Linh) at coordinates (x=486, y=224) via `arr[1].getBoundingClientRect()`.
+  * Read initial state: `gridTemplate = "64px 180px 180px 180px 180px 180px 180px 180px 180px"`, `cells = [64, 180, 180, 180, 180, 180, 180, 180, 180]`.
+  * Simulated drag via DOM event dispatch on the resizer element:
+    ```
+    staffResizer.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, clientX: startX, clientY: startY, button: 0}));
+    document.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: startX + 50, clientY: startY, button: 0}));
+    document.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, clientX: startX + 50, clientY: startY, button: 0}));
+    ```
+  * After drag (read after React re-rendered): `gridTemplate = "64px 230px 230px 230px 230px 230px 230px 230px 230px"`, `cells = [64, 230, 230, 230, 230, 230, 230, 230, 230]`.
+    - All 8 staff columns now have width = 230px (= 180 + 50 delta). ALL EQUAL.
+    - "Giờ" column stayed at 64px (excluded from sync — idx 0 branch only resizes that one column, but I dragged idx 1 so Giờ wasn't touched).
+    - `allStaffColsEqual = true` (verified via `staff.every(w => w === staff[0])`).
+  * Persistence verified: localStorage key `crm-staff-grid-widths:494993c8-19e6-4dd4-b119-26299b4ef54f::n8` set to `"[64,230,230,230,230,230,230,230,230]"` (300ms debounced save after mouseup — confirmed).
+  * Cleanup: cleared localStorage entry (`localStorage.removeItem('crm-staff-grid-widths:...')`) and reloaded page → defaults restored (`"64px 180px 180px ..."`).
+  * Code review of `startColumnResize` (lines 438-497) confirms the sync logic:
+    - Line 446: `staffStartWidths = columnWidths.slice(1)` captures ALL staff column widths at drag start.
+    - Lines 463-477 (`else` branch, idx > 0): `for (let i = 1; i < next.length; i++) { next[i] = Math.max(MIN_COL_WIDTH, base + delta); }` — applies the SAME delta to EVERY staff column. The `base` for each is `staffStartWidths[i-1]` (its own start width). Since all staff columns share the same start width (uniform by invariant), they all stay uniform after applying the same delta.
+  * Screenshot: `/home/z/my-project/verify-sync-resize.png` (63,479 bytes) — shows the grid with all staff columns resized to 230px (visibly wider than the original 180px defaults).
+
+- Step 5 — Dev log + lint (PASS):
+  * `.pm2-logs/crm-out.log` (last 10 lines): all HTTP routes returned 200 during verification window 16:39-16:42, including `GET /api/auth/me 200`, `GET /api/supabase/bookings?... 200`, `GET /api/supabase/staff?... 200`, `GET /api/supabase/branches 200`, `GET /api/supabase/invoices?booking_id=0120a96a-c381-42f7-9c1e-a91af5f5862d 200` (popover loading invoice data for LH000062), `GET /booking 200`. No new compile events during verification (the last compile was Task 18's at 16:18:44 — file was already in valid state when verification started).
+  * `.pm2-logs/crm-error.log` (last 10 lines): only contains the PRE-EXISTING parse error from Task 17's mid-edit save at 14:30:45 (`Expected '}', got '<eof>'` at booking-dialog.tsx:2431). NO new errors during my verification window (16:39-16:42). The booking-staff-view.tsx file compiled cleanly.
+  * `npx eslint src/components/features/booking/booking-staff-view.tsx`: **exit code 0, no output** — 0 errors, 0 warnings (clean, same as Task 18).
+
+Stage Summary:
+- **Step 1 PASS** — Checkin button is positioned IMMEDIATELY NEXT TO "Đơn hàng" (with the final amount "220.000đ" span in between, all separated by 8px `gap-2`). Line 4 layout (left→right): "Đơn hàng" (x=810, w=47) → "220.000đ" span (x=865, w=45) → "Checkin" button (x=918, w=71). Checkin right edge=989, popover right edge=1056 → 67px of empty space to the right of Checkin → button is NOT pushed to the far right. Task-specified DOM eval: `[{"text":"Đơn hàng","rect":810},{"text":"Checkin","rect":918}]`. Screenshot: `/home/z/my-project/verify-checkin-position.png` (66,840 bytes).
+- **Step 2 PASS** — `resize_table: true` for the Admin user (ductran). Verified via both `/api/auth/login` response and `/api/auth/me` (with cookie). The Admin group (id `e5dc6e7c-f157-412d-975b-b9001f20b90e`) has all 16 permissions including `resize_table`.
+- **Step 3 PASS** — Drag handles appear: `resizerCount = 9` (1 Giờ + 8 staff), `gridTemplate = "64px 180px 180px 180px 180px 180px 180px 180px 180px"` (pixel values, NOT "1fr"). Screenshot: `/home/z/my-project/verify-resize-handles.png` (66,840 bytes).
+- **Step 4 PASS** — Sync resize WORKED (successfully simulated). Dragging the right edge of staff column 1 by +50px changed ALL 8 staff columns from 180px → 230px simultaneously. `allStaffColsEqual = true`. "Giờ" column stayed at 64px (excluded from sync — only staff columns are synced). New widths persisted to localStorage (`crm-staff-grid-widths:494993c8-19e6-4dd4-b119-26299b4ef54f::n8` = `[64,230,230,230,230,230,230,230,230]`). Cleanup: cleared localStorage and reloaded → defaults restored. Code review of `startColumnResize` (lines 438-497) confirms the sync logic — `else` branch iterates `for (let i = 1; i < next.length; i++)` applying the same delta to every staff column. Screenshot: `/home/z/my-project/verify-sync-resize.png` (63,479 bytes).
+- **Step 5 PASS** — No compile/runtime errors during verification window (16:39-16:42). PM2 error log only contains the pre-existing parse error from Task 17 (14:30:45). ESLint on `booking-staff-view.tsx`: 0 errors, 0 warnings (clean).
+- **No git push, no Vercel deploy** — verified locally only, per user's explicit instruction.
+- **Behavioral notes**:
+  * The "Đơn hàng" link shows when `showInvoiceLabel = isPaid || isCheckin` is FALSE (i.e. for confirmed/new/cancelled/no_show bookings). For confirmed LH000062, `showInvoiceLabel` is false → label is "Đơn hàng". After Checkin, it would switch to "Xem hóa đơn" (Task 18 already verified this transition).
+  * The final amount span "220.000đ" is shown only when `finalAmount != null` (i.e. when there's a computed final total). For LH000062 confirmed, an invoice exists (loaded via `/api/supabase/invoices?booking_id=0120a96a-...&limit=1`) → finalAmount = 220000 → span is rendered between "Đơn hàng" and "Checkin".
+  * The Checkin button uses `border-emerald-300 bg-emerald-50 text-emerald-700` (green) with `LogIn` icon (h-3 w-3) and `text-[11px] font-medium` — same styling as Task 18 (no change). The ONLY change vs Task 18 is the removal of `ml-auto` from the className.
+  * With `resize_table=true`, the grid container has a FIXED pixel width (`totalWidth` = sum of all column widths). For default widths, `totalWidth = 64 + 8*180 = 1504px`. If the viewport is wider, the container stays at 1504px (no stretching). If narrower, horizontal scroll appears (overflow-x-auto on the parent).
+  * With `resize_table=false`, the grid container is 100% width and uses `1fr` for staff columns — equal-width, fills container, no scroll. Drag handles are NOT rendered.
+  * The sync mode is enforced by the `for (let i = 1; i < next.length; i++)` loop in `startColumnResize` — every staff column receives the same delta, keeping them uniform. The "Giờ" column (idx 0) is excluded from this loop (it has its own `idx === 0` branch that resizes only itself).
+  * localStorage persistence: widths are saved with a 300ms debounce after `mouseup`, keyed by `crm-staff-grid-widths:{branchId}::n{staffCount}`. The branch-specific key means switching branches loads the right saved widths for that branch's staff count.
+  * Verified that the previous task's `ml-auto` was indeed removed — the Checkin button's `className` in the source code (line 1727) is exactly `flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100` — NO `ml-auto` token anywhere.
+- **State changes made during verification** (all intentional, all cleanup-safe):
+  * Dragged staff column 1's right edge by +50px → all staff columns resized 180→230px. localStorage entry `crm-staff-grid-widths:494993c8-19e6-4dd4-b119-26299b4ef54f::n8` was set to `[64,230,230,230,230,230,230,230,230]`.
+  * CLEANUP: cleared the localStorage entry and reloaded the page → defaults restored (`gridTemplate = "64px 180px 180px 180px 180px 180px 180px 180px 180px"`). No lasting state changes to the database or the user's account.
+  * LH000062 left in `confirmed` state (matches Task 18's cleanup revert — no API mutations performed during this task).
+- **Screenshots** (all in /home/z/my-project/, auto-ignored by .gitignore pattern `verify-*.png`):
+  * `/home/z/my-project/verify-checkin-position.png` (66,840 bytes) — Step 1: LH000062 huy2 (confirmed) popover showing "Đơn hàng" + "220.000đ" + "Checkin" button positioned left-to-right with 8px gaps (Checkin NOT pushed to far right).
+  * `/home/z/my-project/verify-resize-handles.png` (66,840 bytes) — Step 3: View nhân viên single-day grid with 9 drag handles (1 Giờ + 8 staff) and pixel gridTemplate `64px 180px 180px 180px 180px 180px 180px 180px 180px`.
+  * `/home/z/my-project/verify-sync-resize.png` (63,479 bytes) — Step 4: after dragging staff column 1's right edge by +50px, all 8 staff columns resized uniformly to 230px (gridTemplate = `64px 230px 230px 230px 230px 230px 230px 230px 230px`).

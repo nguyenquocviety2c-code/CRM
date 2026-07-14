@@ -403,19 +403,27 @@ export function BookingStaffView({
     }
   }
 
-  // Build the CSS grid-template-columns string. The "Giờ" column uses its
-  // persisted pixel width (resizable); ALL staff columns use `1fr` so they
-  // are ALWAYS EQUAL WIDTH and fill the remaining container space evenly.
-  // This implements the user's request: "chỉnh lại kích thước chiều ngang các
-  // cột bằng nhau" (make the staff columns equal width). Previously each staff
-  // column had its own pixel width (resizable individually), which could make
-  // them uneven — especially when persisted widths from an old session were
-  // loaded. Now they're always uniform.
-  const gridTemplate = `${columnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
-  // Total scrollable width — no longer used for a fixed-width scroll container
-  // (1fr fills the container). Kept for compatibility with any code that reads
-  // it; the value is approximate (time col + staff cols * default width).
-  const totalWidth = (columnWidths[0] || TIME_COL_WIDTH) + staffColumns.length * STAFF_COL_WIDTH;
+  // Permission gate: only staff whose group has "resize_table" can drag the
+  // column edges to resize. When the permission is OFF, the grid uses `1fr`
+  // for all staff columns (equal width, fills container, NOT resizable). When
+  // the permission is ON, the grid uses persisted pixel widths (resizable via
+  // the drag handles on each column's right edge; dragging one staff column
+  // resizes ALL staff columns synchronously so they stay uniform).
+  const canResizeTable = hasPermission("resize_table");
+
+  // Build the CSS grid-template-columns string.
+  // - canResizeTable = true: "Giờ" col (px) + staff cols (px, from
+  //   columnWidths). Dragging a staff column's edge resizes all staff columns
+  //   together (sync mode). The total may exceed the container → horizontal
+  //   scroll.
+  // - canResizeTable = false: "Giờ" col (px) + staff cols (1fr each). Always
+  //   equal width, fills the container, not draggable.
+  const gridTemplate = canResizeTable
+    ? columnWidths.map((w) => `${w}px`).join(" ")
+    : `${columnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
+  // Total scrollable width. Only meaningful when canResizeTable = true (the
+  // px-based grid may exceed the container). When 1fr, the container is 100%.
+  const totalWidth = columnWidths.reduce((s, w) => s + w, 0);
 
   // Start dragging a column's right edge. `idx` is the column index in
   // columnWidths (0 = "Giờ", 1..N = staff columns).
@@ -545,10 +553,11 @@ export function BookingStaffView({
       <div className="border bg-white">
         {/* Horizontal-scroll container — the time column is sticky-left so it
             stays visible while the user scrolls through the staff columns.
-            With 1fr staff columns, the grid fills 100% of the container width
-            (no fixed pixel width) so the columns are always equal. */}
+            When canResizeTable is true, the grid uses pixel widths that may
+            exceed the container → horizontal scroll. When false, the grid
+            uses 1fr (fills 100%, no scroll). */}
         <div className="overflow-x-auto">
-          <div style={{ width: "100%", minWidth: "100%" }}>
+          <div style={canResizeTable ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%", minWidth: "100%" }}>
             {/* Header row: "Giờ" + staff names. The "Giờ" cell is sticky-left. */}
             <div
               className="grid border-b-2 border-gray-400 bg-gray-50"
@@ -558,12 +567,17 @@ export function BookingStaffView({
                 className="staff-grid-header-cell sticky left-0 z-20 border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
               >
                 Giờ
-                {/* Drag handle on the right edge of the "Giờ" header */}
-                <div
-                  className="staff-grid-resizer absolute top-0 right-0 z-30"
-                  style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
-                  onMouseDown={(e) => startColumnResize(e, 0)}
-                />
+                {/* Drag handle on the right edge of the "Giờ" header — only
+                    rendered when the staff has the "resize_table" permission.
+                    Without the permission, the column is not draggable (the
+                    grid uses 1fr and fills the container evenly). */}
+                {canResizeTable && (
+                  <div
+                    className="staff-grid-resizer absolute top-0 right-0 z-30"
+                    style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
+                    onMouseDown={(e) => startColumnResize(e, 0)}
+                  />
+                )}
               </div>
               {staffColumns.map((col, idx) => (
                 <div
@@ -586,12 +600,16 @@ export function BookingStaffView({
                         })()
                       : "Trống"}
                   </div>
-                  {/* Drag handle on the right edge of this staff header cell */}
-                  <div
-                    className="staff-grid-resizer absolute top-0 right-0 z-30"
-                    style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
-                    onMouseDown={(e) => startColumnResize(e, idx + 1)}
-                  />
+                  {/* Drag handle on the right edge of this staff header cell —
+                      only when canResizeTable. Dragging resizes ALL staff
+                      columns synchronously (sync mode in startColumnResize). */}
+                  {canResizeTable && (
+                    <div
+                      className="staff-grid-resizer absolute top-0 right-0 z-30"
+                      style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
+                      onMouseDown={(e) => startColumnResize(e, idx + 1)}
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -1696,7 +1714,9 @@ export function BookingHoverDetails({
           )}
           {/* Checkin button — only for confirmed/new (customer not yet arrived).
               Uses onStatusChange("checkin") to transition. Hidden for checkin
-              (already checked in) and terminal statuses (checkout/cancelled/no_show). */}
+              (already checked in) and terminal statuses (checkout/cancelled/no_show).
+              Positioned IMMEDIATELY NEXT TO "Đơn hàng" (not pushed to the far
+              right) so it reads as a companion action, not a separate section. */}
           {(booking.status === "confirmed" || booking.status === "new") && (
             <button
               type="button"
@@ -1704,7 +1724,7 @@ export function BookingHoverDetails({
                 e.stopPropagation();
                 onStatusChange("checkin");
               }}
-              className="ml-auto flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+              className="flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
               title="Chuyển đơn sang trạng thái Đã checkin"
             >
               <LogIn className="h-3 w-3" />
