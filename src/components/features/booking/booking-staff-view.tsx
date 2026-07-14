@@ -723,14 +723,21 @@ export function BookingStaffView({
                       segment={seg}
                       pxPerHour={pxPerHour}
                       // Click logic:
-                      // - Paid (checkout status = has a completed/paid invoice) → open the
-                      //   invoice dialog (Hóa đơn) so the cashier can review/print the receipt.
-                      // - Not paid (confirmed / new / checkin / cancelled / no_show) → open
-                      //   the edit booking dialog (Chỉnh sửa lịch hẹn) so staff can edit
-                      //   details or proceed to checkin/payment.
+                      // - checkout (paid) → open the full paid invoice view (giao diện hóa
+                      //   đơn hoàn tất) so the cashier can review/print the receipt.
+                      // - checkin (customer is being served) → open the invoice/payment
+                      //   dialog so the cashier can review items, add products, and proceed
+                      //   to payment. This dialog ALSO opens when the invoice is already
+                      //   "pending" (staff clicked Thanh toán but hasn't completed the
+                      //   checkout) — it resumes the payment flow.
+                      // - confirmed / new / cancelled / no_show → open the edit booking
+                      //   dialog (Chỉnh sửa lịch hẹn) so staff can edit details or proceed
+                      //   to checkin.
                       onClick={() => {
-                        const isPaid = seg.booking.status === "checkout";
-                        if (isPaid && onShowInvoice) {
+                        const status = seg.booking.status;
+                        const isPaid = status === "checkout";
+                        const isCheckin = status === "checkin";
+                        if ((isPaid || isCheckin) && onShowInvoice) {
                           onShowInvoice(seg.booking);
                         } else {
                           onBookingClick(seg.booking);
@@ -1568,6 +1575,19 @@ export function BookingHoverDetails({
   const finalAmount = invoiceData?.final_amount ?? booking.invoice?.final_amount;
   const promo = invoiceData?.promotion;
   const isPaid = booking.status === "checkout";
+  // When the booking has been checked in (customer is being served), the
+  // "Đơn hàng" link becomes "Xem hóa đơn" — clicking it opens the invoice
+  // dialog so the cashier can review/add items and proceed to payment.
+  // This matches the user's requirement: a checkin booking's order link
+  // should read "Xem hóa đơn" (not "Đơn hàng"), and clicking it opens:
+  //  - the invoice dialog (payment dialog) if no invoice exists yet or the
+  //    invoice is still pending (staff hasn't completed checkout), OR
+  //  - the paid invoice view if the invoice is already completed (this branch
+  //    is handled by the `isPaid` gate above — a `checkin` booking with a
+  //    completed invoice is unusual; the normal flow transitions the booking
+  //    to `checkout` when the invoice is paid).
+  const isCheckin = booking.status === "checkin";
+  const showInvoiceLabel = isPaid || isCheckin;
   const statusLabel = BookingStatusLabel[booking.status as BookingStatusType] || booking.status;
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 
@@ -1631,7 +1651,12 @@ export function BookingHoverDetails({
         </div>
       )}
 
-      {/* Line 4: "Tạo bởi" + "Đơn hàng" / "Xem hóa đơn" link */}
+      {/* Line 4: "Tạo bởi" + "Đơn hàng" / "Xem hóa đơn" link.
+          - checkout (paid) → "Xem hóa đơn" (opens the full paid invoice view)
+          - checkin (being served) → "Xem hóa đơn" (opens the invoice/payment
+            dialog so the cashier can review items and proceed to payment)
+          - confirmed / new / cancelled / no_show → "Đơn hàng" (opens the
+            booking edit dialog — no invoice to view yet) */}
       <div className="border-t pt-1">
         <div className="mb-0.5 text-xs text-gray-500">
           Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
@@ -1644,7 +1669,7 @@ export function BookingHoverDetails({
           }}
           className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
         >
-          {isPaid ? "Xem hóa đơn" : "Đơn hàng"}
+          {showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}
         </button>
         {finalAmount != null && (
           <span className="ml-2 text-xs font-medium text-emerald-700">

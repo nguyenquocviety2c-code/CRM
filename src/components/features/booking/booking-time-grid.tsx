@@ -181,8 +181,14 @@ export function BookingTimeGrid({
       segment={segment}
       fullWidth
       onClick={() => {
-        const isPaid = segment.booking.status === "checkout";
-        if (isPaid && onShowInvoice) onShowInvoice(segment.booking);
+        // checkout (paid) → full paid invoice view; checkin (being served) →
+        // invoice/payment dialog; otherwise → edit booking dialog. Mirrors
+        // the staff-view (View nhân viên) click logic so both views behave
+        // identically when a checkin booking is clicked.
+        const status = segment.booking.status;
+        const isPaid = status === "checkout";
+        const isCheckin = status === "checkin";
+        if ((isPaid || isCheckin) && onShowInvoice) onShowInvoice(segment.booking);
         else onBookingClick?.(segment.booking);
       }}
       onStatusChange={(status) => onStatusChange?.(segment.booking.id, status)}
@@ -1286,8 +1292,13 @@ function CustomerDayRangeGrid({
   };
 
   const handleChipClick = (booking: Booking) => {
-    const isPaid = booking.status === "checkout";
-    if (isPaid && onShowInvoice) onShowInvoice(booking);
+    // checkout (paid) → full paid invoice view; checkin (being served) →
+    // invoice/payment dialog; otherwise → edit booking dialog. Mirrors the
+    // staff-view click logic so both views behave identically.
+    const status = booking.status;
+    const isPaid = status === "checkout";
+    const isCheckin = status === "checkin";
+    if ((isPaid || isCheckin) && onShowInvoice) onShowInvoice(booking);
     else onBookingClick?.(booking);
   };
 
