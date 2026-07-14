@@ -31,7 +31,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+# .env is COMMITTED intentionally for this project — it contains the Supabase
+# + R2 credentials needed for the app to run on Vercel without manual env setup.
+# Commenting out the ignore so `git add .env` works.
+# .env*
+!.env
+!.env.local
 
 # vercel
 .vercel
@@ -52,3 +57,23 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Project-local artifacts (not part of the CRM app)
+/download/
+/tool-results/
+/.pm2-logs/
+/.zscripts/
+/examples/
+/mini-services/
+/agent-ctx/
+/migration-backup-*.json
+verify-*.png
+multi-service-*.png
+.dat-lich-success.png
+.invoice-fixed-verify.png
+.pm2-verify.png
+.product-drilldown-verify.png
+.setting-columns-verify.png
+.staff-revenue-verify.png
+.claude
+.z-ai-config
