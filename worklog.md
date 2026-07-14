@@ -594,3 +594,77 @@ Stage Summary:
 - New git commit hashes on `master`: `ffab268` (amended — author fix only) and `efeb9d9` (gitignore update). Force-pushed to GitHub.
 - No build errors were encountered in the source code itself — `prisma generate && next build` ran cleanly on Vercel's build server. The `typescript.ignoreBuildErrors: true` flag in `next.config.ts` ensured any TS type mismatches did not block the build. The `DATABASE_URL=file:/tmp/custom.db` env var worked as expected (Prisma uses an empty SQLite DB on Vercel; the app's real data layer is Supabase, which responded correctly to all 4 verified API endpoints).
 - The local PM2 dev server (`crm-app` on port 3000) is unaffected and still online.
+
+---
+Task ID: 10
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Diagnose cashier missing order code bug for booking LH000059 (Hoàng Vũ) and fix the walk-in tab so it auto-links the customer's existing day booking — the booking code (LHxxx) must show in the info bar alongside the customer name + phone.
+
+Work Log:
+- Read worklog.md (Tasks 1-9). Confirmed context: the CRM app is at /home/z/my-project, running via PM2 (`crm-app`, port 3000). Production is on Vercel at https://crm-nguyenquocviety2c-8529s-projects.vercel.app (aliased). Local git branch `main` → remote `master`. Git author already fixed in Task 9 (`nguyenquocviety2c-8529 <nguyenquocviety2c@gmail.com>`), so no COMMIT_AUTHOR_REQUIRED block.
+
+- Step 1 — Reproduce the bug in the browser (PASS — bug confirmed exactly as user's hypothesis):
+  * Logged in at http://localhost:3000/login with `ductran / 123456`. Redirected to /cashier. Title "EasySalon CRM". Date picker already on 14/07/2026.
+  * Sidebar shows 6 booking tabs for 14/07/2026 (Level 1 Minh Khai branch): 09:30 Bi Trần, 10:30 Bi Trần, 10:00 Quang Minh, 11:30 Anh Vũ, 14:30 An Vû, 16:30 Hoàng Vũ.
+  * **Path A — booking tab direct click**: clicked the "16:30 Hoàng Vũ" tab. Info bar shows "Hoàng Vũ • 0634845123 • Lịch hẹn: LH000059 • 14/07/2026 • Đã xác nhận". The booking-code badge (text-emerald-700 div, "Lịch hẹn: LH000059") is present. ✓
+  * **Path B — walk-in tab + inline search**: clicked "Tạo hóa đơn" → walk-in tab "— Khách vãng lai" activated. Inline search input + "Thêm khách mới" button shown. Typed "0634845123" → dropdown returned "Hoàng Vũ 0634845123 • KH000097". Clicked it.
+  * Result of Path B (BEFORE fix): info bar shows "Hoàng Vũ • 0634845123" + X close button. **NO "Lịch hẹn: LH000059" badge.** Confirmed via `document.querySelector('[class*="emerald-700"]')?.innerText || 'NO BADGE FOUND'` → returned only the active tab button text ("16:30\nHoàng Vũ"), not a badge.
+  * Persisted state in `localStorage["cashier-store"]` for the walk-in tab after selecting Hoàng Vũ: `{type:"walkin", customerType:"new", customerId:"91b40b68-...", customerInfo:{name:"Hoàng Vũ", phone:"0634845123"}}` — note the missing `bookingId`/`bookingCode`. The booking tab's meta (keyed by `96944807-...`) had `bookingCode:"LH000059"`. So the bug was exactly the user's hypothesis: `handleSelectInlineResult` set customerId + customerInfo but did NOT look up the customer's existing booking → `bookingCode` stayed undefined → the info bar badge (`activeMeta?.bookingCode && ...`) didn't render.
+
+- Step 2 — Implement the fix (PASS):
+  * File: `src/components/features/cashier/customer-tabs.tsx`. Single file changed, 152 insertions / 16 deletions.
+  * **Main change — `handleSelectInlineResult`** (around line 626): after the existing `updateTabMeta({customerId, customerInfo})` + `updateCustomerTab({name, phone})` + `fetchCustomerOldStatus(...)` calls, ADD auto-link logic:
+    - Look up `existingBooking = (dayBookings || []).find(b => b.customer?.id === c.id && b.status !== "checkout" && b.status !== "cancelled" && b.status !== "no_show")`.
+    - If found, mirror what `handlePickBooking` does: compute `bookingStart`, `maxEnd`, `bookingServices`; then `updateTabMeta(activeTabId, {type:"booking", bookingCreated:true, bookingId:b.id, bookingCode:b.code||undefined, bookingServices, lastServiceStartMs:bookingStart, lastServiceEndMs:maxEnd})`. The type is flipped from "walkin" → "booking" so the info bar's booking-code badge branch renders (the badge JSX is inside the `!isWalkinTab` branch). All existing meta fields (customerId, customerInfo, customerType) are preserved via the shallow merge in `updateTabMeta`.
+    - Load the booking's services into the invoice area via `replaceServiceItems(activeTabId, serviceItems)` (same shape as `handlePickBooking` lines 409-425).
+    - Toast: "Đã liên kết lịch hẹn" + customer name + booking code. For customers without an eligible booking, keep the original "Đã chọn khách hàng" toast and the walk-in behavior unchanged.
+  * **Supporting fix 1 — `activeBooking` lookup** (around line 224): walk-in tabs that were auto-linked have type "booking" but `activeTabId` is still "walkin-xxx" (not the booking's UUID). Updated the lookup: `(dayBookings || []).find(b => b.id === activeTabId || b.id === activeMetaForBooking?.bookingId)` so the info bar's status badge + date + clickable code-link render correctly.
+  * **Supporting fix 2 — deselect useEffect** (around line 248): the existing useEffect deselected the active tab when `type === "booking"` AND activeTabId wasn't in dayBookings/dayStandaloneInvoices. After my type flip, this would deselect the auto-linked walk-in tab (since "walkin-xxx" is not a booking UUID). Added a `linkedBookingInDay` check: if `meta.bookingId` is in dayBookings, the tab is still valid — don't deselect.
+  * **Supporting fix 3 — AUTO-REBUILD useEffect** (around line 274): the existing effect re-synced service items from the booking for booking tabs, but looked up the booking by `dayBookings.find(x => x.id === activeTabId)`. For an auto-linked walk-in tab (id "walkin-xxx"), this would find nothing. Updated the lookup: `dayBookings.find(x => x.id === activeTabId || x.id === meta.bookingId)`.
+  * **Supporting fix 4 — `mergedTabList` dedup + walkinTabs rendering** (around line 491): the existing code only treated tabs as "walk-in" for dedup purposes when `meta?.type === "walkin"`. After my type flip, the walk-in tab would no longer be classified as a walk-in — breaking dedup (the booking tab would appear as a DUPLICATE in the sidebar) and hiding the walk-in tab from the sidebar entirely (it wasn't in dedupedDayBookings/dedupedStandalone/walkinTabs). Introduced a helper `isWalkinStyleTab(customerId, meta) = customerId.startsWith("walkin-") || meta?.type === "walkin"` and used it for both the dedup loops (`walkinInvoiceIds`/`walkinBookingIds`) and the `walkinTabs` filter. The id is the stable identifier — a walk-in tab's lifecycle may flip its meta.type, but the id stays "walkin-xxx" forever. Also updated `walkinTabs`'s status lookup to fall back to the linked booking's status (`linkedBooking?.status`) so the auto-linked tab badge shows "Đã xác nhận" instead of "Mới".
+  * **Import**: added `type TabMeta` to the import from `@/stores/cashier-store` (used as a param type for `isWalkinStyleTab`).
+
+- Step 3 — Verify the fix in the browser (PASS):
+  * Cleared localStorage, reloaded /cashier, clicked "Tạo hóa đơn" → walk-in tab created.
+  * Typed "0634845123" in the inline search → "Hoàng Vũ 0634845123 • KH000097" appeared.
+  * Clicked the search result. Info bar now shows: **"Hoàng Vũ • 0634845123 • Lịch hẹn: LH000059 • 14/07/2026 • Đã xác nhận"**. The booking-code badge (emerald-700 div) is present. ✓
+  * Invoice area shows the booking's 3 services: "Master Cut (tư vấn sau cho KHM)" (220,000đ, Nv: Bùi Đức Lâm), "Uốn Gợn Wavy" (550,000đ, Nv: Nguyễn Trường Đan), "Tẩy Tóc" (300,000đ, Nv: Phạm Thành). ✓
+  * Sidebar shows the walk-in tab as "16:30 Hoàng Vũ" (using `lastServiceStartMs` as the time) with the correct status. The separate booking tab (LH000059, id `96944807-...`) is HIDDEN from the sidebar via the dedup logic (no duplicate). ✓
+  * Screenshot saved: `/home/z/my-project/verify-cashier-booking-code.png` (97,358 bytes).
+  * **Edge case verified**: cleared localStorage, reloaded, opened a walk-in tab, searched for "0914567123" (Bi Trần, whose only booking LH000055 is cancelled). Clicked the search result. Walk-in tab's meta stayed `{type:"walkin", customerType:"new", customerId:"3ba2c0e4-...", customerInfo:{...}}` — NO auto-link because the only booking is cancelled (excluded by the status filter). Info bar shows the customer name + phone but NO booking code badge. The walk-in UI (search bar + add new customer button) is correctly hidden because `walkinHasCustomer` is true. ✓
+  * **Booking-tab direct click still works**: cleared localStorage, reloaded, clicked the "16:30 Hoàng Vũ" booking tab directly. Info bar shows the booking code "Lịch hẹn: LH000059" + 3 services. ✓ (Screenshot: `/home/z/my-project/step3-booking-tab-direct.png`, 97,358 bytes — same content as the walk-in path, confirming both paths converge to the same correct display.)
+
+- Step 4 — Dev log + lint (PASS):
+  * `.pm2-logs/crm-out.log`: `✓ Compiled in 207ms` after my edits. All HTTP routes returned 200. No `error|warn|exception|fail|⨯` matches.
+  * `.pm2-logs/crm-error.log`: 0 bytes (empty).
+  * `npx eslint src/components/features/cashier/customer-tabs.tsx`: 0 errors, 1 pre-existing warning (`Unused eslint-disable directive` at the AUTO-REBUILD useEffect — was at line 280 before my changes, now at line 305 because I added 25 lines above it; not introduced by me).
+
+- Step 5 — Push to GitHub + deploy to Vercel (PASS):
+  * `git add src/components/features/cashier/customer-tabs.tsx` (only the source file; screenshots left untracked).
+  * `git commit -m "fix(cashier): auto-link existing booking when walk-in tab selects a customer\n\nWhen a cashier opens a walk-in tab and selects a customer who already has\na non-checkout booking for the selected day, the tab now auto-links to that\nbooking: the booking code (LHxxx) shows in the info bar, the booking's\nexisting services load into the invoice area, and adding more services PUTs\nto the existing booking instead of creating a duplicate."`
+    → commit `ea7095b0c18b9c074acbfd64674e301e52345f7b` (author: `nguyenquocviety2c-8529 <nguyenquocviety2c@gmail.com>`).
+  * `git push origin main:master` → `efeb9d9..ea7095b main -> master` (push succeeded).
+  * The GitHub push triggered Vercel's Git integration auto-deploy (per Task 9's setup): deployment `crm-94reivknu-nguyenquocviety2c-8529s-projects.vercel.app` — READY in 55s.
+  * Also ran `vercel --prod --yes --token <token>` (CLI deploy) — the bash command timed out after 5 minutes, but the deploy continued on Vercel's server: deployment `crm-q3xi8rdey-nguyenquocviety2c-8529s-projects.vercel.app` — READY in 1m.
+  * Both production deployments are READY. Production URL `https://crm-nguyenquocviety2c-8529s-projects.vercel.app` returns HTTP 307 (redirect to /dat-lich, expected). `GET /api/supabase/branches?active=true` returns 2 branches (Supabase works on Vercel). Fix is live in production.
+  * Local PM2 dev server (`crm-app`, port 3000) is unaffected and still online (2h uptime).
+
+Stage Summary:
+- **Bug confirmed and fixed.** The user's hypothesis was 100% correct: `handleSelectInlineResult` in `customer-tabs.tsx` set the customer link (customerId + customerInfo + customerType) on the walk-in tab's meta but did NOT look up the customer's existing booking for the day. As a result, `tabMeta[walkinTabId].bookingCode` stayed undefined, and the info bar's booking-code badge (which only renders when `activeMeta?.bookingCode` is truthy AND the tab is NOT a walk-in) didn't show — even though the customer's name + phone did show.
+- **Fix is ADDITIVE**: the existing `updateTabMeta({customerId, customerInfo})` + `updateCustomerTab({name, phone})` + `fetchCustomerOldStatus(...)` calls are all preserved. The auto-link logic layers the booking fields ON TOP via a second `updateTabMeta` call, and loads the booking's services into the invoice area via `replaceServiceItems` (mirroring `handlePickBooking` lines 409-425).
+- **5 changes in 1 file** (`src/components/features/cashier/customer-tabs.tsx`):
+  1. `handleSelectInlineResult` (line 626): new auto-link block (≈60 lines). Finds the customer's non-terminal booking for the day; if found, flips tab type "walkin"→"booking", sets bookingId/bookingCode/bookingServices/lastServiceStartMs/lastServiceEndMs, loads services into the invoice area, and shows a "Đã liên kết lịch hẹn" toast. If not found, keeps the original walk-in behavior + "Đã chọn khách hàng" toast.
+  2. `activeBooking` lookup (line 224): now also matches by `meta.bookingId` so the info bar's status badge / date / clickable code-link work for auto-linked walk-in tabs.
+  3. Deselect `useEffect` (line 248): added `linkedBookingInDay` check so auto-linked walk-in tabs (whose activeTabId is "walkin-xxx" but whose meta.bookingId is a real booking UUID) aren't wrongly deselected.
+  4. AUTO-REBUILD `useEffect` (line 274): now also looks up the booking by `meta.bookingId` so service items re-sync correctly for auto-linked walk-in tabs.
+  5. `mergedTabList` (line 491): introduced `isWalkinStyleTab(customerId, meta)` helper that classifies a tab as walk-in-style by ID prefix (`walkin-`) OR by meta.type. Used in both the dedup loops (`walkinInvoiceIds`/`walkinBookingIds`) and the `walkinTabs` filter. Also added `linkedBooking?.status` as a status fallback in the `walkinTabs` map so auto-linked tabs show the booking's actual status (e.g. "Đã xác nhận") instead of "Mới".
+- **Behavior preserved for non-linked customers**: when a customer has NO eligible booking for the day (e.g. only cancelled/checkout/no_show bookings, or no bookings at all), the original walk-in behavior is unchanged — the tab stays `type:"walkin"`, no booking code is shown, and a booking is created lazily when the cashier adds the first service. Verified with Bi Trần (phone 0914567123, only booking LH000055 is cancelled).
+- **No new lint errors** introduced. Pre-existing `Unused eslint-disable directive` warning was at line 280 before, now at line 305 (because I added 25 lines above it). No new compile or runtime errors.
+- **Production is live**: 2 READY Vercel deployments — CLI deploy `crm-q3xi8rdey-...` (1m build) and git auto-deploy `crm-94reivknu-...` (55s build). Production URL `https://crm-nguyenquocviety2c-8529s-projects.vercel.app` serves the fix. GitHub commit `ea7095b` is on `master`.
+- **Local PM2 dev server** (`crm-app` port 3000) is unaffected.
+- **Screenshots**:
+  * `/home/z/my-project/verify-cashier-booking-code.png` (97,358 bytes) — walk-in tab AFTER fix, showing "Lịch hẹn: LH000059" + 3 services.
+  * `/home/z/my-project/step3-booking-tab-direct.png` (97,358 bytes) — booking-tab direct click (control case), same content.
+  * `/home/z/my-project/step1a-booking-tab-shows-code.png` — booking tab BEFORE fix shows the code (control case proving the booking tab path was always working).
+  * `/home/z/my-project/step1b-walkin-tab-empty.png` — walk-in tab empty (no customer selected yet).
+  * `/home/z/my-project/step1c-walkin-tab-no-code.png` — walk-in tab AFTER selecting Hoàng Vũ BEFORE fix (NO booking code badge — the bug).
