@@ -4,7 +4,7 @@ import { useState, useMemo, useRef, useEffect } from "react";
 import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
 import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCashierStore, type InvoiceItem } from "@/stores/cashier-store";
+import { useCashierStore, type InvoiceItem, type TabMeta } from "@/stores/cashier-store";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { maskPhone } from "@/lib/phone-mask";
@@ -217,7 +217,16 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // The active tab's booking (if the tab was opened from a booking).
   // Tabs opened via "Thêm khách hàng" (manual customer picker) have no booking,
   // so no status is shown for them.
-  const activeBooking = (dayBookings || []).find((b) => b.id === activeTabId) || null;
+  // Walk-in tabs that were auto-linked to an existing booking (via
+  // handleSelectInlineResult) have type "booking" but their activeTabId is
+  // still "walkin-xxx" — look them up by meta.bookingId in that case so the
+  // info bar's status badge, date, and code-link render correctly.
+  const activeMetaForBooking = activeTabId ? tabMeta[activeTabId] : undefined;
+  const activeBooking = activeTabId
+    ? (dayBookings || []).find(
+        (b) => b.id === activeTabId || b.id === activeMetaForBooking?.bookingId
+      ) || null
+    : null;
 
   // When the selected date changes, a previously-opened booking tab (or
   // standalone-invoice tab) from an EARLIER day can still be the active tab
@@ -230,6 +239,12 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // current day's lists, deselect it so its stale content stops rendering.
   // Walk-in drafts (type "walkin") are intentionally kept — a cashier may
   // start a draft and return to it later, and drafts aren't tied to a day.
+  //
+  // Edge case: a walk-in tab that was auto-linked to an existing booking (via
+  // handleSelectInlineResult) has type "booking" but its activeTabId is still
+  // "walkin-xxx" (not the booking's id). Such a tab is valid as long as its
+  // meta.bookingId points to a booking in the current day's list — don't
+  // deselect it.
   useEffect(() => {
     if (!activeTabId) return;
     const meta = tabMeta[activeTabId];
@@ -238,7 +253,11 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     if (!dayBookings || !dayStandaloneInvoices) return;
     const inDayBookings = dayBookings.some((b) => b.id === activeTabId);
     const inDayStandalone = dayStandaloneInvoices.some((inv) => inv.id === activeTabId);
-    if (!inDayBookings && !inDayStandalone) {
+    // Walk-in tabs auto-linked to a booking: check by meta.bookingId too.
+    const linkedBookingInDay = meta.bookingId
+      ? dayBookings.some((b) => b.id === meta.bookingId)
+      : false;
+    if (!inDayBookings && !inDayStandalone && !linkedBookingInDay) {
       // The active tab's booking/invoice doesn't belong to this day — deselect.
       setActiveTab("");
     }
@@ -250,12 +269,18 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // merged into 1 line with quantity 2 by an older code version) WITHOUT
   // requiring the user to re-click the tab. Product items + discount + tip +
   // voucher are preserved (replaceServiceItems keeps them).
+  // Also handles walk-in tabs that were auto-linked to a booking (activeTabId
+  // is "walkin-xxx", but meta.bookingId points to a real booking in dayBookings).
   useEffect(() => {
     if (!activeTabId) return;
     const meta = tabMeta[activeTabId];
     if (!meta || meta.type !== "booking") return;
     if (!dayBookings) return;
-    const b = dayBookings.find((x) => x.id === activeTabId);
+    // Look up the booking by activeTabId (direct booking tab) OR by
+    // meta.bookingId (walk-in tab that was auto-linked to a booking).
+    const b = dayBookings.find(
+      (x) => x.id === activeTabId || x.id === meta.bookingId
+    );
     if (!b || !b.services) return;
     // Build the fresh service items list from the booking's current services.
     const serviceItems: InvoiceItem[] = b.services
@@ -474,39 +499,58 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     //    AND the booking tab (same time, same customer, same services) —
     //    looking like a duplicate. The walk-in tab takes priority (it carries
     //    the cashier's draft state: items, discount, tip).
+    //
+    // Note: a walk-in tab whose customerId starts with "walkin-" is treated
+    // as a walk-in-style tab for dedup/rendering purposes EVEN if its meta.type
+    // has been flipped to "booking" by handleSelectInlineResult's auto-link
+    // (when the cashier picked a customer who already had a booking for the
+    // day). The id is the stable identifier — the type field changes during
+    // the tab's lifecycle but the tab itself is still the same draft.
+    const isWalkinStyleTab = (customerId: string, meta?: TabMeta) =>
+      customerId.startsWith("walkin-") || meta?.type === "walkin";
+
     const walkinInvoiceIds = new Set<string>();
     const walkinBookingIds = new Set<string>();
     for (const c of activeCustomers) {
       const meta = tabMeta[c.customerId];
-      if (meta?.type === "walkin") {
-        if (meta.invoiceId) walkinInvoiceIds.add(meta.invoiceId);
-        if (meta.bookingId) walkinBookingIds.add(meta.bookingId);
+      if (isWalkinStyleTab(c.customerId, meta)) {
+        if (meta?.invoiceId) walkinInvoiceIds.add(meta.invoiceId);
+        if (meta?.bookingId) walkinBookingIds.add(meta.bookingId);
       }
     }
 
     // Build walk-in tab entries from activeCustomers that are walk-in drafts.
     // Include the invoiceId + status so paid walk-in tabs sort to the left.
+    // For walk-in tabs that were auto-linked to a booking (meta.type ===
+    // "booking" but customerId starts with "walkin-"), also look up the
+    // linked booking's status so the tab badge reflects the booking's actual
+    // status (e.g. "confirmed" → "Đã xác nhận") instead of the default "new".
     const walkinTabs: TodayBooking[] = activeCustomers
       .filter((c) => {
         const meta = tabMeta[c.customerId];
-        return meta?.type === "walkin";
+        return isWalkinStyleTab(c.customerId, meta);
       })
       .map((c) => {
         const meta = tabMeta[c.customerId];
         // Determine status: check the persisted paid/cancelled flags first
         // (survives page navigation), then fall back to the linked invoice's
-        // status from the query.
+        // status, then to the linked booking's status (for auto-linked
+        // walk-in tabs whose meta.type is "booking").
         const linkedInv = meta?.invoiceId
           ? (dayStandaloneInvoices || []).find((inv) => inv.id === meta.invoiceId)
           : null;
+        const linkedBooking = meta?.bookingId
+          ? (dayBookings || []).find((b) => b.id === meta.bookingId)
+          : null;
         const status = meta?.paid || linkedInv?.status === "completed" ? "checkout"
           : meta?.cancelled || linkedInv?.status === "cancelled" ? "cancelled"
-          : "new";
-        // For walk-in tabs that have a booking created (via createBookingForTab),
-        // use the booking's start time (lastServiceStartMs) as the tab's time
-        // so the tab button shows the service's scheduled time BEFORE the
-        // customer name — per the user's request. Convert the epoch ms to an
-        // ISO string so toVietnamTime() in the render works correctly.
+          : linkedBooking?.status || "new";
+        // For walk-in tabs that have a booking created (via createBookingForTab
+        // OR auto-linked via handleSelectInlineResult), use the booking's start
+        // time (lastServiceStartMs) as the tab's time so the tab button shows
+        // the service's scheduled time BEFORE the customer name — per the
+        // user's request. Convert the epoch ms to an ISO string so
+        // toVietnamTime() in the render works correctly.
         const walkinDateTime = meta?.lastServiceStartMs
           ? new Date(meta.lastServiceStartMs).toISOString()
           : linkedInv?.created_at || null;
@@ -579,6 +623,21 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     !activeMeta?.invoiceId;
 
   // Select an inline search result → link the walk-in tab to the real customer.
+  //
+  // AUTO-LINK existing booking: when the cashier opens a walk-in tab and picks
+  // a customer who ALREADY has a non-terminal booking for the selected day, the
+  // tab is auto-linked to that booking — the booking code (LHxxx) shows in the
+  // info bar, the booking's existing services load into the invoice area, and
+  // adding more services PUTs to the existing booking instead of creating a
+  // duplicate. Without this, the walk-in tab would render the customer's name +
+  // phone but NO booking code (because bookingCode stays undefined), which made
+  // it look like the cashier module "lost" the Lịch hẹn entry.
+  //
+  // Terminal statuses (checkout / cancelled / no_show) are excluded — those
+  // bookings are no longer actionable, so a new walk-in service should start a
+  // new booking. If the customer has NO eligible booking for the day, the
+  // original walk-in behavior is kept (a booking will be created lazily when
+  // the cashier adds the first service).
   const handleSelectInlineResult = (c: {
     id: string;
     name: string;
@@ -601,9 +660,86 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     fetchCustomerOldStatus(c.id).then((ct) =>
       updateTabMeta(activeTabId, { customerType: ct })
     );
+
+    // AUTO-LINK: find the customer's existing non-terminal booking for the
+    // selected day. If one exists, link this walk-in tab to it (mirrors what
+    // handlePickBooking does when the user clicks the booking tab directly).
+    // This makes the booking code appear in the info bar AND makes subsequent
+    // service adds PUT to the existing booking (no duplicate).
+    const existingBooking = (dayBookings || []).find(
+      (b) =>
+        b.customer?.id === c.id &&
+        b.status !== "checkout" &&
+        b.status !== "cancelled" &&
+        b.status !== "no_show"
+    );
+    if (existingBooking) {
+      const bookingStart = existingBooking.date_time
+        ? new Date(existingBooking.date_time).getTime()
+        : 0;
+      let maxEnd = bookingStart;
+      const bookingServices = (existingBooking.services || [])
+        .filter((s) => s.service)
+        .map((s) => ({
+          service_id: s.service!.id,
+          staff_id: s.staff_id || "",
+          service_category_id: s.service_category_id || null,
+        }));
+      for (const s of existingBooking.services || []) {
+        if (!s.service) continue;
+        const dur = (Number(s.service.duration) || 60) * 60 * 1000;
+        const end = bookingStart + dur;
+        if (end > maxEnd) maxEnd = end;
+      }
+      // Change the tab type from "walkin" → "booking" so:
+      //   1. The booking-code badge branch renders in the info bar (the badge
+      //      is only shown in the non-walkin branch — see the JSX below).
+      //   2. The walk-in-specific UI (search bar, "Thêm khách mới" button) is
+      //      hidden now that a real booking is linked.
+      //   3. The tab sorts with the day's bookings (not as an empty walk-in
+      //      draft) and is deduplicated against the booking tab via
+      //      walkinBookingIds in mergedTabList.
+      // All existing meta fields (customerId, customerInfo, customerType) are
+      // preserved — the booking fields are layered ON TOP.
+      updateTabMeta(activeTabId, {
+        type: "booking",
+        bookingCreated: true,
+        bookingId: existingBooking.id,
+        bookingCode: existingBooking.code || undefined,
+        bookingServices,
+        lastServiceStartMs: bookingStart,
+        lastServiceEndMs: maxEnd,
+      });
+      // Load the booking's existing services into the invoice area (mirrors
+      // handlePickBooking lines 409-425). Product items / discount / tip are
+      // kept by replaceServiceItems.
+      const serviceItems: InvoiceItem[] = (existingBooking.services || [])
+        .filter((s) => s.service)
+        .map((s) => {
+          const price = Number(s.service!.price) || 0;
+          return {
+            id: `${s.service!.id}-${crypto.randomUUID()}`,
+            itemId: s.service!.id,
+            name: s.service!.name,
+            type: "service" as const,
+            price,
+            quantity: 1,
+            discount: 0,
+            total: price,
+            staffName: s.staff?.name || undefined,
+          };
+        });
+      replaceServiceItems(activeTabId, serviceItems);
+      toast({
+        title: "Đã liên kết lịch hẹn",
+        description: `${c.name} • ${existingBooking.code || ""}`,
+      });
+    } else {
+      toast({ title: "Đã chọn khách hàng", description: c.name });
+    }
+
     setInlineSearch("");
     setShowInlineResults(false);
-    toast({ title: "Đã chọn khách hàng", description: c.name });
   };
 
   // === Walk-in tab: add a new customer (name + phone) ===
