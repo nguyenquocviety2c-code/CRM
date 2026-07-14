@@ -112,7 +112,16 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // the bottom of the screen (only the title + expand button visible). Resets
   // to expanded every time the dialog opens.
   const [minimized, setMinimized] = useState(false);
-  useEffect(() => { if (!open) setMinimized(false); }, [open]);
+  useEffect(() => {
+    if (!open) {
+      setMinimized(false);
+      // Reset multi-customer state when the dialog closes so the next open
+      // starts fresh (default "Cùng lịch", no active slot dropdown).
+      setScheduleMode("same");
+      setActiveSlotDropdown(null);
+      setIsMultiSubmitting(false);
+    }
+  }, [open]);
   // Permission: can the logged-in staff assign employees to services?
   // If false, the per-service "Chọn nhân viên" dropdown is hidden and services
   // are booked without a specific staff assignment (staffId left empty).
@@ -131,6 +140,23 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   const [quickAddPhone, setQuickAddPhone] = useState("");
   const [quickAddError, setQuickAddError] = useState("");
   const [quickAddChecking, setQuickAddChecking] = useState(false);
+
+  // ------------------------------------------------------------------
+  // Multi-customer mode (numberOfCustomers >= 2, CREATE only).
+  // When active, each service row becomes a "customer slot" with its own
+  // phone/name inputs + the 3 selects. A "Cùng lịch / Khác lịch" toggle
+  // next to the DỊCH VỤ heading controls whether all slots share ONE
+  // booking (parallel staff) or each slot gets its OWN separate booking.
+  // ------------------------------------------------------------------
+  // scheduleMode: "same" = 1 booking with N services (parallel staff);
+  //               "different" = N separate bookings, 1 service each.
+  const [scheduleMode, setScheduleMode] = useState<"same" | "different">("same");
+  // Which slot index's autocomplete dropdown is currently open. Only one
+  // slot's dropdown shows at a time (the one the user is actively typing in).
+  const [activeSlotDropdown, setActiveSlotDropdown] = useState<number | null>(null);
+  // Submit-in-flight flag for the multi-customer path (which does inline
+  // fetches instead of useMutation, so createMutation.isPending doesn't cover it).
+  const [isMultiSubmitting, setIsMultiSubmitting] = useState(false);
 
   // ID of the "Khách vãng lai" customer source. When this source is selected,
   // the booking is treated as a walk-in: no phone/name required, the customer
@@ -429,6 +455,121 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     control,
     name: "services",
   });
+
+  // ------------------------------------------------------------------
+  // Multi-customer mode detection.
+  // Active ONLY in CREATE mode (booking === null) when numberOfCustomers >= 2.
+  // In edit mode the multi-customer UI is never shown (existing bookings were
+  // created as single records and the per-slot fields don't apply).
+  // ------------------------------------------------------------------
+  const watchedNumberOfCustomers = useWatch({ control, name: "numberOfCustomers" }) as number;
+  const isMultiCustomerMode = !booking && Number(watchedNumberOfCustomers) >= 2;
+
+  // Auto-adjust the services field array to match numberOfCustomers.
+  // When numberOfCustomers changes to N (>= 2) in CREATE mode, append/remove
+  // rows so fields.length === N. When numberOfCustomers === 1, ensure at
+  // least 1 row remains (the default). This effect ONLY runs in CREATE mode.
+  useEffect(() => {
+    if (!open || booking) return; // CREATE mode only
+    const n = Number(watchedNumberOfCustomers) || 1;
+    if (n < 2) {
+      // Single-customer mode: keep at least 1 row. If the user previously had
+      // N rows (multi mode) and dropped back to 1, trim to 1 row.
+      if (fields.length > 1) {
+        for (let i = fields.length - 1; i >= 1; i--) {
+          remove(i);
+        }
+      }
+      // Clear per-slot customer fields on the remaining row (they're unused
+      // in single mode and could leak into the payload otherwise).
+      setValue("services.0.customerPhone", "");
+      setValue("services.0.customerName", "");
+      setValue("services.0.customerId", "");
+      setActiveSlotDropdown(null);
+      return;
+    }
+    // Multi-customer mode: ensure fields.length === n.
+    const currentCount = fields.length;
+    if (currentCount < n) {
+      for (let i = currentCount; i < n; i++) {
+        append({
+          serviceCategoryId: "",
+          serviceId: "",
+          staffId: "",
+          showNote: false,
+          customerPhone: "",
+          customerName: "",
+          customerId: "",
+        });
+      }
+    } else if (currentCount > n) {
+      for (let i = currentCount - 1; i >= n; i--) {
+        remove(i);
+      }
+    }
+  }, [watchedNumberOfCustomers, open, booking]);
+
+  // ------------------------------------------------------------------
+  // Per-slot customer autocomplete (multi-customer mode).
+  // A single useQuery fetches /api/supabase/customers?search=... based on
+  // the ACTIVE slot's phone+name. Only the active slot's dropdown is shown
+  // at a time (controlled by activeSlotDropdown), so one query suffices.
+  // ------------------------------------------------------------------
+  const watchedServicesForSlots = useWatch({ control, name: "services" }) as
+    | BookingFormValues["services"]
+    | undefined;
+  const activeSlotEntry =
+    activeSlotDropdown !== null && watchedServicesForSlots
+      ? watchedServicesForSlots[activeSlotDropdown]
+      : null;
+  const activeSlotPhone = (activeSlotEntry?.customerPhone || "").trim();
+  const activeSlotName = (activeSlotEntry?.customerName || "").trim();
+
+  const { data: slotCustomersData } = useQuery({
+    queryKey: [
+      "booking-dialog-slot-customers",
+      activeSlotDropdown,
+      activeSlotPhone,
+      activeSlotName,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("limit", "20");
+      const combined = [activeSlotPhone, activeSlotName].filter(Boolean).join(" ");
+      if (combined) params.set("search", combined);
+      const res = await fetch(`/api/supabase/customers?${params.toString()}`);
+      const json = await res.json();
+      if (!json.ok) return [];
+      return (json.data as SupabaseCustomer[]).map((c) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        code: c.code,
+        source: c.source ?? null,
+        channel: c.channel ?? null,
+      }));
+    },
+    enabled:
+      open &&
+      isMultiCustomerMode &&
+      activeSlotDropdown !== null &&
+      (!!activeSlotPhone || !!activeSlotName),
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+  });
+
+  const slotCustomers: Customer[] = slotCustomersData || [];
+  // Filter slot customers by phone-prefix when only phone is typed (mirrors
+  // the top-level filteredCustomers logic).
+  const filteredSlotCustomers = useMemo(() => {
+    if (!activeSlotPhone && !activeSlotName) return slotCustomers;
+    if (activeSlotPhone && !activeSlotName) {
+      return slotCustomers.filter((c) =>
+        (c.phone || "").startsWith(activeSlotPhone)
+      );
+    }
+    return slotCustomers;
+  }, [slotCustomers, activeSlotPhone, activeSlotName]);
 
   // Walk-in detection: when the customer source is "Khách vãng lai", the
   // phone/name fields are hidden and a guest customer record is created on
@@ -759,7 +900,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // - Old customer: hide "Dành cho khách hàng mới - DV Cắt" (new-customer-only cut).
   // When editing, always include the currently-selected category so the existing
   // booking's category remains visible/selectable even if it would be filtered out.
+  // In multi-customer mode, show ALL categories — each slot has its own customer
+  // so the booking-level customer-type filter doesn't apply.
   const visibleServiceCategories = useMemo(() => {
+    if (isMultiCustomerMode) return serviceCategories;
     // Collect category IDs already selected in the form (edit mode pre-fill).
     const selectedCatIds = new Set(
       (watchedServices || [])
@@ -785,7 +929,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       }
       return true;
     });
-  }, [serviceCategories, selectedCustomerType, watchedServices]);
+  }, [serviceCategories, selectedCustomerType, watchedServices, isMultiCustomerMode]);
 
   // Pre-fill form when editing
   useEffect(() => {
@@ -907,6 +1051,9 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             serviceId: "",
             staffId: preStaffId,
             showNote: false,
+            customerPhone: "",
+            customerName: "",
+            customerId: "",
           },
         ],
       });
@@ -1387,6 +1534,235 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             ? "Lịch hẹn đánh dấu 'Không đến' không thể chỉnh sửa. Bạn có thể tạo lịch hẹn mới cho khung giờ này vì slot đã được giải phóng."
             : "";
 
+  // ------------------------------------------------------------------
+  // resolveCustomerId — shared customer-resolution logic used by BOTH the
+  // single-customer flow (top-level phone/name) and the multi-customer flow
+  // (per-slot phone/name). Returns the resolved customer_id, or an error.
+  //   1. If both phone+name empty → create a "Khách vãng lai" guest record.
+  //   2. If phone (or name) typed → match an existing customer by exact
+  //      phone (or exact name when no phone), else create a new customer.
+  // ------------------------------------------------------------------
+  const resolveCustomerId = async (
+    phone: string,
+    name: string
+  ): Promise<{ ok: boolean; customerId?: string; error?: string }> => {
+    const typedPhone = phone.trim();
+    const typedName = name.trim();
+    if (!typedPhone && !typedName) {
+      // Create a guest record (same as the walk-in flow).
+      try {
+        const res = await fetch("/api/supabase/customers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: WALKIN_SOURCE_NAME,
+            phone: "",
+            customer_type: "guest",
+            source_id: WALKIN_SOURCE_ID,
+            branch_id: selectedBranchId || null,
+          }),
+        });
+        const json = await res.json();
+        if (json.ok && json.data?.id) {
+          return { ok: true, customerId: json.data.id };
+        }
+        return { ok: false, error: json.error || "Không thể tạo khách vãng lai" };
+      } catch {
+        return { ok: false, error: "Không thể tạo khách vãng lai" };
+      }
+    }
+    try {
+      const params = new URLSearchParams();
+      params.set("limit", "20");
+      if (typedPhone) params.set("search", typedPhone);
+      else params.set("search", typedName);
+      const matchRes = await fetch(`/api/supabase/customers?${params.toString()}`);
+      const matchJson = await matchRes.json();
+      let matchedId: string | null = null;
+      if (matchJson.ok && Array.isArray(matchJson.data)) {
+        const exact = (matchJson.data as Array<{ id: string; phone?: string | null; name?: string }>).find(
+          (c) =>
+            typedPhone
+              ? (c.phone || "") === typedPhone
+              : (c.name || "") === typedName
+        );
+        if (exact) matchedId = exact.id;
+      }
+      if (matchedId) {
+        return { ok: true, customerId: matchedId };
+      }
+      // No match → create a new customer with the typed phone + name.
+      const createRes = await fetch("/api/supabase/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: typedName || typedPhone,
+          phone: typedPhone || undefined,
+          branch_id: selectedBranchId || null,
+        }),
+      });
+      const createJson = await createRes.json();
+      if (createJson.ok && createJson.data?.id) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+        return { ok: true, customerId: createJson.data.id };
+      }
+      return { ok: false, error: createJson.error || "Không thể tạo khách hàng" };
+    } catch {
+      return { ok: false, error: "Không thể tạo khách hàng" };
+    }
+  };
+
+  // ------------------------------------------------------------------
+  // Multi-customer submit handler (CREATE mode, numberOfCustomers >= 2).
+  //   - scheduleMode "same": 1 POST with all N services, customer_id =
+  //     slot 0's resolved id. The other slots' customer info is NOT sent
+  //     to the API (the booking API only accepts one customer_id per
+  //     booking — a documented limitation).
+  //   - scheduleMode "different": N separate POSTs, each with 1 service
+  //     and that slot's resolved customer_id. All N bookings share the
+  //     same date_time + branch_id + status. Failures are reported but
+  //     already-created bookings stay.
+  // ------------------------------------------------------------------
+  const handleMultiCustomerSubmit = async (data: BookingFormValues) => {
+    setIsMultiSubmitting(true);
+    try {
+      // 1. Resolve customer_id for each slot.
+      const resolvedIds: string[] = [];
+      for (let i = 0; i < data.services.length; i++) {
+        const svc = data.services[i];
+        const result = await resolveCustomerId(
+          svc.customerPhone || "",
+          svc.customerName || ""
+        );
+        if (!result.ok || !result.customerId) {
+          setConflictMessage(
+            `Khách #${i + 1}: ${result.error || "Không thể xác định khách hàng"}`
+          );
+          return;
+        }
+        resolvedIds.push(result.customerId);
+      }
+
+      // 2. Validate the booking (conflict check). Works for both modes —
+      //    within-form staff uniqueness + existing-booking overlap.
+      const error = await validateBooking(data);
+      if (error) {
+        setConflictMessage(error);
+        return;
+      }
+
+      // 3. Build the shared date_time + booking-level fields.
+      const firstDate = data.date.split("/").reverse().join("-");
+      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+
+      if (scheduleMode === "same") {
+        // --- Cùng lịch: 1 POST with all services ---
+        const payload = {
+          date_time: dateTime,
+          customer_id: resolvedIds[0],
+          customer_source_id: data.customerSourceId || null,
+          customer_channel_id: data.customerChannelId || null,
+          number_of_customers: data.numberOfCustomers,
+          status: data.status,
+          note: data.note || null,
+          branch_id: selectedBranchId || null,
+          created_by: user?.id || null,
+          services: data.services
+            .filter((s) => s.serviceId)
+            .map((g) => ({
+              service_id: g.serviceId,
+              service_category_id: g.serviceCategoryId || null,
+              staff_id: g.staffId || null,
+            })),
+        };
+        try {
+          const res = await fetch("/api/supabase/bookings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const json = await res.json();
+          if (!json.ok) {
+            setConflictMessage(json.error || "Không thể tạo lịch hẹn");
+            return;
+          }
+          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          onClose();
+        } catch (e) {
+          setConflictMessage(
+            e instanceof Error ? e.message : "Không thể tạo lịch hẹn"
+          );
+        }
+      } else {
+        // --- Khác lịch: N separate POSTs, 1 service each ---
+        const results: Array<{ slot: number; ok: boolean; error?: string }> = [];
+        for (let i = 0; i < data.services.length; i++) {
+          const svc = data.services[i];
+          const payload = {
+            date_time: dateTime,
+            customer_id: resolvedIds[i],
+            customer_source_id: data.customerSourceId || null,
+            customer_channel_id: data.customerChannelId || null,
+            number_of_customers: 1,
+            status: data.status,
+            note: data.note || null,
+            branch_id: selectedBranchId || null,
+            created_by: user?.id || null,
+            services: [
+              {
+                service_id: svc.serviceId,
+                service_category_id: svc.serviceCategoryId || null,
+                staff_id: svc.staffId || null,
+              },
+            ],
+          };
+          try {
+            const res = await fetch("/api/supabase/bookings", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            const json = await res.json();
+            if (!json.ok) {
+              results.push({
+                slot: i,
+                ok: false,
+                error: json.error || "Lỗi không xác định",
+              });
+            } else {
+              results.push({ slot: i, ok: true });
+            }
+          } catch (e) {
+            results.push({
+              slot: i,
+              ok: false,
+              error: e instanceof Error ? e.message : "Lỗi mạng",
+            });
+          }
+        }
+        const failed = results.filter((r) => !r.ok);
+        const successCount = results.length - failed.length;
+        if (failed.length > 0) {
+          const errorMsg = failed
+            .map((f) => `Khách #${f.slot + 1}: ${f.error}`)
+            .join("\n");
+          setConflictMessage(
+            `Đã tạo ${successCount}/${results.length} lịch hẹn. ` +
+              (successCount > 0
+                ? "Các lịch còn lại lỗi:\n"
+                : "Tất cả đều lỗi:\n") +
+              errorMsg
+          );
+        } else {
+          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          onClose();
+        }
+      }
+    } finally {
+      setIsMultiSubmitting(false);
+    }
+  };
+
   const onSubmit = async (data: BookingFormValues) => {
     if (isLocked) {
       setConflictMessage(lockReason);
@@ -1402,6 +1778,13 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         setConflictMessage("Vui lòng chọn nhân viên cho tất cả dịch vụ");
         return;
       }
+    }
+    // Multi-customer mode (CREATE only, numberOfCustomers >= 2): delegate to
+    // the dedicated handler which resolves per-slot customer_ids and creates
+    // either 1 booking (Cùng lịch) or N bookings (Khác lịch).
+    if (isMultiCustomerMode) {
+      await handleMultiCustomerSubmit(data);
+      return;
     }
     // Walk-in booking: ensure a guest customer record exists. Guest records
     // (customer_type="guest") are hidden from the Customers module until an
@@ -1557,12 +1940,21 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       showNote: false,
       date: "",
       time: "",
+      customerPhone: "",
+      customerName: "",
+      customerId: "",
     });
   };
 
   const handleRemoveService = (index: number) => {
     if (fields.length > 1) {
       remove(index);
+      // In multi-customer mode, removing a row also decrements
+      // numberOfCustomers so the auto-adjust effect doesn't re-append a row
+      // to replace the one just removed.
+      if (isMultiCustomerMode) {
+        setValue("numberOfCustomers", fields.length - 1);
+      }
     }
   };
 
@@ -1664,6 +2056,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                   // on submit (hidden from the Customers module until paid).
                   <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-sm text-gray-700">
                     Khách vãng lai
+                  </div>
+                ) : isMultiCustomerMode ? (
+                  // Multi-customer mode: each customer slot has its own
+                  // phone/name inputs in the Dịch vụ section below. The
+                  // top-level phone/name fields are hidden to avoid
+                  // confusion (they'd be ignored at submit anyway).
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-3 text-xs text-emerald-800">
+                    Thông tin từng khách được nhập trong phần Dịch vụ bên dưới (Khách #1, #2, ...).
                   </div>
                 ) : (
                 <>
@@ -2019,9 +2419,42 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             {/* RIGHT COLUMN - Section 3: Dịch vụ — scrollable so many services
                 don't grow the dialog. */}
             <div className="space-y-3 min-h-0 overflow-y-auto overflow-x-hidden pr-1">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-700">
-                Dịch vụ
-              </h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                  Dịch vụ
+                </h3>
+                {isMultiCustomerMode && (
+                  // Cùng lịch / Khác lịch toggle — only in multi-customer mode.
+                  // "Cùng lịch" (default): all N services share ONE booking
+                  // (parallel staff, same date_time, 1 booking record).
+                  // "Khác lịch": each slot gets its OWN separate booking (N
+                  // POST requests, each with 1 service + its own customer_id).
+                  <div className="flex items-center gap-1 rounded-md border bg-gray-100 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setScheduleMode("same")}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                        scheduleMode === "same"
+                          ? "bg-white text-emerald-700 shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      Cùng lịch
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScheduleMode("different")}
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                        scheduleMode === "different"
+                          ? "bg-white text-emerald-700 shadow-sm"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      Khác lịch
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <div className="space-y-3">
                 {/* Scrollable services list: when the customer adds many services
@@ -2032,18 +2465,162 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                     key={field.id}
                     className="rounded-lg border bg-gray-50 p-4 space-y-3"
                   >
-                    {fields.length > 1 && (
-                      <div className="flex justify-end">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRemoveService(index)}
-                          className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                    {isMultiCustomerMode ? (
+                      // Multi-customer: "Khách #i" header + remove button,
+                      // followed by per-slot SĐT + Tên khách inputs (with
+                      // the same autocomplete/lookup logic as the top-level
+                      // "Thông tin khách hàng" section).
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-emerald-700">
+                            Khách #{index + 1}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveService(index)}
+                            className="h-7 w-7 p-0 text-red-500 hover:text-red-700"
+                            title="Xóa khách này"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          {/* Per-slot SĐT input with autocomplete dropdown */}
+                          <div className="space-y-1">
+                            <Label htmlFor={`services.${index}.customerPhone`}>
+                              Số điện thoại
+                            </Label>
+                            <div className="relative">
+                              <Input
+                                id={`services.${index}.customerPhone`}
+                                placeholder="Số điện thoại"
+                                value={watch(`services.${index}.customerPhone`) || ""}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setValue(`services.${index}.customerPhone`, val);
+                                  // Editing phone clears name + selected customer.
+                                  setValue(`services.${index}.customerName`, "");
+                                  setValue(`services.${index}.customerId`, "");
+                                  setActiveSlotDropdown(index);
+                                }}
+                                onFocus={() => setActiveSlotDropdown(index)}
+                                onBlur={() => {
+                                  // Delay so click events on dropdown items
+                                  // fire before the dropdown closes.
+                                  setTimeout(() => {
+                                    setActiveSlotDropdown((cur) =>
+                                      cur === index ? null : cur
+                                    );
+                                  }, 200);
+                                }}
+                                autoComplete="off"
+                                name={`slot-phone-${index}-off`}
+                              />
+                              {/* Autocomplete dropdown — only for the ACTIVE
+                                  slot, and only when there's text + matches. */}
+                              {activeSlotDropdown === index &&
+                                (activeSlotPhone || activeSlotName) &&
+                                filteredSlotCustomers.length > 0 && (
+                                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
+                                    {filteredSlotCustomers.map((customer) => (
+                                      <div
+                                        key={customer.id}
+                                        className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
+                                        onMouseDown={(e) => {
+                                          // Prevent the input's onBlur from
+                                          // firing before the click registers.
+                                          e.preventDefault();
+                                          setValue(`services.${index}.customerId`, customer.id);
+                                          setValue(`services.${index}.customerPhone`, customer.phone);
+                                          setValue(`services.${index}.customerName`, customer.name);
+                                          setActiveSlotDropdown(null);
+                                        }}
+                                      >
+                                        <div className="text-xs font-medium">{customer.phone}</div>
+                                        <div className="text-[10px] text-gray-500">
+                                          {customer.name} | {customer.code}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                            </div>
+                          </div>
+                          {/* Per-slot Tên khách input */}
+                          <div className="space-y-1">
+                            <Label htmlFor={`services.${index}.customerName`}>
+                              Tên khách
+                            </Label>
+                            <div className="relative">
+                              <Input
+                                id={`services.${index}.customerName`}
+                                placeholder="Tên khách"
+                                value={watch(`services.${index}.customerName`) || ""}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setValue(`services.${index}.customerName`, val);
+                                  // Editing name clears phone + selected customer.
+                                  setValue(`services.${index}.customerPhone`, "");
+                                  setValue(`services.${index}.customerId`, "");
+                                  setActiveSlotDropdown(index);
+                                }}
+                                onFocus={() => setActiveSlotDropdown(index)}
+                                onBlur={() => {
+                                  setTimeout(() => {
+                                    setActiveSlotDropdown((cur) =>
+                                      cur === index ? null : cur
+                                    );
+                                  }, 200);
+                                }}
+                                autoComplete="off"
+                                name={`slot-name-${index}-off`}
+                              />
+                              {activeSlotDropdown === index &&
+                                (activeSlotPhone || activeSlotName) &&
+                                filteredSlotCustomers.length > 0 && (
+                                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
+                                    {filteredSlotCustomers.map((customer) => (
+                                      <div
+                                        key={customer.id}
+                                        className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          setValue(`services.${index}.customerId`, customer.id);
+                                          setValue(`services.${index}.customerPhone`, customer.phone);
+                                          setValue(`services.${index}.customerName`, customer.name);
+                                          setActiveSlotDropdown(null);
+                                        }}
+                                      >
+                                        <div className="text-xs font-medium">{customer.name}</div>
+                                        <div className="text-[10px] text-gray-500">
+                                          {customer.phone} | {customer.code}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      // Single-customer mode: existing layout — remove button
+                      // only when there's more than 1 row.
+                      fields.length > 1 && (
+                        <div className="flex justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveService(index)}
+                            className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )
                     )}
 
                     <div className="grid grid-cols-3 gap-3">
@@ -2139,6 +2716,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                 ))}
                 </div>
 
+                {/* "+ Thêm dịch vụ" button — hidden in multi-customer mode
+                    because row count is controlled by the "Số khách" input
+                    (the auto-adjust effect keeps fields.length === N). */}
+                {!isMultiCustomerMode && (
                 <Button
                   type="button"
                   variant="outline"
@@ -2148,6 +2729,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                   <Plus className="mr-2 h-4 w-4" />
                   Thêm dịch vụ
                 </Button>
+                )}
 
                 {/* Consolidated summary of all selected services. Each service's
                     start time is derived from the booking-level (date, time)
@@ -2260,7 +2842,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               disabled={
                 isLocked ||
                 createMutation.isPending ||
-                updateMutation.isPending
+                updateMutation.isPending ||
+                isMultiSubmitting
               }
               title={
                 isLocked
@@ -2269,7 +2852,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               }
               className="bg-emerald-600 hover:bg-emerald-700"
             >
-              {createMutation.isPending || updateMutation.isPending
+              {createMutation.isPending || updateMutation.isPending || isMultiSubmitting
                 ? "Đang lưu..."
                 : isLocked
                 ? "Không thể lưu"

@@ -91,6 +91,14 @@ export const bookingServiceEntrySchema = z.object({
   // the submit logic can populate them before sending.
   date: z.string().optional(),
   time: z.string().optional(),
+  // Multi-customer mode (numberOfCustomers >= 2): per-slot customer info.
+  // Each service row ("customer slot") carries its own phone/name so a
+  // distinct customer_id can be resolved at submit time. When
+  // numberOfCustomers === 1 these stay empty and the booking-level
+  // customerId is used (the original single-customer flow).
+  customerPhone: z.string().optional(),
+  customerName: z.string().optional(),
+  customerId: z.string().optional(), // resolved at submit
 });
 
 export const bookingSchema = z.object({
