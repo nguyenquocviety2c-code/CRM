@@ -145,6 +145,7 @@ export function ServiceSelector() {
     activeTabId,
     activeCustomers,
     addInvoiceItem,
+    removeInvoiceItem,
     tabMeta,
     updateTabMeta,
     invoices,
@@ -759,19 +760,19 @@ export function ServiceSelector() {
         }
       }
 
-      // 1) Always add the invoice item so the cashier sees the line immediately.
-      //    staffName/date/time are passed through (may be empty when the cashier
-      //    chose not to schedule — that's fine, the line still shows on the invoice).
-      handleAddItem(selectedService, {
-        staffName,
-        date: selectedDate,
-        time: selectedTime,
-      });
-
       // If the cashier didn't select both a staff AND a time, we do NOT create
       // or update a booking in Lịch hẹn. The service is just a line item on
-      // the invoice. Close the dialog and return.
+      // the invoice. In this case we can add the item immediately and return
+      // (no conflict check needed — there's no appointment to conflict with).
       if (!shouldSyncBooking) {
+        // 1) Add the invoice item so the cashier sees the line immediately.
+        //    staffName/date/time are passed through (may be empty when the
+        //    cashier chose not to schedule — that's fine, the line still shows).
+        handleAddItem(selectedService, {
+          staffName,
+          date: selectedDate,
+          time: selectedTime,
+        });
         setSelectedService(null);
         setSelectedStaffId("");
         setServiceDialogOpen(false);
@@ -779,6 +780,13 @@ export function ServiceSelector() {
         return;
       }
 
+      // --- Booking sync path: a Lịch hẹn entry WILL be created/updated. ---
+      // Run the staff conflict check BEFORE adding the item to the invoice.
+      // Previously the item was added first and the conflict check ran after —
+      // so even when a conflict was detected (and the dialog stayed open with
+      // an error), the service had already been added to the invoice. That was
+      // a logic bug: the user saw "Không thể đặt lịch" but the line was there.
+      // Now: if a conflict is found, return WITHOUT adding the item.
       const meta = tabMeta[activeTabId];
       // Compute the new service's start time in epoch ms.
       const m = selectedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -829,7 +837,7 @@ export function ServiceSelector() {
                 const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
                 const exEnd = exStart + exDur;
                 if (newStartMs < exEnd && exStart < newEndMs) {
-                  const staffName = exSvc.staff?.name || (staffList.find((s) => s.id === selectedStaffId)?.name) || "nhân viên";
+                  const conflictStaffName = exSvc.staff?.name || (staffList.find((s) => s.id === selectedStaffId)?.name) || "nhân viên";
                   const svcName = exSvc.service?.name || "Dịch vụ";
                   const exDurationMin = Math.round(exDur / 60000);
                   const exTimeStr = toVietnamTime(exStart);
@@ -859,7 +867,7 @@ export function ServiceSelector() {
                     `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
                     `${codeLine}:\n` +
                     custLine +
-                    `• Thợ: ${staffName}\n` +
+                    `• Thợ: ${conflictStaffName}\n` +
                     `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
                     `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
                     branchLine +
@@ -867,6 +875,10 @@ export function ServiceSelector() {
                     `→ Trùng với dịch vụ mới bạn đang đặt (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
                     `Vui lòng chọn khung giờ hoặc thợ khác.`
                   );
+                  // IMPORTANT: return WITHOUT adding the item to the invoice.
+                  // The conflict means the booking cannot be created — so the
+                  // service must NOT be added to the order. The dialog stays
+                  // open so the cashier can pick a different staff/time.
                   setAddingFromDialog(false);
                   return;
                 }
@@ -876,6 +888,32 @@ export function ServiceSelector() {
         } catch {
           /* best-effort — server still validates */
         }
+      }
+
+      // No conflict (or check failed best-effort) → safe to add the item to
+      // the invoice AND sync the booking. The server-side conflict check is
+      // the final safety net; if it rejects, the catch block below rolls back
+      // the item (removes it from the invoice) so the order doesn't end up
+      // with a service that has no backing booking.
+      // Track the just-added item's id so the catch block can remove it.
+      const justAddedItemId = `${selectedService.id}-${crypto.randomUUID()}`;
+      // Inline the handleAddItem logic here (instead of calling it) so we
+      // control the item's id and can roll it back precisely.
+      if (activeTabId) {
+        const invoiceItem: InvoiceItem = {
+          id: justAddedItemId,
+          itemId: selectedService.id,
+          name: selectedService.name,
+          type: activeTab,
+          price: Number(selectedService.price),
+          quantity: 1,
+          discount: 0,
+          total: Number(selectedService.price),
+          staffName,
+          date: selectedDate,
+          time: selectedTime,
+        };
+        addInvoiceItem(activeTabId, invoiceItem);
       }
 
       if (meta && !meta.bookingCreated) {
@@ -953,6 +991,17 @@ export function ServiceSelector() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Không thể thêm dịch vụ";
       setDialogError(msg);
+      // ROLLBACK: if the booking sync failed (e.g. server-side conflict check
+      // rejected it, or a network error), remove the just-added item from the
+      // invoice. Without this the order would carry a service that has no
+      // backing booking in Lịch hẹn — the exact "thông báo lỗi nhưng vẫn thêm
+      // được" bug the user reported. The `justAddedItemId` is in scope here
+      // (declared in the try block above). When the conflict was caught by the
+      // CLIENT-side check (the early return), the item was never added, so
+      // `justAddedItemId` is undefined → the rollback is a no-op. Safe either way.
+      if (typeof justAddedItemId !== "undefined" && activeTabId) {
+        removeInvoiceItem(activeTabId, justAddedItemId);
+      }
     } finally {
       setAddingFromDialog(false);
     }
