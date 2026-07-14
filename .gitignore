@@ -77,3 +77,4 @@ multi-service-*.png
 .staff-revenue-verify.png
 .claude
 .z-ai-config
+.env*
