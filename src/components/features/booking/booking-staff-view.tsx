@@ -476,9 +476,11 @@ export function BookingStaffView({
           - 6+ days: exactly 5 columns visible, rest scroll horizontally
           - Within each (day × hour) cell, ALL bookings that start in that
             hour are shown as compact, non-overlapping chips (vertical stack).
-          - Time slot placement uses the ISO string directly (regex) so a 09:30
-            booking lands in the 09:00 row, NOT in 16:00 (avoids UTC→local TZ
-            shift that previously mis-bucketed bookings).
+          - Time slot placement uses `toVietnamDay` + `toVietnamTime` so a
+            09:30 VN booking lands in the 09:00 row, NOT in 16:00 (avoids the
+            UTC→local TZ shift that previously mis-bucketed bookings; also
+            accounts for the post-migration storage where the raw "THH:MM"
+            segment of `date_time` is the UTC time, not the VN time).
           ========================================================================= */}
       {dateRange && useMultiDayLayout && (
         <DayRangeGrid
@@ -997,24 +999,23 @@ function dateToLocalDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Extract { dayKey, hour, minute } directly from the ISO `date_time` string
- *  via regex. This AVOIDS timezone shifts — `new Date("2026-07-08T09:30:00+00:00").getHours()`
- *  returns 16 in UTC+7 browsers, which is what caused bookings to land in the
- *  wrong row (a 09:30 booking showing up in the 16:00 row). By parsing the
- *  string directly we always get the time the user intended when booking. */
+/** Extract { dayKey, hour, minute } from the booking's `date_time` as VIETNAM
+ *  wall-clock values. Post-migration (Task 6), `date_time` is stored as a UTC
+ *  ISO string (e.g. "2026-07-14T03:30:00+00:00" represents 10:30 VN), so the
+ *  raw "THH:MM" segment is the UTC time, NOT the VN time the user entered.
+ *  Using `toVietnamDay` + `toVietnamTime` ensures the booking lands in the
+ *  correct row+column of the multi-day staff grid (a 10:30 VN booking lands in
+ *  the "10:00" row of column "2026-07-14", not the skipped "03:00" row). */
 function getBookingDayHour(booking: Booking): { dayKey: string; hour: number; minute: number } | null {
   const dt = booking.date_time;
   if (!dt || typeof dt !== "string") return null;
-  // Match the date + time portions directly from the ISO string.
-  const m = dt.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  const dayKey = toVietnamDay(dt);
+  const hhmm = toVietnamTime(dt);
+  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
   if (!m) return null;
-  const year = parseInt(m[1], 10);
-  const month = parseInt(m[2], 10);
-  const day = parseInt(m[3], 10);
-  const hour = parseInt(m[4], 10);
-  const minute = parseInt(m[5], 10);
-  if (isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hour) || isNaN(minute)) return null;
-  const dayKey = `${m[1]}-${m[2]}-${m[3]}`;
+  const hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  if (isNaN(hour) || isNaN(minute)) return null;
   return { dayKey, hour, minute };
 }
 
@@ -1074,14 +1075,67 @@ function DayRangeGrid({
       if (arr) arr.push(b);
       else m.set(key, [b]);
     }
-    // Sort each cell's bookings by start minute (earlier first → top).
-    // Use the regex-parsed minute (not Date.getMinutes) to avoid TZ shifts.
+    // Sort each cell's bookings:
+    // 1. UNPAID bookings (pending/new/confirmed/checkin) take priority and
+    //    render ON TOP of cancelled/no_show ones. When a cancelled booking
+    //    would occupy the same slot as an unpaid booking (same start minute),
+    //    the unpaid one wins the visible position. This implements the user's
+    //    requirement: "lịch chưa thanh toán hiển thị đè lên lịch đã hủy".
+    // 2. Within the same priority, sort by start minute (earlier → top) so
+    //    the cell still reads top-to-bottom chronologically.
+    const PRIORITY: Record<string, number> = {
+      // unpaid / active → priority 0 (top)
+      pending: 0,
+      new: 0,
+      confirmed: 0,
+      checkin: 0,
+      // paid → priority 1
+      checkout: 1,
+      // cancelled / no-show → priority 2 (bottom, "hidden under" unpaid)
+      cancelled: 2,
+      no_show: 2,
+    };
     for (const arr of m.values()) {
       arr.sort((a, b) => {
+        const pa = PRIORITY[a.status] ?? 1;
+        const pb = PRIORITY[b.status] ?? 1;
+        if (pa !== pb) return pa - pb;
         const ai = getBookingDayHour(a);
         const bi = getBookingDayHour(b);
         return (ai?.minute ?? 0) - (bi?.minute ?? 0);
       });
+      // When an UNPAID booking and a CANCELLED booking share the EXACT same
+      // start minute (a true slot collision — e.g. a cancelled booking at
+      // 10:30 and a new confirmed booking at 10:30 for the same staff), hide
+      // the cancelled one entirely so the unpaid booking's chip is fully
+      // visible (not stacked under/over the cancelled chip). Bookings with
+      // different start minutes stay (they're different time slots within
+      // the same hour cell).
+      const hasUnpaid = arr.some(
+        (b) => (PRIORITY[b.status] ?? 1) === 0
+      );
+      if (hasUnpaid) {
+        // Build a set of start-minutes that have an unpaid booking.
+        const unpaidMinutes = new Set<number>();
+        for (const b of arr) {
+          if ((PRIORITY[b.status] ?? 1) === 0) {
+            const info = getBookingDayHour(b);
+            if (info) unpaidMinutes.add(info.minute);
+          }
+        }
+        // Remove cancelled/no_show bookings whose start minute collides with
+        // an unpaid booking's start minute. Keep non-colliding cancelled ones
+        // (different slot within the same hour) so the staff still sees them.
+        for (let i = arr.length - 1; i >= 0; i--) {
+          const b = arr[i];
+          const isCancelled = b.status === "cancelled" || b.status === "no_show";
+          if (!isCancelled) continue;
+          const info = getBookingDayHour(b);
+          if (info && unpaidMinutes.has(info.minute)) {
+            arr.splice(i, 1);
+          }
+        }
+      }
     }
     return m;
   }, [bookings]);

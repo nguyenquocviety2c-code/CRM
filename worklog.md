@@ -380,3 +380,84 @@ Stage Summary:
 - The migration is one-off and irreversible (the backup file is the rollback path). The migration route file is left in place (idempotent — won't re-run) so the migration can be re-verified or audited later; it can be deleted if desired without affecting anything.
 - Screenshots: /home/z/my-project/verify-timezone-conflict-dialog.png (booking dialog conflict alert showing LH000033 with correct VN times).
 - Backup file: /home/z/my-project/migration-backup-1783984970730.json (rollback reference for the 46 migrated bookings).
+
+---
+Task ID: 7
+Agent: General-purpose sub-agent (Z.ai Code)
+Task: Verify slot priority in Khung giờ (time-grid) calendar view — unpaid bookings must render ON TOP of cancelled/no_show ones when they collide in the same slot.
+
+Work Log:
+- Read worklog.md to understand prior work (Tasks 1-6). Task 6 migrated 46 LEGACY bookings' `date_time` from raw VN time (with lying +00:00 offset) to true UTC representation. Post-migration, the raw "THH:MM" segment of `date_time` is the UTC time, not the VN time the user entered. Task 6 also fixed 5 display paths to use `toVietnamTime`/`toVietnamDay` helpers, but it did NOT touch the multi-day grid's bucketing functions.
+
+- Read the user's stated changes to verify:
+  * `src/components/features/booking/booking-time-grid.tsx` — `cellMap` useMemo in `CustomerDayRangeGrid` (Customer view, Khung giờ multi-day mode). Now sorts each cell's bookings by PRIORITY (unpaid=0 → paid/checkout=1 → cancelled/no_show=2), then by start minute within same priority. When an unpaid booking and a cancelled booking share the EXACT same start minute, the cancelled one is HIDDEN via `arr.splice`.
+  * `src/components/features/booking/booking-staff-view.tsx` — `cellMap` useMemo in `DayRangeGrid` (Staff view, Khung giờ multi-day mode). Same priority logic applied.
+  * Verified both `cellMap` blocks are present and correct (lines 1159-1233 in time-grid, lines 1065-1140 in staff-view).
+
+- Step 1 — Created test collision via API (SUCCESS):
+  * POSTed to `/api/supabase/bookings` with `date_time: "2026-07-14T10:30:00+07:00"`, `customer_id: 80de14c9-...` (huy2), `branch_id: 494993c8-...` (Level 1 Minh Khai), `status: "confirmed"`, `services: [{ service_id: 3fbe1b5b-... (Master Cut 60min), staff_id: f0095749-... (Nguyễn Trường Đan) }]`.
+  * Response: HTTP 201 with `{ok: true, data: {id: "dbbaf8e0-41f5-4347-a9f7-b9c4faf9d923", code: "LH000061", date_time: "2026-07-14T03:30:00+00:00" (correct UTC = 10:30 VN), status: "confirmed", customer: huy2, staff: Nguyễn Trường Đan}}`.
+  * The conflict check passed because LH000055 (cancelled, Bi Trần, same slot 10:30 VN) is correctly skipped — cancelled bookings free the slot.
+
+- DIAGNOSIS — Found a pre-existing timezone bug blocking the verification:
+  * After creating the test booking, I logged in as `ductran / 123456`, navigated to `/booking`, set the date range to "14/07/2026 ~ 21/07/2026" (8-day multi-day range via the "7 ngày" preset button), and switched to "Khung giờ" mode.
+  * In the multi-day customer grid, the cell at row "10:00", column 14/07 was EMPTY — neither LH000055 (cancelled Bi Trần) nor LH000061 (confirmed huy2) appeared. Only LH000059 (Hoàng Vũ, 16:30 VN = 09:30 UTC) appeared, and it landed in the "09:00" row (UTC hour) but displayed "16:30" (VN time) — clearly wrong.
+  * Root cause: `cdgBookingDayHour` (booking-time-grid.tsx:1106) and `getBookingDayHour` (booking-staff-view.tsx:1005) both extracted the raw "THH:MM" segment from the ISO `date_time` string via regex. Post-migration, this segment is the UTC time, NOT the VN time. So a booking at 10:30 VN (stored as `2026-07-14T03:30:00+00:00`) was bucketed into hour=03, then SKIPPED by `if (info.hour < START_HOUR || info.hour >= END_HOUR) continue;` (START_HOUR=8). Bookings at VN hours 08:00-14:59 (UTC hours 01:00-07:59) were ALL silently dropped from the multi-day grid.
+  * This is a regression introduced by Task 6's migration. The migration changed the meaning of the raw "THH:MM" segment from VN time to UTC time, but `cdgBookingDayHour` and `getBookingDayHour` were not updated to compensate (the Task 6 worklog only lists 5 display paths fixed — these 2 bucketing functions were missed).
+  * Confirmed the bug via Python simulation: replicating the `cellMap` logic on the bookings array, the cell `2026-07-14|3` (UTC hour 3 = VN hour 10) WOULD contain both LH000061 (confirmed, huy2, minute=30) and LH000055 (cancelled, Bi Trần, minute=30). After applying the priority filter, LH000055 is correctly REMOVED — only LH000061 remains. So the priority LOGIC is correct, but the cell at hour=3 is outside the visible [8,21) window, so the user can't see it.
+
+- FIX — Updated both bucketing functions to use timezone-safe helpers (3-line change each):
+  * `cdgBookingDayHour` (booking-time-grid.tsx): replaced the regex extraction with `toVietnamDay(dt)` for dayKey + `toVietnamTime(dt)` for hour/minute. Added `toVietnamDay` to the existing `import { toVietnamTime } from "@/lib/utils";` → `import { toVietnamTime, toVietnamDay } from "@/lib/utils";`.
+  * `getBookingDayHour` (booking-staff-view.tsx): same fix. `toVietnamDay` was already imported.
+  * Updated the outdated comment in booking-staff-view.tsx:479-481 (it claimed "Time slot placement uses the ISO string directly (regex)..." — now says "uses `toVietnamDay` + `toVietnamTime`...").
+  * After the fix, PM2 recompiled successfully (`✓ Compiled in 226ms` and `✓ Compiled in 235ms`).
+
+- Step 2 — Customer view (Khung giờ, multi-day) verification (PASS):
+  * Logged in as `ductran / 123456`, navigated to `/booking`, set range to 14/07-21/07 (8 days) via "7 ngày" button, switched to "View khách hàng" + "Khung giờ" mode.
+  * Cell at row "10:00", column 14/07: chipCount=1, text="10:30huy20343218682Master Cut(60)NV: Nguyễn Trường ĐanTổng: 60 phút". `hasBiTran: false`, `hasHuy2: true`. The cancelled LH000055 (Bi Trần) is HIDDEN; the confirmed LH000061 (huy2) is SHOWN.
+  * "Bi Trần" is NOT in the cell text, NOT in the entire 10:00 row.
+  * Screenshot: `/home/z/my-project/verify-customer-slot-priority.png` (87,848 bytes).
+
+- Step 3 — Staff view (Khung giờ, multi-day) verification (PASS):
+  * Switched to "View nhân viên" (via JS `btn.click()` — agent-browser's `click @e11` didn't trigger React's onClick the first time). Confirmed the toggle button shows "View nhân viên" as active (`bg-emerald-600 text-white`).
+  * Cell at row "10:00", column 14/07: chipCount=1, text="10:30huy20343218682Master Cut(60)NV: Nguyễn Trường ĐanTổng: 60 phút". `hasBiTran: false`, `hasHuy2: true`. Cancelled LH000055 is HIDDEN; confirmed LH000061 is SHOWN.
+  * Screenshot: `/home/z/my-project/verify-staff-slot-priority.png` (different MD5 from customer view — `b865cad1...` vs `9b82234f...` — confirming the view-toggle button state differs).
+  * NOTE: The task description said "Find the 10:30 row on 14/07, look at the Nguyễn Trường Đan column" — that describes the SINGLE-DAY staff-column layout (columns = staff). However, the priority `cellMap` logic ONLY applies in the MULTI-DAY DayRangeGrid (columns = days). The single-day staff-column layout uses `layoutSegments` (absolutely-positioned segments with overlap-aware columns), which does NOT apply the priority logic. I verified the fix in multi-day mode, which is the only place the `cellMap` priority logic runs.
+
+- Step 4 — Non-colliding cancelled booking still shows (PASS):
+  * Cell at row "09:00", column 14/07: chipCount=1, text="09:30Bi Trần0914565721Uốn Gợn Wavy(90)NV: Nguyễn Thế MạnhTổng: 90 phút". This is LH000057 (cancelled, Bi Trần, 09:30 VN).
+  * `hasBiTran: true`. The cancelled booking is STILL VISIBLE because there's no unpaid booking colliding at the same minute (09:30) in the same cell.
+  * This confirms the priority logic ONLY hides cancelled bookings that truly collide at the same minute — non-colliding cancelled bookings (different minute within the same hour cell) are kept visible.
+  * Screenshot: `/home/z/my-project/verify-cancelled-still-shown.png` (77,481 bytes).
+
+- Step 5 — Cleanup (PASS):
+  * DELETEd the test booking: `DELETE /api/supabase/bookings/dbbaf8e0-41f5-4347-a9f7-b9c4faf9d923` → HTTP 200 `{ok: true, data: {id: "dbbaf8e0-..."}}`.
+  * Verified LH000061 is no longer in the bookings list. Remaining 2026-07-14 bookings: LH000055 (cancelled), LH000057 (cancelled), LH000058 (confirmed), LH000059 (confirmed), LH000060 (checkin) — exactly the same as before my test.
+  * Re-verified the customer view post-cleanup: cell at 10:00 row, 14/07 now shows LH000055 (cancelled Bi Trần) — `hasBiTran: true, hasHuy2: false, chipCount: 1`. This confirms the priority logic works in BOTH directions: when the unpaid booking is removed, the cancelled booking becomes visible again.
+
+- Step 6 — Dev log + lint (PASS):
+  * `.pm2-logs/crm-out.log`: all requests during the test window returned HTTP 200 (including the POST 201 for booking creation and DELETE 200 for cleanup). Two `✓ Compiled in 226ms` / `✓ Compiled in 235ms` / `✓ Compiled in 423ms` lines from my code edits. No `error|warn|exception|fail|⨯` matches.
+  * `.pm2-logs/crm-error.log`: 0 bytes (empty).
+  * `npx eslint src/components/features/booking/booking-time-grid.tsx src/components/features/booking/booking-staff-view.tsx`: EXIT_CODE 0, no output (0 errors, 0 warnings).
+
+- Browser automation notes:
+  * The Radix UI `DropdownMenu` trigger (the "Danh sách / Khung giờ" toggle) did NOT open via `agent-browser click @e14` (snapshot kept showing `expanded=false`). The fix was to dispatch a full pointer-event sequence in JS: `pointerover → pointerenter → pointerdown → mousedown → pointerup → mouseup → click`, all with `button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX/Y` set to the trigger's center. After that, `[role="menu"][data-state="open"]` was findable, and clicking the "Khung giờ" menu item via the same pointer-event sequence switched the mode.
+  * The "View nhân viên" / "View khách hàng" toggle buttons also didn't respond to `agent-browser click @e11` reliably — switching to `btn.click()` via JS eval worked.
+
+Stage Summary:
+- The slot priority fix in `cellMap` (both `booking-time-grid.tsx` and `booking-staff-view.tsx`) is VERIFIED WORKING end-to-end. When an unpaid booking (pending/new/confirmed/checkin) and a cancelled/no_show booking share the EXACT same start minute in the same `(day, hour)` cell, the cancelled one is HIDDEN and the unpaid one is shown. When the unpaid booking is removed, the cancelled booking becomes visible again. Non-colliding cancelled bookings (different minute within the same hour cell) are kept visible.
+- HOWEVER, the verification required fixing a PRE-EXISTING TIMEZONE BUG in the bucketing functions `cdgBookingDayHour` (booking-time-grid.tsx:1110) and `getBookingDayHour` (booking-staff-view.tsx:1007). These functions extracted the raw "THH:MM" segment from the ISO `date_time` string via regex, which post-migration (Task 6) is the UTC time, not the VN time. This caused bookings at VN hours 08:00-14:59 (UTC hours 01:00-07:59) to be SKIPPED entirely from the multi-day grid (because their UTC hour was below START_HOUR=8). The fix: replace the regex extraction with `toVietnamDay(dt)` + `toVietnamTime(dt)` from `@/lib/utils`. This is the SAME class of fix Task 6 applied to 5 other display paths — these 2 bucketing functions were missed.
+- Important scope note: the priority `cellMap` logic ONLY applies in MULTI-DAY mode (2+ days range) for BOTH views. In SINGLE-DAY mode:
+  * Customer view uses `TimelineColumn` (absolutely-positioned segments via `layoutSegments`) — no priority logic, cancelled and unpaid segments at the same time appear side-by-side.
+  * Staff view uses the single-day staff-column layout (one column per staff, absolutely-positioned segments) — no priority logic.
+  * The task description's Step 3 ("Find the 10:30 row on 14/07, look at the Nguyễn Trường Đan column") describes the single-day staff-column layout, where the priority fix does NOT apply. The verification was done in multi-day mode (columns = days), which is where the `cellMap` priority logic actually runs.
+- Files edited (2 total, both within the user's stated change scope):
+  1. `src/components/features/booking/booking-time-grid.tsx` — (a) Added `toVietnamDay` to the `@/lib/utils` import (line 13). (b) Rewrote `cdgBookingDayHour` (lines 1103-1121) to use `toVietnamDay(dt)` + `toVietnamTime(dt)` instead of regex extraction. The cellMap priority logic (lines 1159-1233) was already correct from the user's prior edit — I did NOT touch it.
+  2. `src/components/features/booking/booking-staff-view.tsx` — (a) Rewrote `getBookingDayHour` (lines 1000-1018) to use `toVietnamDay(dt)` + `toVietnamTime(dt)` instead of regex extraction. (b) Updated the outdated comment at lines 479-483 (was "uses the ISO string directly (regex)" → now "uses `toVietnamDay` + `toVietnamTime`"). The cellMap priority logic (lines 1065-1140) was already correct from the user's prior edit — I did NOT touch it.
+- No compile errors, no runtime errors, no PM2 errors. Lint: 0 errors, 0 warnings on both edited files.
+- Test booking LH000061 (id `dbbaf8e0-41f5-4347-a9f7-b9c4faf9d923`) was created for the verification and DELETED at the end. No leftover test data.
+- Screenshots (4 total):
+  * `/home/z/my-project/verify-bug-multi-day-grid.png` — the BROKEN state BEFORE my timezone fix (multi-day grid showing only 1 chip at row 09:00 = Hoàng Vũ's 16:30 VN booking mis-bucketed; all 10:30 VN bookings missing).
+  * `/home/z/my-project/verify-customer-slot-priority.png` — Customer view (Khung giờ, multi-day) AFTER the fix: 10:00 row, 14/07 column shows ONLY huy2 (LH000061 confirmed); Bi Trần (LH000055 cancelled) is HIDDEN.
+  * `/home/z/my-project/verify-staff-slot-priority.png` — Staff view (Khung giờ, multi-day): same cell shows ONLY huy2; Bi Trần HIDDEN. "View nhân viên" toggle is active.
+  * `/home/z/my-project/verify-cancelled-still-shown.png` — Non-colliding cancelled booking LH000057 (Bi Trần, 09:30 VN) is STILL VISIBLE in the 09:00 row, 14/07 column (no unpaid booking colliding at 09:30).
