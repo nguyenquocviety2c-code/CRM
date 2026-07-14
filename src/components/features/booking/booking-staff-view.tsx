@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, LogIn } from "lucide-react";
 
 interface Staff {
   id: string;
@@ -859,16 +859,18 @@ function SegmentBlock({
       ? "text-red-700"
       : "text-sky-700";
 
-  // Status options — same logic as the list view / time-grid popover.
-  // "checkout" is NOT a manual option: it is applied automatically once
-  // payment is completed in the Cashier/Invoice dialog. Terminal statuses
-  // (checkout/no_show/cancelled) → no select.
+  // Status options — the user wants the status Select to only offer the
+  // "dead-end" transitions (Không đến / Hủy), NOT "checkin". Checkin is now a
+  // dedicated button next to "Đơn hàng" (see Line 4 below). Both "Không đến"
+  // (no_show) and "Hủy" (cancelled) make the order unpayable.
+  // - confirmed / new → ["no_show", "cancelled"] (checkin moved to the button)
+  // - checkin → ["cancelled"] only (no "Không đến" — the customer already
+  //   showed up, so "no_show" doesn't make sense; only "Hủy" to cancel)
+  // - checkout / cancelled / no_show → [] (terminal, no manual transitions)
   let statusOptions: BookingStatusType[] = [];
   if (booking.status === "confirmed" || booking.status === "new") {
-    statusOptions = ["checkin", "no_show", "cancelled"];
+    statusOptions = ["no_show", "cancelled"];
   } else if (booking.status === "checkin") {
-    // checkin → can cancel (customer showed up but changed mind before paying;
-    // the slot is freed for a new booking).
     statusOptions = ["cancelled"];
   }
 
@@ -1662,31 +1664,54 @@ export function BookingHoverDetails({
         </div>
       )}
 
-      {/* Line 4: "Tạo bởi" + "Đơn hàng" / "Xem hóa đơn" link.
+      {/* Line 4: "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn" link + "Checkin" button.
           - checkout (paid) → "Xem hóa đơn" (opens the full paid invoice view)
           - checkin (being served) → "Xem hóa đơn" (opens the invoice/payment
             dialog so the cashier can review items and proceed to payment)
           - confirmed / new / cancelled / no_show → "Đơn hàng" (opens the
-            booking edit dialog — no invoice to view yet) */}
+            booking edit dialog — no invoice to view yet)
+          The "Checkin" button appears ONLY for confirmed/new bookings (the
+          customer hasn't arrived yet). Clicking it transitions the booking to
+          "checkin" via onStatusChange("checkin"). Once checked in, the button
+          disappears (the status is already checkin). */}
       <div className="border-t pt-1">
         <div className="mb-0.5 text-xs text-gray-500">
           Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenInvoice();
-          }}
-          className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
-        >
-          {showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}
-        </button>
-        {finalAmount != null && (
-          <span className="ml-2 text-xs font-medium text-emerald-700">
-            {fmt(finalAmount)}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenInvoice();
+            }}
+            className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+          >
+            {showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}
+          </button>
+          {finalAmount != null && (
+            <span className="text-xs font-medium text-emerald-700">
+              {fmt(finalAmount)}
+            </span>
+          )}
+          {/* Checkin button — only for confirmed/new (customer not yet arrived).
+              Uses onStatusChange("checkin") to transition. Hidden for checkin
+              (already checked in) and terminal statuses (checkout/cancelled/no_show). */}
+          {(booking.status === "confirmed" || booking.status === "new") && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStatusChange("checkin");
+              }}
+              className="ml-auto flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+              title="Chuyển đơn sang trạng thái Đã checkin"
+            >
+              <LogIn className="h-3 w-3" />
+              Checkin
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Line 5: square edit + trash buttons */}
