@@ -6,7 +6,6 @@ import {
   Trash2,
   Printer,
   Check,
-  User,
   Smile,
   Camera,
   Loader2,
@@ -20,7 +19,7 @@ import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { queryKeys } from "@/lib/query-keys";
 import { isPromotionActive } from "@/lib/promotion-utils";
-import { localDayToUtcRange } from "@/lib/utils";
+import { localDayToUtcRange, toVietnamTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -470,23 +469,18 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       (Array.isArray(s.branches) && s.branches.includes(selectedBranchId))
     );
   });
-  // "Xếp nhân viên" dialog state. The dialog assigns ONE advisory staff to ALL
-  // product items in the invoice (services keep their own per-line staff).
-  const [showStaffPicker, setShowStaffPicker] = useState(false);
-  const [pickedStaffId, setPickedStaffId] = useState<string>("");
   // Per-item "change staff" dialog state. Opens when the cashier clicks the
   // small square button next to a line item's staff name. Tracks WHICH item
   // id is being edited (so OK only updates that one line) and the picked
   // staff id. The dialog is REQUIRED — OK is disabled until a staff is picked.
+  // `changeStaffError` holds the conflict message when the picked staff is
+  // already booked at this item's date/time — the change is then BLOCKED.
   const [changeStaffItemId, setChangeStaffItemId] = useState<string | null>(null);
   const [changeStaffPickStaffId, setChangeStaffPickStaffId] = useState<string>("");
-  // Whether the active invoice has at least one product item (gates the button).
-  const hasProductItems = !!(invoice && invoice.items.some((it) => it.type === "product"));
-  // The currently-assigned advisory staff name on product items (for display on
-  // the button label); undefined when no product has a staff assigned.
-  const productStaffName = invoice?.items.find(
-    (it) => it.type === "product" && it.staffName
-  )?.staffName;
+  const [changeStaffError, setChangeStaffError] = useState<string>("");
+  // True while the change-staff conflict check is running (disables OK + shows
+  // "Đang kiểm tra..." so the cashier knows the click registered).
+  const [changeStaffChecking, setChangeStaffChecking] = useState(false);
 
   // Parse the promotion's serviceIds JSON string into a list (or null = all).
   // For "service_category" type these are category ids; otherwise service ids.
@@ -1429,13 +1423,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                           );
                           setChangeStaffPickStaffId(current?.id || "");
                           setChangeStaffItemId(item.id);
+                          setChangeStaffError("");
                         }}
                         title={
                           item.staffName
                             ? `Đổi nhân viên (hiện: ${item.staffName})`
                             : "Chọn nhân viên cho mặt hàng này"
                         }
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-gray-300 text-gray-500 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-600"
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-yellow-400 bg-yellow-400 text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
                       >
                         <UserCog className="h-3 w-3" />
                       </button>
@@ -1883,34 +1878,6 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               {cancelBookingMutation.isPending ? "Đang hủy..." : "Hủy thanh toán"}
             </button>
             )}
-            <button
-              // Enabled only when the invoice has ≥1 product AND is editable.
-              // Clicking opens a small dialog to pick the advisory staff for
-              // the product item(s); the staff name then renders under each
-              // product name (same as services). Services already get their
-              // staff via the booking dialog, so this is product-only.
-              disabled={!editable || !hasProductItems}
-              onClick={() => {
-                // Pre-fill the picker with the product's current advisory staff
-                // (if any) so re-opening shows the existing assignment.
-                const current = (eligibleBranchStaff || []).find(
-                  (s) => s.name === productStaffName
-                );
-                setPickedStaffId(current?.id || "");
-                setShowStaffPicker(true);
-              }}
-              title={
-                !hasProductItems
-                  ? "Thêm sản phẩm để xếp nhân viên tư vấn"
-                  : !editable
-                  ? "Đơn hàng không thể chỉnh sửa"
-                  : "Chọn nhân viên tư vấn cho sản phẩm"
-              }
-              className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-1 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <User className="h-4 w-4" />
-              Xếp nhân viên
-            </button>
             <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-1 text-sm font-medium text-yellow-600 hover:bg-yellow-50">
               <Smile className="h-4 w-4" />
               Mời đánh giá
@@ -1984,75 +1951,24 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         </Dialog>
       )}
 
-      {/* "Xếp nhân viên" dialog — pick the advisory staff for product item(s).
-          The picked staff name is set on every product line so it renders under
-          each product name (like services). "Không chọn" clears the assignment. */}
-      <Dialog open={showStaffPicker} onOpenChange={setShowStaffPicker}>
-        <DialogContent className="max-w-[256px] sm:max-w-[256px] p-3 gap-2">
-          <DialogHeader className="space-y-0">
-            <DialogTitle className="text-sm">Xếp nhân viên</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-1">
-            <p className="text-[11px] text-gray-500">
-              Tên nhân viên sẽ hiển thị dưới tên sản phẩm.
-            </p>
-            <Select value={pickedStaffId || "none"} onValueChange={setPickedStaffId}>
-              <SelectTrigger className="w-full h-8 text-xs">
-                <SelectValue placeholder="Chọn nhân viên" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Không chọn</SelectItem>
-                {(eligibleBranchStaff || []).map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowStaffPicker(false)}>
-              Hủy
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                if (!activeTabId || !invoice) return;
-                // Resolve the picked staff's name ("" when "Không chọn" / none).
-                const staffName =
-                  pickedStaffId === "none" || !pickedStaffId
-                    ? ""
-                    : (eligibleBranchStaff || []).find((s) => s.id === pickedStaffId)?.name || "";
-                // Apply to ALL product items in the invoice.
-                invoice.items
-                  .filter((it) => it.type === "product")
-                  .forEach((it) =>
-                    setInvoiceItemStaff(activeTabId, it.id, staffName)
-                  );
-                setShowStaffPicker(false);
-              }}
-            >
-              Xác nhận
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Per-item "Đổi nhân viên" dialog — opened by the small square button
           next to each line item's staff name. Updates ONLY the one item
-          identified by `changeStaffItemId`. Unlike the bulk "Xếp nhân viên"
-          dialog above, this one is REQUIRED — OK is disabled until a staff is
-          picked (no "Không chọn" option), matching the add-flow requirement. */}
+          identified by `changeStaffItemId`. REQUIRED — OK disabled until a
+          staff is picked (no "Không chọn" option). On confirm, runs a staff
+          conflict check: if the new staff is already booked at this item's
+          date/time (excluding this tab's own booking), the change is BLOCKED
+          with a detailed conflict message (service + time). */}
       <Dialog
         open={!!changeStaffItemId}
         onOpenChange={(v) => {
           if (!v) {
             setChangeStaffItemId(null);
             setChangeStaffPickStaffId("");
+            setChangeStaffError("");
           }
         }}
       >
-        <DialogContent className="max-w-[320px] sm:max-w-[320px] p-4 gap-3">
+        <DialogContent className="max-w-[380px] sm:max-w-[380px] p-4 gap-3">
           <DialogHeader className="space-y-0">
             <DialogTitle className="text-sm">Đổi nhân viên</DialogTitle>
           </DialogHeader>
@@ -2062,7 +1978,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             </p>
             <Select
               value={changeStaffPickStaffId}
-              onValueChange={setChangeStaffPickStaffId}
+              onValueChange={(v) => {
+                setChangeStaffPickStaffId(v);
+                setChangeStaffError("");
+              }}
             >
               <SelectTrigger className="w-full h-8 text-xs">
                 <SelectValue placeholder="Chọn nhân viên" />
@@ -2084,6 +2003,11 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             {!changeStaffPickStaffId && (
               <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
             )}
+            {changeStaffError && (
+              <div className="whitespace-pre-line mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                {changeStaffError}
+              </div>
+            )}
           </div>
           <DialogFooter className="gap-2">
             <Button
@@ -2092,27 +2016,163 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               onClick={() => {
                 setChangeStaffItemId(null);
                 setChangeStaffPickStaffId("");
+                setChangeStaffError("");
               }}
             >
               Hủy
             </Button>
             <Button
               size="sm"
-              disabled={!changeStaffPickStaffId || !activeTabId || !changeStaffItemId}
+              disabled={!changeStaffPickStaffId || !activeTabId || !changeStaffItemId || changeStaffChecking}
               title={!changeStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
-              onClick={() => {
+              onClick={async () => {
                 if (!activeTabId || !changeStaffItemId) return;
-                const staffName =
+                const newStaffId = changeStaffPickStaffId;
+                const newStaffName =
                   (eligibleBranchStaff || []).find(
-                    (s) => s.id === changeStaffPickStaffId
+                    (s) => s.id === newStaffId
                   )?.name || "";
-                if (!staffName) return; // safety — OK is disabled in this case
-                setInvoiceItemStaff(activeTabId, changeStaffItemId, staffName);
+                if (!newStaffName) return; // safety — OK is disabled in this case
+
+                // Find the line item being edited so we can read its date/time
+                // (for the conflict check) and its name (for the error message).
+                const currentItem = invoice?.items.find(
+                  (it) => it.id === changeStaffItemId
+                );
+                // Conflict check: ONLY for items that have a scheduled date +
+                // time (services/packages linked to a booking). Products have
+                // no date/time → no conflict possible → skip the check.
+                if (currentItem?.date && currentItem?.time && currentItem?.itemId) {
+                  const meta = tabMeta[activeTabId];
+                  const ownBookingId = meta?.bookingId || "";
+                  // Parse the item's date "DD/MM/YYYY" + time "HH:MM" into the
+                  // VN wall-clock epoch (using the +07:00 offset so the epoch
+                  // matches how the API stores date_time).
+                  const dm = currentItem.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                  const tm = currentItem.time.match(/^(\d{1,2}):(\d{2})$/);
+                  if (dm && tm) {
+                    const isoDay = `${dm[3]}-${dm[2]}-${dm[1]}`;
+                    const newStartMs = new Date(
+                      `${isoDay}T${tm[1].padStart(2, "0")}:${tm[2]}:00+07:00`
+                    ).getTime();
+                    if (!isNaN(newStartMs)) {
+                      // Fetch the service's duration so we know [start, end].
+                      // The invoice item doesn't carry duration; query the
+                      // day's bookings (already fetched) and find the matching
+                      // service by id, OR just use 60 min as a fallback.
+                      let durationMin = 60;
+                      try {
+                        const svcRes = await fetch(
+                          `/api/supabase/services?limit=200`
+                        );
+                        const svcJson = await svcRes.json();
+                        const svcRow = (svcJson.data || []).find(
+                          (s: { id: string }) => s.id === currentItem.itemId
+                        );
+                        if (svcRow?.duration) durationMin = Number(svcRow.duration) || 60;
+                      } catch {
+                        /* best-effort — default 60 min */
+                      }
+                      const newEndMs = newStartMs + durationMin * 60 * 1000;
+
+                      // Fetch the day's bookings for the branch + check if the
+                      // NEW staff is busy during [newStart, newEnd]. Exclude
+                      // this tab's own booking (the item's current booking).
+                      setChangeStaffChecking(true);
+                      try {
+                        const params = new URLSearchParams();
+                        params.set("page", "1");
+                        params.set("limit", "200");
+                        const dl = localDayToUtcRange(isoDay);
+                        params.set("date_from", dl.from);
+                        params.set("date_to", dl.to);
+                        if (selectedBranchId && selectedBranchId !== "all") {
+                          params.set("branch_id", selectedBranchId);
+                        }
+                        const cfRes = await fetch(
+                          `/api/supabase/bookings?${params.toString()}`
+                        );
+                        const cfJson = await cfRes.json();
+                        if (cfJson.ok) {
+                          const exList = (cfJson.data || []) as Array<Record<string, unknown>>;
+                          for (const ex of exList) {
+                            if (ex.status === "cancelled" || ex.status === "no_show") continue;
+                            // Exclude this tab's own booking.
+                            if (ownBookingId && ex.id === ownBookingId) continue;
+                            const exStart = new Date(String(ex.date_time || "")).getTime();
+                            if (isNaN(exStart)) continue;
+                            const exServices = (ex.services || []) as Array<{
+                              staff_id?: string | null;
+                              staff?: { name?: string } | null;
+                              service?: { duration?: number; name?: string } | null;
+                            }>;
+                            for (const exSvc of exServices) {
+                              if (exSvc.staff_id !== newStaffId) continue;
+                              const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+                              const exEnd = exStart + exDur;
+                              if (newStartMs < exEnd && exStart < newEndMs) {
+                                // CONFLICT — the new staff is already booked.
+                                // Block the change and show a detailed message.
+                                const conflictStaffName = exSvc.staff?.name || newStaffName;
+                                const exSvcName = exSvc.service?.name || "Dịch vụ";
+                                const exDurationMin = Math.round(exDur / 60000);
+                                const exTimeStr = toVietnamTime(exStart);
+                                const exEndTimeStr = toVietnamTime(exEnd);
+                                const nsTimeStr = toVietnamTime(newStartMs);
+                                const nsEndTimeStr = toVietnamTime(newEndMs);
+                                const exDateStr = currentItem.date;
+                                const exCode = (ex.code as string) || "";
+                                const exCustName = (ex.customer as { name?: string } | null)?.name || "";
+                                const exBranchName = (ex.branch as { name?: string } | null)?.name || "";
+                                const statusLabel: Record<string, string> = {
+                                  pending: "Chờ xác nhận",
+                                  confirmed: "Đã xác nhận",
+                                  checkin: "Đang phục vụ",
+                                  checkout: "Đã thanh toán",
+                                  cancelled: "Đã huỷ",
+                                  no_show: "Không đến",
+                                };
+                                const exStatusLabel = ex.status
+                                  ? statusLabel[String(ex.status)] || String(ex.status)
+                                  : "";
+                                const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+                                const custLine = exCustName ? `• Khách: ${exCustName}\n` : "";
+                                const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+                                const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+                                setChangeStaffError(
+                                  `Không thể đổi nhân viên vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+                                  `${codeLine}:\n` +
+                                  custLine +
+                                  `• Thợ: ${conflictStaffName}\n` +
+                                  `• Dịch vụ: ${exSvcName} (${exDurationMin} phút)\n` +
+                                  `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
+                                  branchLine +
+                                  statusLine +
+                                  `→ Trùng với mặt hàng "${currentItem.name}" (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
+                                  `Vui lòng chọn nhân viên khác.`
+                                );
+                                setChangeStaffChecking(false);
+                                return; // BLOCK — do not change the staff.
+                              }
+                            }
+                          }
+                        }
+                      } catch {
+                        /* best-effort — server still validates */
+                      }
+                      setChangeStaffChecking(false);
+                    }
+                  }
+                }
+
+                // No conflict (or item has no date/time) → apply the change.
+                setInvoiceItemStaff(activeTabId, changeStaffItemId, newStaffName);
                 setChangeStaffItemId(null);
                 setChangeStaffPickStaffId("");
+                setChangeStaffError("");
               }}
             >
-              Xác nhận
+              {changeStaffChecking ? "Đang kiểm tra..." : "Xác nhận"}
             </Button>
           </DialogFooter>
         </DialogContent>

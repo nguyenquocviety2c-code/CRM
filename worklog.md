@@ -851,3 +851,37 @@ Stage Summary:
   * `/home/z/my-project/verify-service-staff-required.png` (93,508 bytes) — Step 1: service dialog with OK disabled + "Vui lòng chọn nhân viên" hint + red asterisk on "Nhân viên*".
   * `/home/z/my-project/verify-product-staff-dialog.png` (88,086 bytes) — Step 2: product staff picker dialog with OK disabled.
   * `/home/z/my-project/verify-change-staff-button.png` (105,624 bytes) — Step 4: per-item "Đổi nhân viên" dialog with the current staff (Nguyễn Thế Mạnh) pre-selected.
+
+---
+Task ID: 14
+Agent: Main (Z.ai Code) + Subagent verification
+Task: Tại module Thu ngân — (1) xóa nút "Xếp nhân viên", (2) đổi màu nút ô vuông đổi nhân viên thành vàng, (3) thêm logic conflict check khi đổi nhân viên (nếu nhân viên thay thế trùng lịch trước đó thì không thể thay, hiện dialog thông báo với dịch vụ + thời gian). KHÔNG push/deploy theo yêu cầu user.
+
+Work Log:
+- Đọc invoice-summary.tsx: tìm nút "Xếp nhân viên" (dòng 1886-1913) + dialog showStaffPicker (dòng 1959-2011) + state showStaffPicker/pickedStaffId/hasProductItems/productStaffName (chỉ dùng cho nút đó).
+- Xóa nút "Xếp nhân viên" + dialog showStaffPicker + state liên quan (showStaffPicker, pickedStaffId, hasProductItems, productStaffName) + import User (chỉ dùng cho nút đó).
+- Đổi màu nút ô vuông đổi nhân viên: từ `border-gray-300 text-gray-500 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-600` → `border-yellow-400 bg-yellow-400 text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900`.
+- Thêm state: changeStaffError (lưu thông báo conflict), changeStaffChecking (loading).
+- Thêm import toVietnamTime.
+- Sửa handler onClick "Xác nhận" trong dialog "Đổi nhân viên": thành async, kiểm tra conflict trước khi setInvoiceItemStaff.
+  * Tìm currentItem (line item đang edit).
+  * Nếu item có date+time+itemId (service/package có booking): parse date "DD/MM/YYYY" + time "HH:MM" → epoch VN (+07:00). Fetch service duration. Fetch day's bookings for branch. For each existing booking (excluding ownBookingId + cancelled/no_show): for each service row with staff_id === newStaffId: check overlap [newStart, newEnd] vs [exStart, exEnd]. Nếu overlap → setChangeStaffError(detailed message) + return (KHÔNG đổi nhân viên, dialog giữ mở).
+  * Nếu không conflict (hoặc item là product — không có date/time) → setInvoiceItemStaff + đóng dialog.
+- Thông báo conflict chi tiết: "Không thể đổi nhân viên vì trùng thời gian... Lịch LHxxx: Khách, Thợ, Dịch vụ (duration), Thời gian start-end ngày, Chi nhánh, Trạng thái, → Trùng với mặt hàng 'name' (start-end ngày). Vui lòng chọn nhân viên khác."
+- Dialog hiển thị error trong red box (whitespace-pre-line, border-red-200 bg-red-50 text-red-700). Nút OK disabled khi checking, hiện "Đang kiểm tra...".
+- Compile sạch, lint 0 lỗi.
+
+Subagent verification (bị cut context nhưng đã kịp tạo 4 screenshots):
+- verify-no-xep-nhan-vien.png (76KB) — nút "Xếp nhân viên" đã biến mất.
+- verify-yellow-button.png (83KB) — nút ô vuông có bg-yellow-400.
+- verify-change-staff-conflict.png (108KB) — conflict block đổi nhân viên (LH000058 An Vũ, Nguyễn Trường Đan, 14:30-15:30 ngày 14/07/2026).
+- verify-change-staff-success.png (90KB) — đổi nhân viên thành công khi không conflict.
+- Cleanup: xóa test booking LH000064 (huy2, Master Cut, Nguyễn Trường Đan, 2026-07-16) mà subagent tạo khi test Step 4.
+
+Stage Summary:
+- Nút "Xếp nhân viên" đã xóa hoàn toàn (button + dialog + state).
+- Nút ô vuông đổi nhân viên giờ màu VÀNG (bg-yellow-400 border-yellow-400 text-yellow-800).
+- Logic conflict check khi đổi nhân viên: chỉ áp dụng cho item có date+time (service/package). Nếu nhân viên MỚI bận vào [item.time, item.time+duration] → BLOCK + thông báo chi tiết (mã lịch, khách, thợ, dịch vụ, thời gian start-end, chi nhánh, trạng thái). Dialog giữ mở, staff KHÔNG đổi.
+- Product (không có date/time) → skip conflict check, đổi ngay.
+- KHÔNG push GitHub, KHÔNG deploy Vercel (theo yêu cầu user).
+- Screenshots: /home/z/my-project/verify-no-xep-nhan-vien.png, verify-yellow-button.png, verify-change-staff-conflict.png, verify-change-staff-success.png.
