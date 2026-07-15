@@ -31,6 +31,7 @@ import { BookingStatusLabel } from "@/lib/constants";
 import { queryKeys } from "@/lib/query-keys";
 import { localDayToUtcRange, localDayStartUtc, toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { bookingSchema } from "@/lib/validations";
+import { buildMultiCustomerNote, parseMultiCustomerNote } from "@/lib/multi-customer";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -991,7 +992,15 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         customerChannelId: booking.customerChannelId || b.customer_channel_id || "",
         numberOfCustomers: booking.numberOfCustomers || b.number_of_customers || 1,
         status: booking.status || "confirmed",
-        note: booking.note || "",
+        // When editing a multi-customer "Cùng lịch" booking, the `note` field
+        // carries a `[[MULTI]]` JSON block (per-slot customer map). Show only
+        // the cashier's own typed note in the textarea — the structured block
+        // is parsed by display sites, never edited directly.
+        note: (() => {
+          const rawNote = booking.note || "";
+          const parsed = parseMultiCustomerNote(rawNote);
+          return parsed ? parsed.userNote : rawNote;
+        })(),
         date: startDate,
         time: startTime,
         services:
@@ -1657,6 +1666,30 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
 
       if (scheduleMode === "same") {
         // --- Cùng lịch: 1 POST with all services ---
+        // The booking API stores only ONE customer_id per booking (slot 0's
+        // resolved id). To preserve the per-slot customer mapping so display
+        // sites (Staff View, Cashier) can show each service's own customer,
+        // we persist a structured `[[MULTI]]` JSON block in the booking's
+        // `note` field. Slots with no phone/name → walkin:true (rendered as
+        // "Khách vãng lai"). The cashier's own typed note is kept inside the
+        // same block as `userNote` (parsed back out by display sites, so the
+        // "Ghi chú & dịch vụ" column never shows the raw JSON).
+        const slotEntries = data.services.filter((s) => s.serviceId);
+        const slots = slotEntries.map((g, i) => {
+          const name = (g.customerName || "").trim();
+          const phone = (g.customerPhone || "").trim();
+          const walkin = !name && !phone;
+          return {
+            id: resolvedIds[i] || "",
+            name: walkin ? "Khách vãng lai" : name,
+            phone: walkin ? "" : phone,
+            walkin,
+          };
+        });
+        const combinedNote = buildMultiCustomerNote(
+          slots,
+          (data.note || "").trim()
+        );
         const payload = {
           date_time: dateTime,
           customer_id: resolvedIds[0],
@@ -1664,16 +1697,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           customer_channel_id: data.customerChannelId || null,
           number_of_customers: data.numberOfCustomers,
           status: data.status,
-          note: data.note || null,
+          note: combinedNote,
           branch_id: selectedBranchId || null,
           created_by: user?.id || null,
-          services: data.services
-            .filter((s) => s.serviceId)
-            .map((g) => ({
-              service_id: g.serviceId,
-              service_category_id: g.serviceCategoryId || null,
-              staff_id: g.staffId || null,
-            })),
+          services: slotEntries.map((g) => ({
+            service_id: g.serviceId,
+            service_category_id: g.serviceCategoryId || null,
+            staff_id: g.staffId || null,
+          })),
         };
         try {
           const res = await fetch("/api/supabase/bookings", {
@@ -2059,12 +2090,44 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                   </div>
                 ) : isMultiCustomerMode ? (
                   // Multi-customer mode: each customer slot has its own
-                  // phone/name inputs in the Dịch vụ section below. The
-                  // top-level phone/name fields are hidden to avoid
-                  // confusion (they'd be ignored at submit anyway).
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-3 text-xs text-emerald-800">
-                    Thông tin từng khách được nhập trong phần Dịch vụ bên dưới (Khách #1, #2, ...).
-                  </div>
+                  // phone/name inputs in the Dịch vụ section below. Instead
+                  // of a static note, show a LIVE numbered summary of every
+                  // customer and their chosen service (+ staff). Slots with
+                  // no name entered display as "Khách vãng lai" (these are
+                  // auto-resolved to a walk-in guest record on submit).
+                  (() => {
+                    const slots = (watchedServices || []).map((entry, idx) => {
+                      const rawName = (entry.customerName || "").trim();
+                      const rawPhone = (entry.customerPhone || "").trim();
+                      const displayName = rawName || rawPhone || "Khách vãng lai";
+                      const svc = services.find((s) => s.id === entry.serviceId);
+                      const stf = entry.staffId
+                        ? staffList.find((st) => st.id === entry.staffId)
+                        : null;
+                      return { idx, displayName, rawName, svcName: svc?.name, stfName: stf?.name };
+                    });
+                    return (
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-xs text-emerald-800 space-y-1">
+                        {slots.map((s) => (
+                          <div key={s.idx} className="flex gap-1.5">
+                            <span className="font-semibold shrink-0">{s.idx + 1}.</span>
+                            <span className="min-w-0">
+                              <span className="font-medium">{s.displayName}</span>
+                              <span className="text-emerald-600">
+                                {s.svcName ? ` — ${s.svcName}` : " — Chưa chọn DV"}
+                                {s.stfName ? ` (NV: ${s.stfName})` : ""}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                        <p className="pt-1 text-[10px] text-emerald-600/80">
+                          {scheduleMode === "same"
+                            ? "Cùng lịch: tất cả khách gộp vào 1 lịch hẹn. Ô không nhập tên → Khách vãng lai."
+                            : "Khác lịch: mỗi khách tạo 1 lịch riêng. Ô không nhập tên → Khách vãng lai."}
+                        </p>
+                      </div>
+                    );
+                  })()
                 ) : (
                 <>
                 <div className="space-y-2">
@@ -2471,138 +2534,130 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                       // the same autocomplete/lookup logic as the top-level
                       // "Thông tin khách hàng" section).
                       <>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-emerald-700">
+                        {/* Single-row layout: "Khách #i" label + SĐT input +
+                            Tên khách input + trash button, ALL on one line.
+                            Placeholders replace the old separate Labels so the
+                            row stays compact. */}
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             Khách #{index + 1}
                           </span>
+                          {/* Per-slot SĐT input with autocomplete dropdown */}
+                          <div className="relative flex-1 min-w-0">
+                            <Input
+                              id={`services.${index}.customerPhone`}
+                              placeholder="Số điện thoại"
+                              value={watch(`services.${index}.customerPhone`) || ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setValue(`services.${index}.customerPhone`, val);
+                                // Editing phone clears name + selected customer.
+                                setValue(`services.${index}.customerName`, "");
+                                setValue(`services.${index}.customerId`, "");
+                                setActiveSlotDropdown(index);
+                              }}
+                              onFocus={() => setActiveSlotDropdown(index)}
+                              onBlur={() => {
+                                // Delay so click events on dropdown items
+                                // fire before the dropdown closes.
+                                setTimeout(() => {
+                                  setActiveSlotDropdown((cur) =>
+                                    cur === index ? null : cur
+                                  );
+                                }, 200);
+                              }}
+                              autoComplete="off"
+                              name={`slot-phone-${index}-off`}
+                            />
+                            {/* Autocomplete dropdown — only for the ACTIVE
+                                slot, and only when there's text + matches. */}
+                            {activeSlotDropdown === index &&
+                              (activeSlotPhone || activeSlotName) &&
+                              filteredSlotCustomers.length > 0 && (
+                                <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
+                                  {filteredSlotCustomers.map((customer) => (
+                                    <div
+                                      key={customer.id}
+                                      className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
+                                      onMouseDown={(e) => {
+                                        // Prevent the input's onBlur from
+                                        // firing before the click registers.
+                                        e.preventDefault();
+                                        setValue(`services.${index}.customerId`, customer.id);
+                                        setValue(`services.${index}.customerPhone`, customer.phone);
+                                        setValue(`services.${index}.customerName`, customer.name);
+                                        setActiveSlotDropdown(null);
+                                      }}
+                                    >
+                                      <div className="text-xs font-medium">{customer.phone}</div>
+                                      <div className="text-[10px] text-gray-500">
+                                        {customer.name} | {customer.code}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                          </div>
+                          {/* Per-slot Tên khách input */}
+                          <div className="relative flex-1 min-w-0">
+                            <Input
+                              id={`services.${index}.customerName`}
+                              placeholder="Tên khách"
+                              value={watch(`services.${index}.customerName`) || ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setValue(`services.${index}.customerName`, val);
+                                // Editing name clears phone + selected customer.
+                                setValue(`services.${index}.customerPhone`, "");
+                                setValue(`services.${index}.customerId`, "");
+                                setActiveSlotDropdown(index);
+                              }}
+                              onFocus={() => setActiveSlotDropdown(index)}
+                              onBlur={() => {
+                                setTimeout(() => {
+                                  setActiveSlotDropdown((cur) =>
+                                    cur === index ? null : cur
+                                  );
+                                }, 200);
+                              }}
+                              autoComplete="off"
+                              name={`slot-name-${index}-off`}
+                            />
+                            {activeSlotDropdown === index &&
+                              (activeSlotPhone || activeSlotName) &&
+                              filteredSlotCustomers.length > 0 && (
+                                <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
+                                  {filteredSlotCustomers.map((customer) => (
+                                    <div
+                                      key={customer.id}
+                                      className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        setValue(`services.${index}.customerId`, customer.id);
+                                        setValue(`services.${index}.customerPhone`, customer.phone);
+                                        setValue(`services.${index}.customerName`, customer.name);
+                                        setActiveSlotDropdown(null);
+                                      }}
+                                    >
+                                      <div className="text-xs font-medium">{customer.name}</div>
+                                      <div className="text-[10px] text-gray-500">
+                                        {customer.phone} | {customer.code}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                          </div>
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveService(index)}
-                            className="h-7 w-7 p-0 text-red-500 hover:text-red-700"
+                            className="h-7 w-7 shrink-0 p-0 text-red-500 hover:text-red-700"
                             title="Xóa khách này"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          {/* Per-slot SĐT input with autocomplete dropdown */}
-                          <div className="space-y-1">
-                            <Label htmlFor={`services.${index}.customerPhone`}>
-                              Số điện thoại
-                            </Label>
-                            <div className="relative">
-                              <Input
-                                id={`services.${index}.customerPhone`}
-                                placeholder="Số điện thoại"
-                                value={watch(`services.${index}.customerPhone`) || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setValue(`services.${index}.customerPhone`, val);
-                                  // Editing phone clears name + selected customer.
-                                  setValue(`services.${index}.customerName`, "");
-                                  setValue(`services.${index}.customerId`, "");
-                                  setActiveSlotDropdown(index);
-                                }}
-                                onFocus={() => setActiveSlotDropdown(index)}
-                                onBlur={() => {
-                                  // Delay so click events on dropdown items
-                                  // fire before the dropdown closes.
-                                  setTimeout(() => {
-                                    setActiveSlotDropdown((cur) =>
-                                      cur === index ? null : cur
-                                    );
-                                  }, 200);
-                                }}
-                                autoComplete="off"
-                                name={`slot-phone-${index}-off`}
-                              />
-                              {/* Autocomplete dropdown — only for the ACTIVE
-                                  slot, and only when there's text + matches. */}
-                              {activeSlotDropdown === index &&
-                                (activeSlotPhone || activeSlotName) &&
-                                filteredSlotCustomers.length > 0 && (
-                                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
-                                    {filteredSlotCustomers.map((customer) => (
-                                      <div
-                                        key={customer.id}
-                                        className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
-                                        onMouseDown={(e) => {
-                                          // Prevent the input's onBlur from
-                                          // firing before the click registers.
-                                          e.preventDefault();
-                                          setValue(`services.${index}.customerId`, customer.id);
-                                          setValue(`services.${index}.customerPhone`, customer.phone);
-                                          setValue(`services.${index}.customerName`, customer.name);
-                                          setActiveSlotDropdown(null);
-                                        }}
-                                      >
-                                        <div className="text-xs font-medium">{customer.phone}</div>
-                                        <div className="text-[10px] text-gray-500">
-                                          {customer.name} | {customer.code}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                            </div>
-                          </div>
-                          {/* Per-slot Tên khách input */}
-                          <div className="space-y-1">
-                            <Label htmlFor={`services.${index}.customerName`}>
-                              Tên khách
-                            </Label>
-                            <div className="relative">
-                              <Input
-                                id={`services.${index}.customerName`}
-                                placeholder="Tên khách"
-                                value={watch(`services.${index}.customerName`) || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setValue(`services.${index}.customerName`, val);
-                                  // Editing name clears phone + selected customer.
-                                  setValue(`services.${index}.customerPhone`, "");
-                                  setValue(`services.${index}.customerId`, "");
-                                  setActiveSlotDropdown(index);
-                                }}
-                                onFocus={() => setActiveSlotDropdown(index)}
-                                onBlur={() => {
-                                  setTimeout(() => {
-                                    setActiveSlotDropdown((cur) =>
-                                      cur === index ? null : cur
-                                    );
-                                  }, 200);
-                                }}
-                                autoComplete="off"
-                                name={`slot-name-${index}-off`}
-                              />
-                              {activeSlotDropdown === index &&
-                                (activeSlotPhone || activeSlotName) &&
-                                filteredSlotCustomers.length > 0 && (
-                                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
-                                    {filteredSlotCustomers.map((customer) => (
-                                      <div
-                                        key={customer.id}
-                                        className="cursor-pointer px-3 py-1.5 hover:bg-gray-100"
-                                        onMouseDown={(e) => {
-                                          e.preventDefault();
-                                          setValue(`services.${index}.customerId`, customer.id);
-                                          setValue(`services.${index}.customerPhone`, customer.phone);
-                                          setValue(`services.${index}.customerName`, customer.name);
-                                          setActiveSlotDropdown(null);
-                                        }}
-                                      >
-                                        <div className="text-xs font-medium">{customer.name}</div>
-                                        <div className="text-[10px] text-gray-500">
-                                          {customer.phone} | {customer.code}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                            </div>
-                          </div>
                         </div>
                       </>
                     ) : (

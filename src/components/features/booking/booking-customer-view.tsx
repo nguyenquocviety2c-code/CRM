@@ -8,6 +8,7 @@ import { BookingStatusLabel, BookingStatusBadgeColors, BookingStatusType } from 
 import { useAuthStore } from "@/stores/auth-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
+import { parseMultiCustomerNote, getAllSlotCustomers } from "@/lib/multi-customer";
 import { queryKeys } from "@/lib/query-keys";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -251,34 +252,89 @@ export function BookingCustomerView({
                 )}
                 {visibleColumns.customer && (
                 <td className="border-r border-gray-300 px-3 py-3">
-                  <div className="space-y-0.5">
-                    <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
-                    <div className="text-xs text-gray-500">{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
-                  </div>
+                  {/* Multi-customer "Cùng lịch" booking: list every slot's
+                      customer — those with info → name (line 1) + phone (line 2);
+                      empty slots → "Khách vãng lai". Single-customer / "Khác
+                      lịch" bookings show the booking's one customer as before. */}
+                  {(() => {
+                    const slotCustomers = getAllSlotCustomers(booking.note);
+                    if (slotCustomers && slotCustomers.length > 0) {
+                      return (
+                        <div className="space-y-1">
+                          {slotCustomers.map((sc, i) => (
+                            <div key={i} className="space-y-0.5">
+                              {/* Numbered customer label: "1. Hoàng Vũ" / "2. Khách vãng lai".
+                                  Walk-in customers use the SAME size + color as
+                                  named customers (font-medium text-gray-900) so the
+                                  column reads consistently. */}
+                              <div className="font-medium text-gray-900 text-sm">
+                                {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
+                              </div>
+                              {!sc.walkin && (
+                                <div className="text-xs text-gray-500">
+                                  {canViewCustomerPhone ? (sc.phone || "—") : maskPhone(sc.phone)}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-0.5">
+                        <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
+                        <div className="text-xs text-gray-500">{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
+                      </div>
+                    );
+                  })()}
                 </td>
                 )}
                 {visibleColumns.note && (
                 <td className="border-r border-gray-300 px-3 py-3">
                   <div className="space-y-1">
-                    {booking.note && (
-                      <div className="text-xs text-gray-500">Ghi chú: {booking.note}</div>
-                    )}
-                    {serviceDisplay.length === 0 ? (
-                      <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
-                    ) : (
-                      (() => {
-                        const entries = serviceDisplay
-                          .map((s) => ({ category: s.categoryName, staff: s.staffName }))
-                          .filter((e) => e.category || e.staff);
-                        if (entries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
-                        return entries.map((e, idx) => (
-                          <div key={idx} className="space-y-0.5">
-                            {e.category && <div className="text-xs font-medium text-gray-700">{e.category}</div>}
-                            {e.staff && <div className="text-xs text-gray-500">NV: {e.staff}</div>}
-                          </div>
-                        ));
-                      })()
-                    )}
+                    {(() => {
+                      // Multi-customer "Cùng lịch" booking: the note carries a
+                      // [[MULTI]] JSON block (per-slot customer map). Customer
+                      // info is shown in the "Khách hàng" column (not here) —
+                      // this column shows ONLY services + staff (+ the cashier's
+                      // own typed note if present). Falls back to the regular
+                      // layout (ghi chú + services + staff) for plain bookings.
+                      const parsed = parseMultiCustomerNote(booking.note);
+                      const userNote = parsed ? parsed.userNote : (booking.note || "");
+                      return (
+                        <>
+                          {userNote && (
+                            <div className="text-xs text-gray-500">Ghi chú: {userNote}</div>
+                          )}
+                          {serviceDisplay.length === 0 ? (
+                            <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
+                          ) : (
+                            (() => {
+                              const parsed = parseMultiCustomerNote(booking.note);
+                              const isMulti = !!(parsed && parsed.slots.length > 0);
+                              const entries = serviceDisplay
+                                .map((s) => ({ category: s.categoryName, staff: s.staffName }))
+                                .filter((e) => e.category || e.staff);
+                              if (entries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
+                              return entries.map((e, idx) => (
+                                <div key={idx} className="space-y-0.5">
+                                  {/* Service name: black (text-gray-900). Staff name:
+                                      yellow (text-yellow-600). For multi-customer
+                                      bookings, number each service to match the
+                                      numbered customers in the customer column. */}
+                                  {e.category && (
+                                    <div className="text-xs font-medium text-gray-900">
+                                      {isMulti ? `${idx + 1}. ` : ""}{e.category}
+                                    </div>
+                                  )}
+                                  {e.staff && <div className="text-xs text-yellow-600">NV: {e.staff}</div>}
+                                </div>
+                              ));
+                            })()
+                          )}
+                        </>
+                      );
+                    })()}
                     {/* "Tạo bởi": when created_by is null the booking was placed
                         by a customer via the /dat-lich kiosk → show "Khách hàng".
                         Otherwise show the creator staff's name (resolved by the

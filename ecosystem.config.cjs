@@ -2,7 +2,8 @@ module.exports = {
   apps: [
     {
       name: "crm-app",
-      cwd: "/home/z/my-project",
+      // The CRM project lives here (cloned from GitHub).
+      cwd: "/home/z/my-project/download/CRM",
       // Run the Next.js dev server (Turbopack). No production build required,
       // which keeps startup fast and reliable. PM2 keeps the process alive
       // and auto-restarts it if it ever crashes.
@@ -20,10 +21,10 @@ module.exports = {
         PORT: "3000",
         // Explicitly override any shell-level DATABASE_URL so the app always
         // reads the data-rich SQLite file shipped with the repo.
-        DATABASE_URL: "file:/home/z/my-project/db/custom.db",
+        DATABASE_URL: "file:/home/z/my-project/download/CRM/db/custom.db",
       },
-      error_file: "/home/z/my-project/.pm2-logs/crm-error.log",
-      out_file: "/home/z/my-project/.pm2-logs/crm-out.log",
+      error_file: "/home/z/my-project/download/CRM/.pm2-logs/crm-error.log",
+      out_file: "/home/z/my-project/download/CRM/.pm2-logs/crm-out.log",
       merge_logs: true,
       time: true,
     },

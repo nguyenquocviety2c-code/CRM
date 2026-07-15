@@ -9,6 +9,7 @@ import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { BranchSelector } from "@/components/layout/branch-selector";
 import { cn, vietnamToday, vietnamDayRangeDates, localDayStartUtc, localDayEndUtc, toVietnamDay } from "@/lib/utils";
+import { parseMultiCustomerNote } from "@/lib/multi-customer";
 import { useState, useMemo } from "react";
 import { DateRangePicker } from "@/components/shared/date-range-picker";
 import { format as fnsFormat } from "date-fns";
@@ -66,6 +67,7 @@ interface BookingOrder {
    *  created_by UUID. */
   createdBy?: { id: string; name: string } | null;
   number_of_customers?: number;
+  note?: string | null;
   customer: { id: string; name: string; phone: string | null; code?: string | null } | null;
   branch: { id: string; name: string } | null;
   source: { id: string; name: string } | null;
@@ -103,7 +105,7 @@ function orderToBooking(order: BookingOrder): Booking {
     time: "",
     date_time: order.date_time || undefined,
     status: order.status as BookingStatusType,
-    note: null,
+    note: order.note ?? null,
     numberOfCustomers: order.number_of_customers || 1,
     customerSourceId: null,
     customerChannelId: null,
@@ -892,17 +894,40 @@ function OrderDetailDialog({
               {items.length === 0 ? (
                 <div className="text-sm text-gray-400">Chưa có dịch vụ</div>
               ) : (
-                items.map((s, idx) => (
-                  <div key={idx} className="flex items-start justify-between text-sm">
-                    <div>
-                      <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
-                      {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
-                    </div>
-                    <div className="font-medium text-gray-900">
-                      {fmt(Number(s.price) || 0)}đ
-                    </div>
-                  </div>
-                ))
+                (() => {
+                  // Multi-customer "Cùng lịch" booking (numberOfCustomers >= 2):
+                  // each service slot shows 3 lines —
+                  //   line 1: customer name + phone (or "Khách vãng lai" if empty)
+                  //   line 2: service name
+                  //   line 3: staff name
+                  // This 3-line layout is CASHIER-MODULE ONLY. Regular bookings
+                  // keep the existing 2-line layout (service name + staff).
+                  const multi = parseMultiCustomerNote(order.note);
+                  const isMulti = !!multi && (order.number_of_customers ?? 1) >= 2;
+                  return items.map((s, idx) => {
+                    const sc = isMulti ? multi!.slots[idx] : undefined;
+                    return (
+                      <div key={idx} className="flex items-start justify-between text-sm">
+                        <div>
+                          {isMulti && (
+                            <div className="text-xs text-gray-600">
+                              {sc && sc.walkin
+                                ? "Khách vãng lai"
+                                : sc
+                                  ? `${sc.name}${sc.phone ? " " + sc.phone : ""}`
+                                  : "Khách vãng lai"}
+                            </div>
+                          )}
+                          <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
+                          {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
+                        </div>
+                        <div className="font-medium text-gray-900">
+                          {fmt(Number(s.price) || 0)}đ
+                        </div>
+                      </div>
+                    );
+                  });
+                })()
               )}
             </div>
 

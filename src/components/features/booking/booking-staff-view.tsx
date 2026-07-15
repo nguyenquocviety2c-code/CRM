@@ -11,6 +11,7 @@ import {
 import { useAuthStore } from "@/stores/auth-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamTime, toVietnamDay } from "@/lib/utils";
+import { getAllSlotCustomers } from "@/lib/multi-customer";
 import {
   Select,
   SelectContent,
@@ -939,14 +940,45 @@ function SegmentBlock({
           )}
         </div>
         {/* Customer */}
-        <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
-          {booking.customer?.name || "Khách"}
-          {booking.customer?.phone && (
-            <span className="ml-1 text-xs font-normal text-gray-500">
-              {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
-            </span>
-          )}
-        </div>
+        {/* Multi-customer "Cùng lịch" bookings: list every slot's customer
+            (those with info → name+phone; empty slots → "Khách vãng lai").
+            Single-customer / "Khác lịch" bookings: show the booking's one
+            customer as before. */}
+        {(() => {
+          const slotCustomers = getAllSlotCustomers(booking.note);
+          if (slotCustomers && slotCustomers.length > 0) {
+            return (
+              <div className="mt-0.5 space-y-0.5">
+                {slotCustomers.map((sc, i) => (
+                  <div key={i} className="truncate text-sm font-medium text-gray-900">
+                    {sc.walkin ? (
+                      <span className="text-gray-500">Khách vãng lai</span>
+                    ) : (
+                      <>
+                        {sc.name || "Khách"}
+                        {sc.phone && (
+                          <span className="ml-1 text-xs font-normal text-gray-500">
+                            {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          return (
+            <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+              {booking.customer?.name || "Khách"}
+              {booking.customer?.phone && (
+                <span className="ml-1 text-xs font-normal text-gray-500">
+                  {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
+                </span>
+              )}
+            </div>
+          );
+        })()}
         {/* Services — list ALL services in this merged slot, each with its
             duration. When multiple same-staff services are merged into one
             slot, list each on its own line and show the staff name once below.
@@ -1428,14 +1460,43 @@ function BookingChip({
               </span>
             )}
           </div>
-          <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
-            {booking.customer?.name || "Khách"}
-            {phone && (
-              <span className="ml-1 text-xs font-normal text-gray-500">
-                {canViewCustomerPhone ? phone : maskPhone(phone)}
-              </span>
-            )}
-          </div>
+          {/* Customer — multi-customer "Cùng lịch" bookings list every slot's
+              customer; others show the single booking customer. */}
+          {(() => {
+            const slotCustomers = getAllSlotCustomers(booking.note);
+            if (slotCustomers && slotCustomers.length > 0) {
+              return (
+                <div className="mt-0.5 space-y-0.5">
+                  {slotCustomers.map((sc, i) => (
+                    <div key={i} className="truncate text-sm font-medium text-gray-900">
+                      {sc.walkin ? (
+                        <span className="text-gray-500">Khách vãng lai</span>
+                      ) : (
+                        <>
+                          {sc.name || "Khách"}
+                          {sc.phone && (
+                            <span className="ml-1 text-xs font-normal text-gray-500">
+                              {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            }
+            return (
+              <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+                {booking.customer?.name || "Khách"}
+                {phone && (
+                  <span className="ml-1 text-xs font-normal text-gray-500">
+                    {canViewCustomerPhone ? phone : maskPhone(phone)}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
           {/* Services — list ALL of them, one line per service. The staff name
               sits to the RIGHT of each service (same line) so the cashier sees
               who performs each service at a glance. */}
@@ -1624,17 +1685,41 @@ export function BookingHoverDetails({
 
   return (
     <div className="space-y-1 p-2">
-      {/* Line 1: customer name | phone */}
-      <div className="flex items-center justify-between gap-2 border-b pb-1">
-        <span className="truncate text-sm font-semibold text-gray-900">
-          {booking.customer?.name || "Khách"}
-        </span>
-        {booking.customer?.phone && (
-          <span className="shrink-0 text-xs text-gray-500">
-            {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
-          </span>
-        )}
-      </div>
+      {/* Line 1: customer name | phone — multi-customer "Cùng lịch" bookings
+          list every slot's customer; others show the single booking customer. */}
+      {(() => {
+        const slotCustomers = getAllSlotCustomers(booking.note);
+        if (slotCustomers && slotCustomers.length > 0) {
+          return (
+            <div className="space-y-1 border-b pb-1">
+              {slotCustomers.map((sc, i) => (
+                <div key={i} className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold text-gray-900">
+                    {sc.walkin ? <span className="text-gray-500">Khách vãng lai</span> : (sc.name || "Khách")}
+                  </span>
+                  {!sc.walkin && sc.phone && (
+                    <span className="shrink-0 text-xs text-gray-500">
+                      {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center justify-between gap-2 border-b pb-1">
+            <span className="truncate text-sm font-semibold text-gray-900">
+              {booking.customer?.name || "Khách"}
+            </span>
+            {booking.customer?.phone && (
+              <span className="shrink-0 text-xs text-gray-500">
+                {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Line 2: status badge + status Select (Checkin / Không đến / Hủy) */}
       <div className="flex items-center gap-2">

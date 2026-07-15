@@ -29,6 +29,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
+import { parseMultiCustomerNote } from "@/lib/multi-customer";
 
 /**
  * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
@@ -204,15 +205,25 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   }, [effectivelyReadOnly]);
 
   // Build invoice line items from booking services (nested Supabase shape).
-  const serviceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => {
+  // For multi-customer "Cùng lịch" bookings, attach each service's own
+  // customer (parsed from the booking note's [[MULTI]] block) so the services
+  // box can show it between the service name and the staff line.
+  const multiCustomer = parseMultiCustomerNote(booking.note);
+  const serviceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
     const svc = s.service as { name?: string; price?: number; duration?: number } | null;
     const stf = s.staff as { name?: string } | null;
     const cat = s.category as { name?: string } | null;
+    const sc = multiCustomer?.slots[idx];
     return {
       name: svc?.name || "Dịch vụ",
       price: Number(svc?.price) || 0,
       staff: stf?.name || null,
       category: cat?.name || null,
+      customer: sc
+        ? sc.walkin
+          ? "Khách vãng lai"
+          : `${sc.name}${sc.phone ? " " + sc.phone : ""}`
+        : null,
     };
   });
   const servicesTotal = serviceRows.reduce((sum, s) => sum + s.price, 0);
@@ -339,7 +350,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
     ? (existingInvoice?.items ?? []).filter(
         (it) => (it as { type?: string }).type !== "product"
       )
-    : serviceRows.map((s) => ({ name: s.name, price: s.price, staffName: s.staff ?? undefined }));
+    : serviceRows.map((s) => ({ name: s.name, price: s.price, staffName: s.staff ?? undefined, customer: s.customer ?? undefined }));
 
   // Display photos: when there's an existing invoice, the source of truth is
   // the invoice's photos (kept up to date via PUT). Otherwise (editable, no
@@ -619,6 +630,14 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 displayItems.map((s, idx) => (
                   <div key={idx} className="flex items-start justify-between text-sm">
                     <div>
+                      {/* Multi-customer (Cashier module): 3-line layout —
+                          line 1: customer (name+phone or "Khách vãng lai")
+                          line 2: service name
+                          line 3: staff name
+                          Regular bookings keep the 2-line layout (service + staff). */}
+                      {(s as { customer?: string }).customer && (
+                        <div className="text-xs text-gray-600">{(s as { customer?: string }).customer}</div>
+                      )}
                       <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
                       {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
                     </div>
@@ -1021,6 +1040,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                   <div key={`svc-${idx}`} className="flex items-center justify-between px-3 py-2 text-sm">
                     <div>
                       <div className="font-medium text-gray-900">{s.name}</div>
+                      {s.customer && <div className="text-xs text-gray-600">{s.customer}</div>}
                       {s.staff && <div className="text-xs text-gray-500">NV: {s.staff}</div>}
                     </div>
                     <div className="text-gray-700">{fmt(s.price)}đ</div>

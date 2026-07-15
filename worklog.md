@@ -1380,3 +1380,188 @@ Limitations & design notes:
 - **Screenshots** (all in /home/z/my-project/, auto-ignored by .gitignore pattern `verify-*.png`):
   * `/home/z/my-project/verify-default-layout.png` (79,377 bytes) — Step 1: default single-customer layout.
   * `/home/z/my-project/verify-multi-customer-layout.png` (99,199 bytes) — Step 2: multi-customer layout with 3 rows + toggle + autocomplete dropdown.
+
+---
+Task ID: booking-multicustomer-layout-v2
+Agent: Z.ai Code (main)
+Task: Improve the "Tạo mới lịch hẹn" dialog multi-customer layout & save behavior per user request:
+  1. Put "Khách #i" + SĐT input + Tên khách input on ONE line (was 2 separate lines).
+  2. Cùng lịch + no names → all walk-in. Cùng lịch + some empty → those are walk-in.
+  3. Cùng lịch + all names → "Thông tin khách hàng" shows all customers numbered + services numbered.
+  4. Khác lịch + multiple → each slot becomes a separate booking; empty → walk-in.
+
+Work Log:
+- Read worklog.md (previous agent implemented the multi-customer feature; this is a refinement).
+- Read `src/components/features/booking/booking-dialog.tsx` (3014→3039 lines):
+  * Layout: multi-customer service row had "Khách #i" + trash on row 1, then a `grid grid-cols-2` with Label+Input for SĐT and Tên khách on rows 2-3. User wanted all on ONE line.
+  * "Thông tin khách hàng" section in multi-customer mode showed a static note. User wanted a live numbered summary.
+  * `resolveCustomerId` already handles empty phone+name → "Khách vãng lai" guest record (Reqs 2,4,5 already worked).
+  * "Cùng lịch" save only stored `customer_id: resolvedIds[0]` — other customers' info was lost.
+
+- Edit 1 (Layout): Replaced the multi-customer header+inputs block (was `flex justify-between` header + `grid grid-cols-2` with Labels) with a single `flex items-center gap-2` row containing: "Khách #i" span (shrink-0) + SĐT Input (flex-1, placeholder) + Tên khách Input (flex-1, placeholder) + trash Button (shrink-0). Removed the separate `<Label>` elements, using placeholders instead. Autocomplete dropdowns preserved (same logic, same refs).
+
+- Edit 2 (Live summary): Replaced the static note in the "Thông tin khách hàng" section (multi-customer mode) with an IIFE that maps `watchedServices` → numbered list: "1. {name|phone|Khách vãng lai} — {serviceName|Chưa chọn DV} (NV: {staffName})". Added a mode hint at the bottom: "Cùng lịch: ..." / "Khác lịch: ..." depending on `scheduleMode`. Uses `services.find()` + `staffList.find()` to resolve names reactively.
+
+- Edit 3 (Note preservation): In `handleMultiCustomerSubmit` "same" (Cùng lịch) branch, built a `customerSummary` string listing all customers (numbered) + their service + staff, then combined it with the user's note: `[Đặt lịch nhiều khách]\n{summary}\n\n{userNote}`. This preserves all customer info in the booking's `note` field since the API only stores one `customer_id`.
+
+- Lint: `npx eslint src/components/features/booking/booking-dialog.tsx` → 0 errors, 1 pre-existing warning (React Compiler `watch()` note, not introduced by this task).
+
+- Agent Browser verification:
+  * Logged in as ductran/123456 → /cashier → /booking → opened "Tạo mới" dialog.
+  * Set Số khách = 2 → multi-customer mode activated: 2 "Khách #1/#2" headers, 2 SĐT inputs, 2 Tên khách inputs, "Cùng lịch/Khác lịch" toggle.
+  * Verified ONE-LINE layout via bounding boxes: Khách #1 (top=176), SĐT (top=169), Tên khách (top=169) — all in `flex items-center gap-2` parent. Phone + name inputs share the same Y coordinate; the span is vertically centered (7px diff due to shorter text height).
+  * Verified live summary: initial state (both empty) → "1. Khách vãng lai — Chưa chọn DV / 2. Khách vãng lai — Chưa chọn DV". Filled Khách #1="Hoàng Vũ", Khách #2="Trần B" → summary updated to "1. Hoàng Vũ — Chưa chọn DV / 2. Trần B — Chưa chọn DV".
+  * Verified toggle: "Cùng lịch" hint = "tất cả khách gộp vào 1 lịch hẹn. Ô không nhập tên → Khách vãng lai"; "Khác lịch" hint = "mỗi khách tạo 1 lịch riêng. Ô không nhập tên → Khách vãng lai".
+  * No console errors, no page errors. PM2 stable (32m uptime, 0 restarts since last).
+  * Screenshots: verify-multi-customer-oneline.png, verify-numbered-summary.png, verify-final-layout.png.
+
+Stage Summary:
+- **Layout FIXED**: "Khách #i" + SĐT + Tên khách + trash now on ONE line (flex row with placeholders instead of separate Labels).
+- **Live numbered summary**: "Thông tin khách hàng" section shows all customers numbered (1., 2., ...) with their service + staff, updating reactively as the user types. Empty slots show "Khách vãng lai".
+- **Walk-in defaults** (Reqs 2,4,5): Already worked via `resolveCustomerId` (empty phone+name → guest record). Confirmed via the summary display showing "Khách vãng lai" for empty slots.
+- **Cùng lịch note preservation** (Req 3): All customer info now stored in the booking `note` as a structured summary so the cashier can see all customers (the API only stores one customer_id per booking).
+- **Khác lịch** (Req 5): Already worked — each slot → separate booking with its own customer_id; empty → walk-in. No changes needed.
+- 0 lint errors. No runtime errors. PM2 online and stable.
+
+---
+Task ID: booking-multicustomer-remove-autonote
+Agent: Z.ai Code (main)
+Task: In the "Tạo mới lịch hẹn" dialog, when numberOfCustomers > 1 (multi-customer mode), the booking list's "Ghi chú & dịch vụ" column should only show Service + staff name — NOT show the ghi chú (note) anymore. (Previous task auto-stored a customer summary in the note field, which cluttered the column.)
+
+Work Log:
+- Read worklog.md (previous task "booking-multicustomer-layout-v2" added an auto-generated customer summary to the booking's `note` field in "Cùng lịch" mode).
+- Found the booking list "Ghi chú & dịch vụ" column rendering in `src/components/features/booking/booking-customer-view.tsx` (lines 260-291): it shows `Ghi chú: {booking.note}` (only if note is truthy) + service categories + `NV: {staff}` + "Tạo bởi: {creator}".
+- Identified root cause: the previous task's Edit 3 stored `[Đặt lịch nhiều khách]\n1. {customer} — {service} (NV: {staff})\n...` in the booking's `note` field, causing the "Ghi chú:" line to render in the column — redundant with the services already shown below it.
+- Fix: Reverted Edit 3 in `src/components/features/booking/booking-dialog.tsx`. Removed the `customerSummary`/`combinedNote` logic in the "Cùng lịch" (`scheduleMode === "same"`) branch of `handleMultiCustomerSubmit`. Restored `note: data.note || null` — only the user's OWN typed note (if any) is stored; no auto-generated summary.
+- Lint: `npx eslint src/components/features/booking/booking-dialog.tsx` → 0 errors, 1 pre-existing warning (React Compiler `watch()` note, not introduced by this task).
+
+- Verification (API + Agent Browser):
+  * Logged in as ductran/123456 via API (cookie).
+  * Checked existing bookings for any with the old auto-note — none found (previous test bookings were cleaned up).
+  * Created a test booking LH000066 via API: date_time=2026-07-15T10:00+07:00, number_of_customers=2, note=null, 2 services (Master Cut × 2, staff: Nguyễn Quốc Việt + Nguyễn Trường Đan). Created successfully.
+  * Opened /booking in Agent Browser, logged in, clicked "Ngày mai" → date changed to 15/07/2026.
+  * Found LH000066 in the list. Checked the "Ghi chú & dịch vụ" column:
+    - `hasGhiChuLabel: false` → NO "Ghi chú:" line rendered (because note=null).
+    - Column shows ONLY: "Dịch Vụ Cắt / NV: Nguyễn Quốc Việt / Dịch Vụ Cắt / NV: Nguyễn Trường Đan / Tạo bởi: Trần Anh Đức" — exactly service + staff + creator, no note.
+  * No console errors, no page errors.
+  * Screenshot: `/home/z/my-project/download/CRM/verify-note-removed.png`.
+  * Cleanup: DELETE /api/supabase/bookings/36c277e0-... → 200 OK. Test booking removed.
+
+Stage Summary:
+- **Root cause**: previous task auto-stored a customer summary in the booking `note` field, which the booking list "Ghi chú & dịch vụ" column rendered as a "Ghi chú: [Đặt lịch nhiều khách]..." line — redundant with the services already shown.
+- **Fix**: reverted the auto-note storage. `note: data.note || null` — only the user's own typed note is stored.
+- **Result**: the "Ghi chú & dịch vụ" column now shows ONLY service categories + staff names (+ "Tạo bởi") for multi-customer "Cùng lịch" bookings — no auto-generated note clutter.
+- The live numbered summary in the dialog's "Thông tin khách hàng" section is UNCHANGED (still shows all customers + services for the cashier while editing).
+- 0 lint errors. No runtime errors. PM2 online and stable (68m uptime). Test booking cleaned up.
+
+---
+Task ID: booking-multicustomer-per-service-display
+Agent: Z.ai Code (main)
+Task: For multi-customer "Cùng lịch" bookings (numberOfCustomers >= 2), persist and display per-service customer info. User example: 3 khách (2 with info + 1 empty), View nhân viên customer column shows all 3 (2 profiles + "Khách vãng lai"); Cashier order detail main customer = first customer, each service shows: service name / customer name+phone (or "Khách vãng lai") / staff name.
+
+Work Log:
+- Research (2 Explore subagents): confirmed `booking_services` table has NO `customer_id` column — only `bookings.customer_id` (single, booking-level). For "Cùng lịch" (1 booking, N services), slots 1..N's customer info was lost. PostgREST (Supabase REST) does NOT support DDL, so a `customer_id` column cannot be added from this environment.
+- Decision: persist per-slot customer mapping as a structured `[[MULTI]]` JSON block inside the booking's `note` field. A shared parser lib is used by every display site (no raw JSON ever shown to users).
+
+- Created `src/lib/multi-customer.ts`:
+  * `parseMultiCustomerNote(note)` → `{slots, userNote}` or null (backward compatible with plain bookings).
+  * `buildMultiCustomerNote(slots, userNote)` → `[[MULTI]]{json}` string.
+  * `getAllSlotCustomers(note)` → slot array or null.
+  * `SlotCustomer = {id, name, phone, walkin}`.
+
+- `booking-dialog.tsx`:
+  * Import `buildMultiCustomerNote` + `parseMultiCustomerNote`.
+  * `handleMultiCustomerSubmit` "Cùng lịch" branch: build `slots[]` (id=resolvedIds[i], name, phone, walkin = !name && !phone) and store `buildMultiCustomerNote(slots, userNote)` as the booking `note`. Each service still carries only service_id/staff/category (DB limitation), but the per-slot customer survives in the note.
+  * Edit-mode reset: the note textarea now shows only `parsed.userNote` (the `[[MULTI]]` block is stripped) so editing a multi-customer booking doesn't expose raw JSON.
+
+- `booking-staff-view.tsx` (Staff View): added `getAllSlotCustomers` import. Updated 3 customer displays:
+  * SegmentBlock (single-day staff column): if multi-customer, list every slot customer (walkin → "Khách vãng lai"); else single customer as before.
+  * BookingChip (multi-day grid): same multi-customer list.
+  * BookingHoverDetails (hover popover): same.
+
+- `booking-customer-view.tsx` (Customer View list): added `parseMultiCustomerNote` import. The "Ghi chú & dịch vụ" column now: for multi-customer bookings, shows each service with its slot customer (name+phone or "Khách vãng lai") + staff, and shows `userNote` (not raw JSON) as the ghi chú line if present; regular bookings keep existing layout.
+
+- `cashier/invoices/page.tsx` (Thu ngân order list/detail): added `parseMultiCustomerNote` import + `note?` field to `BookingOrder` interface + `orderToBooking` passes `note`. OrderDetailDialog services box: each item now shows its slot customer between service name and staff line.
+
+- `invoice-dialog.tsx` (payment dialog): added `parseMultiCustomerNote` import. `serviceRows` now carry a `customer` field (parsed from booking note). Services box + payment-review dialog both render the customer line.
+
+- Lint: `npx eslint` on all 6 modified files → 0 errors, 1 pre-existing warning (React Compiler `watch()` note).
+
+- Agent Browser end-to-end verification:
+  * Created a real 3-customer "Cùng lịch" booking LH000066 via API: 3 services (Master Cut × 3), staff = Nguyễn Quốc Việt / Nguyễn Trường Đan / Nguyễn Khánh Linh, note = `[[MULTI]]{slots:[Hoàng Vũ, Quang Minh, walkin], userNote:"Test"}`.
+  * View nhân viên (Jul 15, staff view): found the booking block — customer column shows "Hoàng Vũ 0634845123 / Quang Minh 0914561234 / Khách vãng lai". ✓
+  * Thu ngân → Danh sách đơn hàng → opened LH000066 detail: services section shows exactly:
+      "Master Cut / Hoàng Vũ 0634845123 / NV: Nguyễn Quốc Việt / 220.000đ"
+      "Master Cut / Quang Minh 0914561234 / NV: Nguyễn Trường Đan / 220.000đ"
+      "Master Cut / Khách vãng lai / NV: Nguyễn Khánh Linh / 220.000đ"
+    `hasRawJSON: false` → no `[[MULTI]]` shown to user. Main customer line = Hoàng Vũ (slot 0). ✓
+  * No console/page errors. PM2 stable (3h uptime).
+  * Screenshot: `/home/z/my-project/download/CRM/verify-cashier-multicustomer.png`.
+  * Cleanup: DELETE booking → 200 OK.
+
+Stage Summary:
+- **Per-service customer persistence**: since `booking_services` has no `customer_id` column (and DDL isn't available via PostgREST), the per-slot customer map is stored as a `[[MULTI]]` JSON block in the booking `note`. Fully backward compatible (plain bookings return null from the parser → existing behavior).
+- **View nhân viên customer column**: lists ALL slot customers (those with info → name+phone; empty slots → "Khách vãng lai"). ✓ matches user requirement.
+- **Thu ngân order detail**: main customer = slot 0 (= booking.customer); each service shows its own customer (name+phone, or "Khách vãng lai") between service name and staff. ✓ matches user requirement exactly.
+- **No raw JSON shown**: the "Ghi chú & dịch vụ" column + order detail + invoice dialog all parse the note and never render `[[MULTI]]` text. The cashier's own typed note (userNote) is preserved and shown where appropriate.
+- **"Khác lịch" mode**: unchanged — each slot is a separate booking with its own customer_id at the booking level, so per-customer display already works there.
+- 0 lint errors. No runtime errors. PM2 online and stable (3h). Test booking cleaned up.
+
+---
+Task ID: booking-module-customer-column-split
+Agent: Z.ai Code (main)
+Task: In the Lịch hẹn module, for multi-customer "Cùng lịch" bookings: the "Khách hàng" column should list all slot customers (those with info → name+phone; empty slots → "Khách vãng lai"), while the "Ghi chú & Dịch vụ" column should show ONLY services + staff (NO customer info). Previous task had put per-service customer info in BOTH columns — user wants it split: customers in customer column only.
+
+Work Log:
+- `src/components/features/booking/booking-customer-view.tsx` (the list view):
+  * Added `getAllSlotCustomers` to the multi-customer import (was only `parseMultiCustomerNote`).
+  * **Customer column**: now renders all slot customers for multi-customer bookings. Each non-walkin slot → name (font-medium) on line 1 + phone on line 2. Each walkin slot → "Khách vãng lai" (gray). Falls back to the single booking customer for plain bookings.
+  * **"Ghi chú & Dịch vụ" column**: simplified the multi-customer branch to match the regular branch — shows ONLY service category + staff (+ the cashier's own `userNote` if present). Removed the per-service customer display from this column (customer info now lives exclusively in the customer column).
+
+- Staff View (`booking-staff-view.tsx`): already correct from the previous task — customer column lists all slot customers, services section shows only service+staff (no customer). No changes needed.
+
+- Lint: `npx eslint` on both files → 0 errors, 0 warnings.
+
+- Agent Browser verification:
+  * Created a 2-customer "Cùng lịch" booking LH000067 via API: slot 1 = Hoàng Vũ (0634845123), slot 2 = walk-in. 2 services (Master Cut × 2), staff = Nguyễn Quốc Việt + Nguyễn Trường Đan.
+  * Viewed the booking list (View khách hàng) on Jul 15. Found LH000067 row. Column contents:
+    - Customer column (idx 3): "Hoàng Vũ 0634845123 / Khách vãng lai" ✓ (name+phone for slot 1, "Khách vãng lai" for slot 2)
+    - "Ghi chú & Dịch vụ" column (idx 4): "Ghi chú: Ghi chu test / Dịch Vụ Cắt / NV: Nguyễn Quốc Việt / Dịch Vụ Cắt / NV: Nguyễn Trường Đan / Tạo bởi: Trần Anh Đức" ✓ (ONLY services + staff + userNote — NO customer info)
+  * No console/page errors. PM2 stable (8h uptime).
+  * Screenshot: `/home/z/my-project/download/CRM/verify-customer-view-split.png`.
+  * Cleanup: DELETE booking → 200 OK.
+
+Stage Summary:
+- **Customer column**: multi-customer bookings now list every slot's customer (name + phone for info slots; "Khách vãng lai" for empty slots). Matches user's example exactly.
+- **"Ghi chú & Dịch vụ" column**: shows ONLY services + staff (+ userNote). Customer info removed from this column — no duplication.
+- **Staff View**: unchanged (already correct) — customer column lists all slot customers; services section shows only service+staff.
+- 0 lint errors. No runtime errors. PM2 online (8h). Test booking cleaned up.
+
+---
+Task ID: booking-columns-numbered-and-styled
+Agent: Z.ai Code (main)
+Task: In the Lịch hẹn module list view (View khách hàng): (1) "Khách vãng lai" in the customer column should use the SAME font size + color as named customers (was smaller/gray); (2) number each customer when there are multiple (1., 2., ...) in BOTH the customer column and the "Ghi chú & Dịch vụ" column so they correspond; (3) service name → black, staff name → yellow.
+
+Work Log:
+- `src/components/features/booking/booking-customer-view.tsx` — 2 edits (MultiEdit):
+  * **Customer column**: rewrote the slotCustomers.map to always render a numbered `<div className="font-medium text-gray-900 text-sm">` for BOTH walk-in and named slots. Walk-in → "1. Khách vãng lai" (same size + dark color as named). Named → "1. Hoàng Vũ" + phone below. Removed the old gray `text-xs text-gray-500` for walk-in.
+  * **"Ghi chú & Dịch vụ" column**: added `parseMultiCustomerNote` check (`isMulti`). Each service entry now renders `{isMulti ? `${idx + 1}. ` : ""}{e.category}` so services are numbered to match customers. Service name className changed `text-gray-700` → `text-gray-900` (black). Staff name className changed `text-gray-500` → `text-yellow-600` (yellow).
+
+- Lint: `npx eslint` → 0 errors, 0 warnings.
+
+- Agent Browser verification:
+  * Created 2-customer "Cùng lịch" booking LH000068: slot 1 = Hoàng Vũ (0634845123), slot 2 = walk-in. 2 services (Master Cut × 2), staff = Nguyễn Quốc Việt + Nguyễn Trường Đan.
+  * Inspected computed styles via JS:
+    - Customer column: "1. Hoàng Vũ" → color lab(8.12) [gray-900], fontWeight 500, fontSize 14px. "2. Khách vãng lai" → color lab(8.12) [SAME gray-900], fontWeight 500, fontSize 14px. ✓ (walk-in now matches named customer styling)
+    - Note column service labels: "1. Dịch Vụ Cắt", "2. Dịch Vụ Cắt" → color lab(8.12) [gray-900/black]. ✓
+    - Note column staff labels: "NV: Nguyễn Quốc Việt", "NV: Nguyễn Trường Đan" → color lab(62.78 22.42 86.15) [yellow-600]. ✓
+    - Numbers correspond: customer "1." matches service "1.", customer "2." matches service "2.". ✓
+  * No console/page errors. PM2 stable (9h uptime).
+  * Screenshot: `/home/z/my-project/download/CRM/verify-numbered-styled.png`.
+  * Cleanup: DELETE booking → 200 OK.
+
+Stage Summary:
+- **"Khách vãng lai"** now uses the SAME font size (14px) + color (gray-900/black) + weight (500) as named customers — no longer gray/smaller.
+- **Numbering**: both columns number entries (1., 2., ...) for multi-customer bookings, so customer #1 corresponds to service #1, etc. Single-customer bookings show no numbers (unchanged).
+- **Colors**: service name = black (text-gray-900); staff name = yellow (text-yellow-600).
+- 0 lint errors. No runtime errors. PM2 online (9h). Test booking cleaned up.
