@@ -378,10 +378,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
 
-    // Resolve who created this invoice: prefer the body's created_by, fall back
-    // to the currently-logged-in staff (from the auth cookie). This is the
+    // Resolve who created this invoice: the auth cookie is the primary source
+    // (httpOnly, server-set, tamper-proof). The body's created_by is a FALLBACK
+    // for when the cookie isn't sent (e.g. third-party cookie blocking in the
+    // Preview Panel iframe) — the client sends the logged-in staff's id from
+    // the auth store so the actor is always captured. This is the
     // "Người thực hiện" shown in the activity history table.
-    const actorStaffId = (typeof created_by === "string" && created_by.trim()) || getCurrentStaffId(request) || null;
+    const actorStaffId = getCurrentStaffId(request) || (typeof created_by === "string" && created_by.trim() ? created_by.trim() : null);
 
     // Kiosk special case: if this invoice is created from a booking that was
     // placed by a CUSTOMER via the public "Đặt lịch" kiosk (booking.created_by
@@ -404,43 +407,47 @@ export async function POST(request: NextRequest) {
     }
     const createActorId = isKioskBooking ? null : actorStaffId;
 
-    // Log a create activity (best-effort, non-blocking). When the invoice is
-    // created from a booking with status "pending" (the checkin flow), label
-    // it CHECKIN; otherwise CREATE_INVOICE (standalone) or
-    // CREATE_INVOICE_FROM_BOOKING (booking linked but completed directly).
+    // Log activities (best-effort, non-blocking). The user wants the history
+    // table to ALWAYS show a "Khởi tạo" row (who created the invoice) AND a
+    // "Checkin" row (who checked the customer in) for the booking→checkin flow.
     //
-    // Actor attribution:
-    //   - CREATE_INVOICE / CREATE_INVOICE_FROM_BOOKING: the entity that
-    //     CREATED the invoice. For kiosk bookings (customer-placed), this is
-    //     the customer (null created_by, enriched on read). For staff-created
-    //     bookings, it's the staff.
-    //   - CHECKIN: ALWAYS the logged-in staff — the customer placed the
-    //     booking, but the STAFF performs the checkin. So use actorStaffId
-    //     regardless of isKioskBooking.
-    //   - PAYMENT / CHECKOUT: ALWAYS the logged-in staff (same reasoning).
+    // Actions logged:
+    //   - CREATE_INVOICE / CREATE_INVOICE_FROM_BOOKING ("Khởi tạo"):
+    //     WHO created the invoice. For kiosk bookings (customer-placed), the
+    //     actor is the customer (null created_by, enriched on read). For
+    //     staff-created bookings or standalone invoices, it's the staff.
+    //   - CHECKIN ("Checkin"): for the booking→checkin→pending flow, the staff
+    //     who checked the customer in (ALWAYS actorStaffId — the staff performs
+    //     the checkin even if the booking was kiosk-placed).
+    //   - PAYMENT ("Thanh toán") + CHECKOUT ("Hoàn tất"): for direct-complete
+    //     invoices (paid at the cashier without a prior checkin).
     try {
       const isCheckinFlow = !!booking_id && status === "pending";
-      const createAction = isCheckinFlow
-        ? "CHECKIN"
-        : booking_id
-          ? "CREATE_INVOICE_FROM_BOOKING"
-          : "CREATE_INVOICE";
-      // CHECKIN is a staff action → always attribute to the logged-in staff.
-      // CREATE_INVOICE / CREATE_INVOICE_FROM_BOOKING → attribute to the
-      // original creator (customer for kiosk, staff otherwise).
-      const logActorId = isCheckinFlow ? actorStaffId : createActorId;
+      // ALWAYS log a "Khởi tạo" row so the user can see who created the invoice.
+      const createAction = booking_id
+        ? "CREATE_INVOICE_FROM_BOOKING"
+        : "CREATE_INVOICE";
       await supabaseAdmin.from("invoice_activities").insert({
         invoice_id: data.id,
         invoice_code: finalCode,
         action: createAction,
-        detail:
-          isCheckinFlow
-            ? `Checkin - tạo hóa đơn ${finalCode} từ lịch hẹn - ${itemRows.length} mặt hàng`
-            : `Tạo hóa đơn ${finalCode} - ${itemRows.length} mặt hàng${tipAmount > 0 ? ` - thưởng thợ ${tipAmount}` : ""}`,
+        detail: `Tạo hóa đơn ${finalCode}${booking_id ? " từ lịch hẹn" : ""} - ${itemRows.length} mặt hàng${tipAmount > 0 ? ` - thưởng thợ ${tipAmount}` : ""}`,
         value: String(finalAmount),
         branch_id,
-        created_by: logActorId,
+        created_by: createActorId,
       });
+      // For the checkin flow, ALSO log a "Checkin" row (the staff action).
+      if (isCheckinFlow) {
+        await supabaseAdmin.from("invoice_activities").insert({
+          invoice_id: data.id,
+          invoice_code: finalCode,
+          action: "CHECKIN",
+          detail: `Checkin lịch hẹn - tạo hóa đơn ${finalCode}`,
+          value: String(finalAmount),
+          branch_id,
+          created_by: actorStaffId,
+        });
+      }
     } catch {
       // Activity logging is best-effort; don't fail the invoice creation.
     }

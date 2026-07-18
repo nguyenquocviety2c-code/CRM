@@ -64,11 +64,11 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
     }
   }, [open, hour, minute]);
 
-  const scrollToItem = (container: HTMLDivElement | null, index: number) => {
+  const scrollToItem = useCallback((container: HTMLDivElement | null, index: number) => {
     if (!container) return;
-    const itemHeight = 40;
+    const itemHeight = 22;
     container.scrollTop = index * itemHeight;
-  };
+  }, []);
 
   const handleHourChange = useCallback((newHour: number) => {
     const h = String(newHour).padStart(2, "0");
@@ -77,7 +77,7 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
     onChange(newVal);
     setInputValue(newVal);
     pickedRef.current.hour = true;
-    // Auto-close if the user has also picked a minute during this session.
+    // Auto-close once BOTH hour and minute have been picked this session.
     if (pickedRef.current.minute) {
       setOpen(false);
     }
@@ -90,7 +90,7 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
     onChange(newVal);
     setInputValue(newVal);
     pickedRef.current.minute = true;
-    // Auto-close if the user has also picked an hour during this session.
+    // Auto-close once BOTH hour and minute have been picked this session.
     if (pickedRef.current.hour) {
       setOpen(false);
     }
@@ -146,29 +146,29 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
           <div className="flex">
             {/* Hour column */}
             <div className="flex-1 border-r">
-              <div className="px-2 py-1 text-xs font-medium text-center text-gray-500 border-b">
+              <div className="px-1 py-0.5 text-[9px] font-medium text-center text-gray-500 border-b">
                 Giờ
               </div>
               <div className="relative">
                 <button
                   type="button"
-                  className="absolute top-0 left-0 right-0 z-10 flex justify-center py-1 bg-white/80 hover:bg-gray-100"
+                  className="absolute top-0 left-0 right-0 z-10 flex justify-center bg-white/80 hover:bg-gray-100"
                   onClick={() => handleHourChange((hour + 23) % 24)}
                 >
-                  <ChevronUp className="h-3 w-3" />
+                  <ChevronUp className="h-2.5 w-2.5" />
                 </button>
                 <div
                   ref={hourListRef}
-                  className="h-[120px] overflow-y-auto scrollbar-hide text-center"
+                  className="h-[66px] overflow-y-auto scrollbar-hide text-center"
                   onWheel={(e) => handleWheel(e, "hour")}
                   style={{ scrollbarWidth: "none" }}
                 >
-                  <div className="h-[40px]" />
+                  <div className="h-[22px]" />
                   {hours.map((h) => (
                     <button
                       key={h}
                       type="button"
-                      className={`flex h-[40px] w-full items-center justify-center text-sm hover:bg-emerald-50 ${
+                      className={`flex h-[22px] w-full items-center justify-center text-[11px] hover:bg-emerald-50 ${
                         h === hour ? "bg-emerald-100 font-semibold text-emerald-700" : "text-gray-700"
                       }`}
                       onClick={() => {
@@ -179,42 +179,42 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
                       {String(h).padStart(2, "0")}
                     </button>
                   ))}
-                  <div className="h-[40px]" />
+                  <div className="h-[22px]" />
                 </div>
                 <button
                   type="button"
-                  className="absolute bottom-0 left-0 right-0 z-10 flex justify-center py-1 bg-white/80 hover:bg-gray-100"
+                  className="absolute bottom-0 left-0 right-0 z-10 flex justify-center bg-white/80 hover:bg-gray-100"
                   onClick={() => handleHourChange((hour + 1) % 24)}
                 >
-                  <ChevronDown className="h-3 w-3" />
+                  <ChevronDown className="h-2.5 w-2.5" />
                 </button>
               </div>
             </div>
             {/* Minute column */}
             <div className="flex-1">
-              <div className="px-2 py-1 text-xs font-medium text-center text-gray-500 border-b">
+              <div className="px-1 py-0.5 text-[9px] font-medium text-center text-gray-500 border-b">
                 Phút
               </div>
               <div className="relative">
                 <button
                   type="button"
-                  className="absolute top-0 left-0 right-0 z-10 flex justify-center py-1 bg-white/80 hover:bg-gray-100"
+                  className="absolute top-0 left-0 right-0 z-10 flex justify-center bg-white/80 hover:bg-gray-100"
                   onClick={() => handleMinuteChange((minute + 59) % 60)}
                 >
-                  <ChevronUp className="h-3 w-3" />
+                  <ChevronUp className="h-2.5 w-2.5" />
                 </button>
                 <div
                   ref={minuteListRef}
-                  className="h-[120px] overflow-y-auto scrollbar-hide text-center"
+                  className="h-[66px] overflow-y-auto scrollbar-hide text-center"
                   onWheel={(e) => handleWheel(e, "minute")}
                   style={{ scrollbarWidth: "none" }}
                 >
-                  <div className="h-[40px]" />
+                  <div className="h-[22px]" />
                   {minutes.map((m) => (
                     <button
                       key={m}
                       type="button"
-                      className={`flex h-[40px] w-full items-center justify-center text-sm hover:bg-emerald-50 ${
+                      className={`flex h-[22px] w-full items-center justify-center text-[11px] hover:bg-emerald-50 ${
                         m === minute ? "bg-emerald-100 font-semibold text-emerald-700" : "text-gray-700"
                       }`}
                       onClick={() => {
@@ -225,26 +225,17 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM" }: TimePicke
                       {String(m).padStart(2, "0")}
                     </button>
                   ))}
-                  <div className="h-[40px]" />
+                  <div className="h-[22px]" />
                 </div>
                 <button
                   type="button"
-                  className="absolute bottom-0 left-0 right-0 z-10 flex justify-center py-1 bg-white/80 hover:bg-gray-100"
+                  className="absolute bottom-0 left-0 right-0 z-10 flex justify-center bg-white/80 hover:bg-gray-100"
                   onClick={() => handleMinuteChange((minute + 1) % 60)}
                 >
-                  <ChevronDown className="h-3 w-3" />
+                  <ChevronDown className="h-2.5 w-2.5" />
                 </button>
               </div>
             </div>
-          </div>
-          <div className="border-t px-2 py-1 flex justify-end">
-            <button
-              type="button"
-              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium px-2 py-1"
-              onClick={() => setOpen(false)}
-            >
-              Xong
-            </button>
           </div>
         </div>
       )}

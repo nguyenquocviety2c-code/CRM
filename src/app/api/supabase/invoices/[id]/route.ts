@@ -292,7 +292,7 @@ export async function PUT(
         status: (current as { status?: string | null } | null)?.status ?? null,
         payment_method: (current as { payment_method?: string | null } | null)?.payment_method ?? null,
       };
-      const actorStaffId = getCurrentStaffId(request);
+      const actorStaffId = getCurrentStaffId(request) || (typeof body.created_by === "string" && body.created_by.trim() ? body.created_by.trim() : null);
       const invoiceCode = (current as { code?: string } | null)?.code || "";
       const branchIdForActivity = (current as { branch_id?: string | null } | null)?.branch_id || null;
       const changeDetail = describeInvoiceChanges(
@@ -377,7 +377,7 @@ export async function PUT(
 
     // Log an UPDATE_INVOICE activity (one row per edit) describing the changes.
     // Build a simple change description from the requested field updates.
-    const actorStaffId = getCurrentStaffId(request);
+    const actorStaffId = getCurrentStaffId(request) || (typeof body.created_by === "string" && body.created_by.trim() ? body.created_by.trim() : null);
     const updatedRow = data as { code?: string; branch_id?: string | null; status?: string | null; final_amount?: number | string | null; discount?: number | string | null; payment_method?: string | null } | null;
     const changeParts: string[] = [];
     if (body.customer_id !== undefined) changeParts.push("khách hàng");

@@ -51,16 +51,26 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Kiosk special case: activities with null created_by originate from the
-    // public "Đặt lịch" kiosk where a CUSTOMER placed the booking/order. We
-    // fetch each such invoice's customer name so the activity table can show
-    // "Khách hàng: <name>" instead of "Hệ thống".
+    // Kiosk special case: an activity with null created_by represents a
+    // CUSTOMER action ONLY when the action is a CREATE (the order was placed
+    // by a customer via the public "Đặt lịch" kiosk, with no staff logged in).
+    // All other actions (CHECKIN, PAYMENT, CHECKOUT, UPDATE_INVOICE, NO_SHOW,
+    // CANCEL) are ALWAYS staff-performed — a null created_by there is just
+    // stale historical data, and must NOT be labeled "Khách hàng". Those rows
+    // fall through to "Hệ thống" in the frontend.
+    // (We only fetch the customer name for CREATE_* actions so the table can
+    // show "Khách hàng: <name>" for genuine kiosk-created orders.)
+    const CREATE_ACTIONS = new Set(["CREATE_INVOICE", "CREATE_INVOICE_FROM_BOOKING"]);
     const invoiceIdsForCustomer = Array.from(
       new Set(
         (data ?? [])
           .filter(
-            (a: { created_by?: string | null; invoice_id?: string | null }) =>
-              !a.created_by && typeof a.invoice_id === "string" && !!a.invoice_id
+            (a: { created_by?: string | null; invoice_id?: string | null; action?: string | null }) =>
+              !a.created_by &&
+              typeof a.action === "string" &&
+              CREATE_ACTIONS.has(a.action) &&
+              typeof a.invoice_id === "string" &&
+              !!a.invoice_id
           )
           .map((a: { invoice_id?: string | null }) => a.invoice_id as string)
       )
@@ -79,17 +89,26 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const enriched = (data ?? []).map((a: Record<string, unknown>) => ({
-      ...a,
-      created_by_staff:
-        typeof a.created_by === "string" && staffMap[a.created_by]
-          ? staffMap[a.created_by]
-          : null,
-      created_by_customer:
-        !a.created_by && typeof a.invoice_id === "string" && invoiceCustomerMap[a.invoice_id as string]
-          ? invoiceCustomerMap[a.invoice_id as string]
-          : null,
-    }));
+    const enriched = (data ?? []).map((a: Record<string, unknown>) => {
+      const actionStr = typeof a.action === "string" ? (a.action as string) : "";
+      const isCreateAction = CREATE_ACTIONS.has(actionStr);
+      const invId = typeof a.invoice_id === "string" ? (a.invoice_id as string) : "";
+      return {
+        ...a,
+        created_by_staff:
+          typeof a.created_by === "string" && staffMap[a.created_by]
+            ? staffMap[a.created_by]
+            : null,
+        // Only CREATE_* actions with null created_by represent a customer action
+        // (kiosk-placed order). For all other actions, a null created_by is stale
+        // historical data and must NOT be labeled "Khách hàng" — it falls through
+        // to "Hệ thống" in the frontend.
+        created_by_customer:
+          !a.created_by && isCreateAction && invoiceCustomerMap[invId]
+            ? invoiceCustomerMap[invId]
+            : null,
+      };
+    });
 
     return NextResponse.json({
       ok: true,

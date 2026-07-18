@@ -1322,6 +1322,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         status: data.status,
         note: data.note || null,
         branch_id: selectedBranchId || null,
+        // Send the logged-in staff's id so the server can attribute the
+        // "Chỉnh sửa" activity to them even when the auth cookie isn't sent
+        // (Preview Panel iframe third-party cookie blocking).
+        actor_staff_id: user?.id,
         services: parsed.map((g) => ({
           service_id: g.entry.serviceId,
           service_category_id: g.entry.serviceCategoryId || null,
@@ -2502,12 +2506,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                         }
                       }}
                     >
-                      <SelectTrigger className="w-full min-w-0 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                      <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                         <SelectValue placeholder="Chọn" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="text-xs">
                         {sources.map((source) => (
-                          <SelectItem key={source.id} value={source.id} className="max-w-full">
+                          <SelectItem key={source.id} value={source.id} className="max-w-full text-xs py-1">
                             <span className="truncate block">{source.name}</span>
                           </SelectItem>
                         ))}
@@ -2522,12 +2526,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                         setValue("customerChannelId", value)
                       }
                     >
-                      <SelectTrigger className="w-full min-w-0 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                      <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                         <SelectValue placeholder="chọn" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="text-xs">
                         {channels.map((channel) => (
-                          <SelectItem key={channel.id} value={channel.id} className="max-w-full">
+                          <SelectItem key={channel.id} value={channel.id} className="max-w-full text-xs py-1">
                             <span className="truncate block">{channel.name}</span>
                           </SelectItem>
                         ))}
@@ -2558,14 +2562,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                       onValueChange={(value) => setValue("status", value as "new" | "confirmed" | "checkin" | "checkout" | "no_show" | "cancelled")}
                       defaultValue={watch("status")}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger size="sm" className="text-xs">
                         <SelectValue placeholder="Chọn trạng thái" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="text-xs">
                         {Object.entries(BookingStatusLabel)
                           .filter(([key]) => key !== "checkout")
                           .map(([key, label]) => (
-                            <SelectItem key={key} value={key}>
+                            <SelectItem key={key} value={key} className="text-xs py-1">
                               {label}
                             </SelectItem>
                           ))}
@@ -2863,12 +2867,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                             setValue(`services.${index}.serviceId`, "");
                           }}
                         >
-                          <SelectTrigger className="w-full min-w-0 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                          <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                             <SelectValue placeholder="Chọn nhóm dịch vụ" />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent className="text-xs">
                             {getSlotVisibleCategories(index).map((cat) => (
-                              <SelectItem key={cat.id} value={cat.id} className="max-w-full">
+                              <SelectItem key={cat.id} value={cat.id} className="max-w-full text-xs py-1">
                                 <span className="truncate block">{cat.name}</span>
                               </SelectItem>
                             ))}
@@ -2887,14 +2891,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                           }
                           disabled={!watch(`services.${index}.serviceCategoryId`)}
                         >
-                          <SelectTrigger className="w-full min-w-0 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                          <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                             <SelectValue placeholder={
                               watch(`services.${index}.serviceCategoryId`)
                                 ? "Chọn dịch vụ"
                                 : "Chọn nhóm dịch vụ trước"
                             } />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent className="text-xs">
                             {services
                               .filter(
                                 (s) =>
@@ -2902,7 +2906,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                                   watch(`services.${index}.serviceCategoryId`)
                               )
                               .map((service) => (
-                                <SelectItem key={service.id} value={service.id} className="max-w-full">
+                                <SelectItem key={service.id} value={service.id} className="max-w-full text-xs py-1">
                                   <span className="truncate block">{service.name}</span>
                                 </SelectItem>
                               ))}
@@ -2921,12 +2925,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                               setValue(`services.${index}.staffId`, value)
                             }
                           >
-                            <SelectTrigger className="w-full min-w-0 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                            <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                               <SelectValue placeholder="Chọn nhân viên" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="text-xs">
                               {getStaffForService(watch(`services.${index}.serviceId`), index).map((staff) => (
-                                <SelectItem key={staff.id} value={staff.id} className="max-w-full">
+                                <SelectItem key={staff.id} value={staff.id} className="max-w-full text-xs py-1">
                                   <span className="truncate block">{staff.name}</span>
                                 </SelectItem>
                               ))}

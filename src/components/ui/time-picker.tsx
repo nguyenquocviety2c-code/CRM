@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChevronUp, ChevronDown, Check } from "lucide-react";
+import { ChevronUp, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -77,9 +77,19 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
   const hour = parts[0] || "08";
   const minute = parts[1] || "30";
 
+  // Track whether the user has explicitly picked an hour and a minute during
+  // the current open session. Auto-close the popover once BOTH have been
+  // picked (the user selected an hour then a minute → done).
+  const pickedRef = useRef<{ hour: boolean; minute: boolean }>({ hour: false, minute: false });
+
   const setHour = useCallback(
     (h: string) => {
       onChange(`${h}:${minute}`);
+      pickedRef.current.hour = true;
+      // Auto-close once BOTH hour and minute have been picked this session.
+      if (pickedRef.current.minute) {
+        setOpen(false);
+      }
     },
     [minute, onChange]
   );
@@ -87,6 +97,11 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
   const setMinute = useCallback(
     (m: string) => {
       onChange(`${hour}:${m}`);
+      pickedRef.current.minute = true;
+      // Auto-close once BOTH hour and minute have been picked this session.
+      if (pickedRef.current.hour) {
+        setOpen(false);
+      }
     },
     [hour, onChange]
   );
@@ -129,12 +144,15 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
   };
 
   const scrollItemIntoView = (container: HTMLElement, index: number) => {
-    const itemHeight = 36;
+    const itemHeight = 24;
     container.scrollTop = index * itemHeight - itemHeight * 2; // Center selected
   };
 
   useEffect(() => {
     if (open) {
+      // Reset the pick tracking so the auto-close only fires after BOTH an
+      // hour AND a minute are picked in THIS open session.
+      pickedRef.current = { hour: false, minute: false };
       if (hourRef.current) {
         const idx = visibleHours.indexOf(hour);
         if (idx >= 0) scrollItemIntoView(hourRef.current, idx);
@@ -206,36 +224,37 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
           className="w-auto p-0"
           align="start"
           onOpenAutoFocus={(e) => e.preventDefault()}
-          onInteractOutside={(e) => e.preventDefault()}
+          // Allow outside-click to close (the user wanted this). Previously
+          // onInteractOutside was prevented which kept the popover open.
         >
           <div className="flex">
             {/* Hours column */}
             <div className="flex flex-col items-center border-r">
               <button
                 type="button"
-                className="p-1 text-gray-500 hover:bg-gray-100"
+                className="py-0.5 text-gray-500 hover:bg-gray-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   const idx = visibleHours.indexOf(hour);
                   if (idx > 0) setHour(visibleHours[idx - 1]);
                 }}
               >
-                <ChevronUp className="h-4 w-4" />
+                <ChevronUp className="h-3 w-3" />
               </button>
               <div
                 ref={hourRef}
                 onWheel={(e) => handleWheel(e, "hour")}
-                className="h-32 overflow-y-auto scrollbar-hide"
+                className="h-24 overflow-y-auto scrollbar-hide"
                 style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
               >
                 {visibleHours.length === 0 ? (
-                  <div className="px-3 py-4 text-xs text-gray-400">Không có giờ khả thi</div>
+                  <div className="px-2 py-3 text-[10px] text-gray-400">Không có giờ</div>
                 ) : (
                   visibleHours.map((h) => (
                     <div
                       key={h}
                       className={cn(
-                        "flex h-9 w-14 items-center justify-center cursor-pointer text-sm tabular-nums",
+                        "flex h-6 w-10 items-center justify-center cursor-pointer text-[11px] tabular-nums",
                         h === hour
                           ? "bg-emerald-100 font-semibold text-emerald-700"
                           : "text-gray-700 hover:bg-gray-100"
@@ -249,47 +268,47 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
               </div>
               <button
                 type="button"
-                className="p-1 text-gray-500 hover:bg-gray-100"
+                className="py-0.5 text-gray-500 hover:bg-gray-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   const idx = visibleHours.indexOf(hour);
                   if (idx >= 0 && idx < visibleHours.length - 1) setHour(visibleHours[idx + 1]);
                 }}
               >
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDown className="h-3 w-3" />
               </button>
             </div>
             {/* Separator */}
-            <div className="flex items-center justify-center w-6 text-lg font-medium text-gray-500">
+            <div className="flex items-center justify-center w-4 text-sm font-medium text-gray-500">
               :
             </div>
             {/* Minutes column */}
             <div className="flex flex-col items-center">
               <button
                 type="button"
-                className="p-1 text-gray-500 hover:bg-gray-100"
+                className="py-0.5 text-gray-500 hover:bg-gray-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   const idx = visibleMinutes.indexOf(minute);
                   if (idx > 0) setMinute(visibleMinutes[idx - 1]);
                 }}
               >
-                <ChevronUp className="h-4 w-4" />
+                <ChevronUp className="h-3 w-3" />
               </button>
               <div
                 ref={minuteRef}
                 onWheel={(e) => handleWheel(e, "minute")}
-                className="h-32 overflow-y-auto scrollbar-hide"
+                className="h-24 overflow-y-auto scrollbar-hide"
                 style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
               >
                 {visibleMinutes.length === 0 ? (
-                  <div className="px-3 py-4 text-xs text-gray-400">Không có phút khả thi</div>
+                  <div className="px-2 py-3 text-[10px] text-gray-400">Không có phút</div>
                 ) : (
                   visibleMinutes.map((m) => (
                     <div
                       key={m}
                       className={cn(
-                        "flex h-9 w-14 items-center justify-center cursor-pointer text-sm tabular-nums",
+                        "flex h-6 w-10 items-center justify-center cursor-pointer text-[11px] tabular-nums",
                         m === minute
                           ? "bg-emerald-100 font-semibold text-emerald-700"
                           : "text-gray-700 hover:bg-gray-100"
@@ -303,31 +322,16 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
               </div>
               <button
                 type="button"
-                className="p-1 text-gray-500 hover:bg-gray-100"
+                className="py-0.5 text-gray-500 hover:bg-gray-100"
                 onClick={(e) => {
                   e.stopPropagation();
                   const idx = visibleMinutes.indexOf(minute);
                   if (idx >= 0 && idx < visibleMinutes.length - 1) setMinute(visibleMinutes[idx + 1]);
                 }}
               >
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDown className="h-3 w-3" />
               </button>
             </div>
-          </div>
-          {/* Done button — explicitly closes the popover so the user can
-              confirm their selection. */}
-          <div className="border-t p-1">
-            <button
-              type="button"
-              className="flex w-full items-center justify-center gap-1 rounded py-1.5 text-sm font-medium text-emerald-600 hover:bg-emerald-50"
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-              }}
-            >
-              <Check className="h-3.5 w-3.5" />
-              Xong
-            </button>
           </div>
         </PopoverContent>
       </Popover>

@@ -367,7 +367,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
       await fetch(`/api/supabase/invoices/${existingInvoice.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photos }),
+        body: JSON.stringify({ photos, created_by: useAuthStore.getState().user?.id }),
       });
       setExistingInvoice((prev) => prev ? { ...prev, photos } : prev);
     } catch {
@@ -491,6 +491,9 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
             status: "completed",
             payment_method: paymentMethod,
             photos: displayPhotos,
+            // Attribute the PAYMENT/CHECKOUT activity to the logged-in staff
+            // (fallback when the auth cookie isn't sent).
+            created_by: useAuthStore.getState().user?.id,
           }),
         });
         const json = await res.json();
@@ -513,6 +516,8 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
             payment_method: paymentMethod,
             status: "completed",
             photos: draftPhotos,
+            // Attribute the CREATE/PAYMENT/CHECKOUT activities to the logged-in staff.
+            created_by: useAuthStore.getState().user?.id,
           }),
         });
         const json = await res.json();

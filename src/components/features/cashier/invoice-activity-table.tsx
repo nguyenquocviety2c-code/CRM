@@ -126,9 +126,15 @@ export function InvoiceActivityTable({ invoiceId }: InvoiceActivityTableProps) {
                 : "—";
               // Executor resolution:
               //   1. Staff name (logged-in account) — normal case
-              //   2. Customer name — kiosk special case (created_by is null,
-              //      enriched with the invoice's customer via the API)
-              //   3. "Hệ thống" — fallback for automated/system actions
+              //   2. Customer name — ONLY for CREATE_* actions placed via the
+              //      public /dat-lich kiosk (created_by is null + action is
+              //      CREATE_INVOICE/CREATE_INVOICE_FROM_BOOKING). The API only
+              //      enriches customer for these actions.
+              //   3. "Hệ thống" — fallback for staff actions whose created_by is
+              //      null (stale historical data before actor logging existed).
+              //      CHECKIN/PAYMENT/CHECKOUT/UPDATE/NO_SHOW/CANCEL are ALWAYS
+              //      staff-performed, so they show "Hệ thống" rather than
+              //      "Khách hàng" when created_by is null.
               const actor =
                 row.created_by_staff?.name ||
                 row.created_by_staff?.username ||

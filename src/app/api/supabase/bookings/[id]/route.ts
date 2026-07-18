@@ -161,6 +161,28 @@ export async function PUT(
 
     const { services, ...rest } = body;
 
+    // Fetch the booking's current state BEFORE updating, so we can:
+    //  1. Build a change description for the "Chỉnh sửa" activity log.
+    //  2. Get the linked invoice (if any) to attach the activity to.
+    let beforeBooking: Record<string, unknown> | null = null;
+    let bookingInvoiceId: string | null = null;
+    let bookingInvoiceCode: string | null = null;
+    let bookingBranchId: string | null = null;
+    try {
+      const { data: before } = await supabaseAdmin
+        .from("bookings")
+        .select("status, branch_id, date_time, duration, note, number_of_customers, customer_id, invoice:invoices(id, code)")
+        .eq("id", id)
+        .maybeSingle();
+      beforeBooking = before as Record<string, unknown> | null;
+      bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
+      const inv = (before as { invoice?: { id?: string; code?: string } | null } | null)?.invoice;
+      bookingInvoiceId = inv?.id ?? null;
+      bookingInvoiceCode = inv?.code ?? null;
+    } catch {
+      // best-effort — proceed without activity logging
+    }
+
     const updateData: Record<string, unknown> = {};
     if (rest.code !== undefined) updateData.code = rest.code || null;
     if (rest.date_time !== undefined)
@@ -368,6 +390,40 @@ export async function PUT(
       }
     }
 
+    // === Log a "Chỉnh sửa" (UPDATE_INVOICE) activity when the booking is edited ===
+    // The user wants ANY booking edit (date/time, customer, services, note, etc.)
+    // to produce a "Chỉnh sửa" row in the invoice activity history, attributed to
+    // the logged-in staff. Only logged when the booking has a linked invoice
+    // (checkin/checkout state) — activities are tied to invoices.
+    if (bookingInvoiceId && beforeBooking) {
+      const actorStaffId = getCurrentStaffId(request) || (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
+      // Build a human-readable change description from the edited fields.
+      const parts: string[] = [];
+      if (rest.date_time !== undefined && rest.date_time !== (beforeBooking as { date_time?: string | null }).date_time) parts.push("ngày giờ");
+      if (rest.duration !== undefined && Number(rest.duration) !== Number((beforeBooking as { duration?: number | null }).duration)) parts.push("thời lượng");
+      if (rest.customer_id !== undefined && rest.customer_id !== (beforeBooking as { customer_id?: string | null }).customer_id) parts.push("khách hàng");
+      if (rest.note !== undefined && rest.note !== (beforeBooking as { note?: string | null }).note) parts.push("ghi chú");
+      if (rest.number_of_customers !== undefined && Number(rest.number_of_customers) !== Number((beforeBooking as { number_of_customers?: number | null }).number_of_customers)) parts.push("số khách");
+      if (rest.customer_source_id !== undefined) parts.push("nguồn khách");
+      if (rest.customer_channel_id !== undefined) parts.push("kênh đặt lịch");
+      if (rest.branch_id !== undefined && rest.branch_id !== (beforeBooking as { branch_id?: string | null }).branch_id) parts.push("chi nhánh");
+      if (services !== undefined) parts.push("dịch vụ");
+      const changeDetail = parts.length > 0 ? `Chỉnh sửa lịch hẹn: ${parts.join(", ")}` : "Chỉnh sửa lịch hẹn";
+      try {
+        await supabaseAdmin.from("invoice_activities").insert({
+          invoice_id: bookingInvoiceId,
+          invoice_code: bookingInvoiceCode,
+          action: "UPDATE_INVOICE",
+          detail: changeDetail,
+          value: null,
+          branch_id: bookingBranchId,
+          created_by: actorStaffId,
+        });
+      } catch {
+        // best-effort — don't fail the booking edit
+      }
+    }
+
     const { data: refreshed, error: fetchErr } = await supabaseAdmin
       .from("bookings")
       .select(BOOKING_SELECT)
@@ -487,7 +543,13 @@ export async function PATCH(
     // (created_by is null), the actor remains null — enriched with the
     // customer name on read.
     if (newStatus && newStatus !== oldStatus && bookingInvoiceId) {
-      const actorStaffId = getCurrentStaffId(request);
+      // Cookie is the primary source (httpOnly, tamper-proof). The body's
+      // actor_staff_id is a FALLBACK for when the cookie isn't sent (Preview
+      // Panel iframe third-party cookie blocking) — the client sends the
+      // logged-in staff's id from the auth store so the actor is always
+      // captured. Uses a dedicated field (not `created_by`, which is the
+      // booking's original-creator column and must not be overwritten).
+      const actorStaffId = getCurrentStaffId(request) || (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
       let activityAction: string | null = null;
       let activityDetail = "";
       if (newStatus === "checkin") {

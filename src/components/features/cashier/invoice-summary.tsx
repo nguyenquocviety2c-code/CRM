@@ -333,7 +333,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       await fetch(`/api/supabase/invoices/${invoiceId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photos }),
+        body: JSON.stringify({ photos, created_by: useAuthStore.getState().user?.id }),
       });
       queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
@@ -706,6 +706,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               payment_method: paymentMethod,
               status: "pending", // pending — not yet paid
               photos: [],
+              created_by: useAuthStore.getState().user?.id,
             }),
           });
           const json = await res.json();
@@ -976,6 +977,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         payment_method: paymentMethod,
         status: "completed",
         photos: draftPhotos,
+        created_by: useAuthStore.getState().user?.id,
       };
 
       // SYNC WITH BOOKING MODULE (only when the invoice has services):
@@ -1018,6 +1020,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             payment_method: payload.payment_method,
             status: "completed",
             photos: draftPhotos,
+            created_by: useAuthStore.getState().user?.id,
           }),
         });
         json = await res.json();
@@ -1250,6 +1253,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         payment_method: paymentMethod,
         status: "cancelled",
         photos: [],
+        created_by: useAuthStore.getState().user?.id,
       };
       const res = await fetch("/api/supabase/invoices", {
         method: "POST",
@@ -1529,13 +1533,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       >
                         <UserCog className="h-3 w-3" />
                       </button>
-                      <p className="text-[11px] text-sky-600">
+                      <p className="text-[11px] text-yellow-600">
                         {item.staffName ? `Nv: ${item.staffName}` : "Nv: (chưa có)"}
                       </p>
                     </div>
                   ) : (
                     item.staffName && (
-                      <p className="text-[11px] text-sky-600 leading-tight">
+                      <p className="text-[11px] text-yellow-600 leading-tight">
                         Nv: {item.staffName}
                       </p>
                     )

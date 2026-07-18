@@ -80,13 +80,26 @@ export function DatePicker({ value, onChange, placeholder = "DD/MM/YYYY" }: Date
       />
       {open && (
         <div className="absolute z-50 mt-1 rounded-md border bg-white shadow-lg">
-          <Calendar
-            mode="single"
-            selected={selectedDate}
-            onSelect={handleSelect}
-            locale={vi}
-            initialFocus
-          />
+          {/* Compact calendar: inject a scoped style to shrink cells (20px) +
+              fonts. The Calendar sets its own --cell-size (32px) + p-3 with a
+              high-specificity className that tailwind-merge can't reliably
+              override, so a <style> tag is the reliable fix. */}
+          <style>{`
+            .compact-cal [data-slot="calendar"] { padding: 4px !important; --cell-size: 20px !important; }
+            .compact-cal [data-slot="calendar"] [data-day] { font-size: 11px !important; }
+            .compact-cal [data-slot="calendar"] .rdp-month_caption { font-size: 11px !important; }
+            .compact-cal [data-slot="calendar"] .rdp-weekday { font-size: 10px !important; }
+          `}</style>
+          <div className="compact-cal">
+            <Calendar
+              mode="single"
+              selected={selectedDate}
+              onSelect={handleSelect}
+              locale={vi}
+              initialFocus
+              classNames={{ week: "flex w-full mt-0" }}
+            />
+          </div>
         </div>
       )}
     </div>

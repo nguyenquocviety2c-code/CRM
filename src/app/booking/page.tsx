@@ -184,7 +184,10 @@ export default function BookingPage() {
       const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        // Send the logged-in staff's id as actor_staff_id so the server can
+        // attribute the activity to them even when the auth cookie isn't sent
+        // (Preview Panel iframe third-party cookie blocking).
+        body: JSON.stringify({ status: newStatus, actor_staff_id: useAuthStore.getState().user?.id }),
       });
       return res.json();
     },
@@ -247,6 +250,10 @@ export default function BookingPage() {
           branch_id:
             booking.branchId || (booking.branch as { id?: string } | null)?.id || null,
           booking_id: booking.id,
+          // Send the logged-in staff's id so the CHECKIN activity is attributed
+          // to them even when the auth cookie isn't sent (Preview Panel iframe
+          // third-party cookie blocking).
+          created_by: useAuthStore.getState().user?.id,
           items: serviceRows.map((s) => ({
             name: s.name,
             itemId: null,
