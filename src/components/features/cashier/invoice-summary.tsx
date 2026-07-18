@@ -1062,7 +1062,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     onSuccess: (data) => {
       // Refresh the invoices list so the new order appears.
       queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["supabase-invoice-activities"] });
+      queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
       // Refresh the incentives list so the CSKH counts update after a promotion use.
       queryClient.invalidateQueries({ queryKey: ["cashier-promotions"] });
       // Refresh the cashier day-bookings so the active tab's status updates

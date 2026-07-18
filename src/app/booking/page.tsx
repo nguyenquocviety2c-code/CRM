@@ -198,6 +198,10 @@ export default function BookingPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
       queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
       queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+      // Invalidate the invoice-activities cache so the "Lịch sử thao tác"
+      // table refetches after a status change (e.g. checkout after payment →
+      // the PAYMENT + CHECKOUT activities appear immediately, not from stale cache).
+      queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
     },
   });
 

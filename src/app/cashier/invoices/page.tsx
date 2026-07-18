@@ -192,12 +192,15 @@ export default function InvoicesPage() {
       const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({ status: newStatus, actor_staff_id: useAuthStore.getState().user?.id }),
       });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supabase-orders"] });
+      // Invalidate the invoice-activities cache so the "Lịch sử thao tác"
+      // table refetches after a status change.
+      queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
     },
   });
 
