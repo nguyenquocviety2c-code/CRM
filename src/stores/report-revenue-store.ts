@@ -207,6 +207,7 @@ function mapInvoiceReport(inv: SupabaseInvoice, stt: number): InvoiceReport {
     stt,
     invoiceCode: inv.code || "—",
     createdAt: inv.created_at,
+    customerId: (inv as { customer_id?: string }).customer_id || inv.customer?.id || "",
     customerName: inv.customer?.name || "Khách lẻ",
     totalAmount,
     surcharge,

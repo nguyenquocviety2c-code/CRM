@@ -361,6 +361,7 @@ async function handlePurchasedView(args: PurchasedArgs) {
     const pkg = packageMap.get(r.package_id);
     return {
       id: r.id,
+      customerId: r.customer_id || "",
       customerName: r.customer_name || cust?.name || "",
       customerPhone: r.customer_phone ?? cust?.phone ?? "",
       packageName: r.package_name || pkg?.name || "",
@@ -560,6 +561,7 @@ async function handleUsageView(args: UsageArgs) {
     return {
       id: r.id,
       packageName: r.package_name || pkg?.name || "",
+      customerId: r.customer_id || "",
       customerName: r.customer_name || cust?.name || "",
       customerPhone: r.customer_phone ?? cust?.phone ?? "",
       useDate: toIso(r.use_date),

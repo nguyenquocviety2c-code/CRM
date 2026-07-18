@@ -21,15 +21,29 @@ export function getCustomerColumns(actions: {
       key: "code",
       header: "Mã",
       render: (customer) => (
-        <span className="font-medium text-emerald-600">{customer.code}</span>
+        <button
+          type="button"
+          onClick={() => actions.onViewHistory?.(customer)}
+          className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+          title="Xem lịch sử khách hàng"
+        >
+          {customer.code}
+        </button>
       ),
     },
     {
       key: "name",
-      header: "Họ tên & ghi chú",
+      header: "Họ tên",
       render: (customer) => (
         <div>
-          <div className="font-medium">{customer.name}</div>
+          <button
+            type="button"
+            onClick={() => actions.onViewHistory?.(customer)}
+            className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+            title="Xem lịch sử khách hàng"
+          >
+            {customer.name}
+          </button>
           {customer.note && (
             <div className="text-xs text-gray-500">{customer.note}</div>
           )}
@@ -48,12 +62,6 @@ export function getCustomerColumns(actions: {
       key: "group",
       header: "Nhóm",
       render: (customer) => {
-        // "Khách cũ" = has at least one COMPLETED invoice that contains a
-        // SERVICE item (type === "service"). Invoices with only products do
-        // NOT qualify — per the business rule: "khách cũ = đã làm dịch vụ
-        // và thanh toán". Both `customer_type` and `has_completed_invoice`
-        // are set by the customers API (which decodes invoice items to check
-        // for service-type items); we check both for resilience.
         const isOld =
           customer.customer_type === "old" ||
           customer.has_completed_invoice === true;
@@ -82,18 +90,6 @@ export function getCustomerColumns(actions: {
       header: "Kênh liên lạc",
       render: (customer) => (
         <span className="text-sm">{customer.channel?.name || "—"}</span>
-      ),
-    },
-    {
-      key: "careHistory",
-      header: "Lịch sử chăm sóc",
-      render: (customer) => (
-        <button
-          className="text-emerald-600 hover:text-emerald-700 hover:underline text-sm"
-          onClick={() => actions.onViewHistory?.(customer)}
-        >
-          Xem lịch sử
-        </button>
       ),
     },
     {

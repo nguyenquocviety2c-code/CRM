@@ -25,6 +25,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { parseMultiCustomerNote } from "@/lib/multi-customer";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 // Fetch a customer's "Khách cũ" status from the API. A customer counts as
 // "old" (Khách cũ) when they have at least one completed invoice OR belong
@@ -61,6 +63,8 @@ interface TodayBooking {
   code: string | null;
   date_time: string;
   status: string;
+  note: string | null;
+  number_of_customers: number | null;
   customer: { id: string; name: string; phone: string | null } | null;
   services: BookingServiceRow[];
 }
@@ -163,6 +167,14 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [addingCustomer, setAddingCustomer] = useState(false);
+  // State for the customer history dialog — opened when the cashier clicks a
+  // customer's name (green link) in the info bar.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
+    code?: string | null;
+  } | null>(null);
 
   const activeCustomer = activeCustomers.find(
     (c) => c.customerId === activeTabId
@@ -227,6 +239,17 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         (b) => b.id === activeTabId || b.id === activeMetaForBooking?.bookingId
       ) || null
     : null;
+
+  // Multi-customer "Cùng lịch" booking detection (Cashier module only).
+  // When a booking has number_of_customers >= 2 AND a [[MULTI]] note, the
+  // customer info bar hides the name + phone (those are shown per-service
+  // instead) and only displays the appointment code + date/time.
+  const activeIsMultiCustomer = activeBooking
+    ? (() => {
+        const multi = parseMultiCustomerNote(activeBooking.note);
+        return !!multi && (activeBooking.number_of_customers ?? 1) >= 2;
+      })()
+    : false;
 
   // When the selected date changes, a previously-opened booking tab (or
   // standalone-invoice tab) from an EARLIER day can still be the active tab
@@ -984,13 +1007,32 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         <div className="flex items-center gap-6 border-b bg-white px-4 py-1 text-sm">
           {isWalkinTab ? (
             <>
-              {/* Walk-in tab: show customer name (text) + inline search input
-                  with real-time autocomplete dropdown + "Thêm khách mới" button. */}
+              {/* Walk-in tab: show customer name (green clickable link to
+                  history dialog when a customer is linked, plain text when
+                  no customer is linked yet) + inline search input with
+                  real-time autocomplete dropdown + "Thêm khách mới" button. */}
               <div className="flex items-center gap-2">
                 <User className="h-4 w-4 text-gray-400" />
-                <span className="font-medium text-gray-900">
-                  {activeCustomer.customerName}
-                </span>
+                {walkinHasCustomer && activeMeta?.customerId ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setHistoryCustomer({
+                        id: activeMeta.customerId!,
+                        name: activeCustomer.customerName,
+                        phone: activeCustomer.phone || null,
+                      })
+                    }
+                    className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+                    title="Xem lịch sử khách hàng"
+                  >
+                    {activeCustomer.customerName}
+                  </button>
+                ) : (
+                  <span className="font-medium text-gray-900">
+                    {activeCustomer.customerName}
+                  </span>
+                )}
               </div>
               {activeCustomer.phone && (
                 <div className="flex items-center gap-2 text-gray-500">
@@ -1099,23 +1141,49 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
             </>
           ) : (
             <>
-              {/* Booking / standalone-invoice tab: show name + phone as TEXT
-                  (no link — the tab id may be a booking id or invoice id, and
-                  linking to /customers/detail/<id> would 404 for those). */}
-              <div className="flex items-center gap-2">
-                <User className="h-4 w-4 text-gray-400" />
-                <span className="font-medium text-gray-900">
-                  {activeCustomer.customerName}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-500">
-                <Phone className="h-4 w-4" />
-                <span>
-                  {canViewCustomerPhone
-                    ? (activeCustomer.phone || "—")
-                    : maskPhone(activeCustomer.phone)}
-                </span>
-              </div>
+              {/* Booking / standalone-invoice tab.
+                  For multi-customer bookings (number_of_customers >= 2 with a
+                  [[MULTI]] note), the per-customer name + phone are shown on
+                  each SERVICE line in the invoice summary instead — so the
+                  info bar here only shows the appointment code + date/time to
+                  avoid clutter. Single-customer bookings show name + phone;
+                  the name is a green clickable link to the history dialog
+                  (uses the booking's customer_id). */}
+              {!activeIsMultiCustomer && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-gray-400" />
+                    {activeBooking?.customer?.id ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHistoryCustomer({
+                            id: activeBooking.customer!.id,
+                            name: activeCustomer.customerName,
+                            phone: activeCustomer.phone || null,
+                          })
+                        }
+                        className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+                        title="Xem lịch sử khách hàng"
+                      >
+                        {activeCustomer.customerName}
+                      </button>
+                    ) : (
+                      <span className="font-medium text-gray-900">
+                        {activeCustomer.customerName}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-gray-500">
+                    <Phone className="h-4 w-4" />
+                    <span>
+                      {canViewCustomerPhone
+                        ? (activeCustomer.phone || "—")
+                        : maskPhone(activeCustomer.phone)}
+                    </span>
+                  </div>
+                </>
+              )}
 
               {/* Booking/invoice code badge: shows "Lịch hẹn: LHxxx" when unpaid,
                   "Hóa đơn: HDxxx" (clickable → opens full invoice view) when paid. */}
@@ -1276,6 +1344,15 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
           onClose={() => setPaidInvoiceView(null)}
         />
       )}
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the info bar. Shows visit history, spending stats,
+          and feedback for the linked customer. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

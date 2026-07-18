@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,11 +19,19 @@ import {
 import { formatVND, paginationRange } from "@/lib/report-liabilities-utils";
 import { RevenueSummaryCards } from "./revenue-summary-cards";
 import { EmptyState } from "../customer-care/empty-state";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 export function LiabilitiesCustomerView() {
   const { toast } = useToast();
   const { setPage, setPageSize } = useReportLiabilitiesStore();
   const { data, summary, page, pageSize, total } = useLiabilitiesCustomerData();
+  // Customer history dialog state — opened when clicking a customer's name
+  // (green link) in the table.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
+  } | null>(null);
 
   const cards = [
     { label: "NỢ ĐẦU KỲ", value: formatVND(summary.initialDebt) },
@@ -64,16 +73,34 @@ export function LiabilitiesCustomerView() {
                   <TableCell>
                     <button
                       onClick={() =>
-                        toast({ title: "Tính năng sẽ khả dụng ở giai đoạn sau" })
+                        setHistoryCustomer({
+                          id: customer.customerId,
+                          name: customer.customerName,
+                          phone: customer.customerPhone || null,
+                        })
                       }
-                      className="text-sky-600 hover:text-sky-700 hover:underline"
+                      className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+                      title="Xem lịch sử khách hàng"
                     >
                       {customer.customerId}
                     </button>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col">
-                      <span className="font-medium">{customer.customerName}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHistoryCustomer({
+                            id: customer.customerId,
+                            name: customer.customerName,
+                            phone: customer.customerPhone || null,
+                          })
+                        }
+                        className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                        title="Xem lịch sử khách hàng"
+                      >
+                        {customer.customerName}
+                      </button>
                       <span className="text-xs text-gray-500">{customer.customerPhone}</span>
                     </div>
                   </TableCell>
@@ -122,6 +149,14 @@ export function LiabilitiesCustomerView() {
           </select>
         </div>
       </div>
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the table. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

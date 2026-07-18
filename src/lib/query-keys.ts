@@ -1,4 +1,12 @@
 export const queryKeys = {
+  // Cashier module — the day bookings + standalone invoices shown as tabs in
+  // the cashier sidebar. These are invalidated whenever a booking is created,
+  // updated, or deleted in the Booking module so the two modules stay in sync.
+  cashier: {
+    dayBookings: ["cashier-day-bookings"] as const,
+    dayStandaloneInvoices: ["cashier-day-standalone-invoices"] as const,
+    savedInvoice: ["cashier-saved-invoice"] as const,
+  },
   customers: {
     all: ["customers"] as const,
     list: (filters?: Record<string, unknown>) => ["customers", "list", filters] as const,

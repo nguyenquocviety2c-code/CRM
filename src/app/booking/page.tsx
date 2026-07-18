@@ -192,7 +192,9 @@ export default function BookingPage() {
       // Invalidate both the Booking module list and the Cashier day-bookings
       // cache so the booking status stays in sync between the two modules.
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
-      queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
     },
   });
 
@@ -309,10 +311,16 @@ export default function BookingPage() {
       fetch(`/api/supabase/bookings/${bookingId}`, { method: "DELETE" })
         .then(() => {
           queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          // Sync the Cashier module so the deleted booking disappears from
+          // the sidebar immediately.
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+          queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
         })
         .catch(() => {
           // On failure, refetch to restore the correct state.
           queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
         });
     }
   };

@@ -18,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatDate } from "@/lib/cash-fund-utils";
 import type { PackageUsageResponse } from "@/types/report-service-package";
 import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 function formatDateTime(iso: string): string {
   return formatDate(iso, "datetime");
@@ -42,6 +43,13 @@ export function PackageUsageView() {
     invoiceId: string;
     customerName?: string;
     code?: string | null;
+  } | null>(null);
+  // Customer history dialog state — opened when clicking a customer's name
+  // (green link) in the table.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
   } | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -133,7 +141,24 @@ export function PackageUsageView() {
                 <TableRow key={row.id} className="hover:bg-slate-50">
                   <TableCell className="text-slate-700">{row.packageName}</TableCell>
                   <TableCell className="text-slate-700">
-                    <div>{row.customerName}</div>
+                    {row.customerId ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHistoryCustomer({
+                            id: row.customerId,
+                            name: row.customerName,
+                            phone: row.customerPhone || null,
+                          })
+                        }
+                        className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                        title="Xem lịch sử khách hàng"
+                      >
+                        {row.customerName}
+                      </button>
+                    ) : (
+                      <div>{row.customerName}</div>
+                    )}
                     <div className="text-xs text-gray-400">{row.customerPhone || "-"}</div>
                   </TableCell>
                   <TableCell className="text-slate-700 whitespace-nowrap">{formatDateTime(row.useDate)}</TableCell>
@@ -231,6 +256,14 @@ export function PackageUsageView() {
           onClose={() => setDetailTarget(null)}
         />
       )}
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the table. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

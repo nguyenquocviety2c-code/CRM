@@ -864,19 +864,36 @@ function SegmentBlock({
   // - Cancelled / no-show → red tint (dead slots)
   // We use the SAME color tokens as the status badge (BookingStatusBadgeColors)
   // so the block and its popover badge stay visually consistent.
+  // Card background color — SAME 6-way status-based scheme as View khách hàng >
+  // Khung giờ (booking-time-grid.tsx):
+  // - confirmed / new → sky blue
+  // - checkin → light green
+  // - no_show → yellow
+  // - cancelled → red
+  // - checkout (completed) → white with purple border
   const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled" || booking.status === "no_show";
-  // Match Khung giờ's color palette (bg-*-50 + border-*-300) for a softer look.
-  const blockBg = isPaid
-    ? "bg-emerald-50 border-emerald-300"
-    : isCancelled
-      ? "bg-red-50 border-red-200"
-      : "bg-sky-50 border-sky-300";
-  const timeText = isPaid
-    ? "text-emerald-700"
-    : isCancelled
-      ? "text-red-700"
-      : "text-sky-700";
+  const isCancelled = booking.status === "cancelled";
+  const isNoShow = booking.status === "no_show";
+  const isCheckin = booking.status === "checkin";
+
+  let blockBg: string;
+  let timeText: string;
+  if (isPaid) {
+    blockBg = "bg-white border-purple-400";
+    timeText = "text-purple-700";
+  } else if (isCancelled) {
+    blockBg = "bg-red-50 border-red-200";
+    timeText = "text-red-700";
+  } else if (isNoShow) {
+    blockBg = "bg-amber-50 border-amber-300";
+    timeText = "text-amber-700";
+  } else if (isCheckin) {
+    blockBg = "bg-green-50 border-green-300";
+    timeText = "text-green-700";
+  } else {
+    blockBg = "bg-sky-50 border-sky-300";
+    timeText = "text-sky-700";
+  }
 
   // Status options — the user wants the status Select to only offer the
   // "dead-end" transitions (Không đến / Hủy), NOT "checkin". Checkin is now a
@@ -925,7 +942,7 @@ function SegmentBlock({
       <button
         type="button"
         onClick={onClick}
-        className={`absolute inset-0 overflow-hidden border p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
+        className={`absolute inset-0 overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
       >
         {/* Time range for THIS service's slice + date + multi-service badge */}
         <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
@@ -947,9 +964,25 @@ function SegmentBlock({
         {(() => {
           const slotCustomers = getAllSlotCustomers(booking.note);
           if (slotCustomers && slotCustomers.length > 0) {
+            // For multi-customer "Cùng lịch" bookings, each staff's slot
+            // should show ONLY the customer(s) assigned to this segment's
+            // service(s). Map the segment's services back to their indices
+            // in the full sorted services array, then look up the
+            // corresponding slot customers (slots[i] ↔ services[i]).
+            const allServices = getAllServices(booking)
+              .slice()
+              .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+            const segServiceIds = new Set(segment.services.map((s) => s.id));
+            const segSlotIndices: number[] = [];
+            allServices.forEach((s, i) => {
+              if (segServiceIds.has(s.id)) segSlotIndices.push(i);
+            });
+            const segCustomers = segSlotIndices
+              .map((i) => slotCustomers[i])
+              .filter(Boolean);
             return (
               <div className="mt-0.5 space-y-0.5">
-                {slotCustomers.map((sc, i) => (
+                {segCustomers.map((sc, i) => (
                   <div key={i} className="truncate text-sm font-medium text-gray-900">
                     {sc.walkin ? (
                       <span className="text-gray-500">Khách vãng lai</span>
@@ -1420,18 +1453,28 @@ function BookingChip({
   const staffName = svc?.staff?.name || "—";
   const totalDuration = serviceRows.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
   const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled" || booking.status === "no_show";
-  // Match Khung giờ's color palette (bg-*-50 + border-*-300) for a softer look.
-  const chipBg = isPaid
-    ? "bg-emerald-50 border-emerald-300"
-    : isCancelled
-      ? "bg-red-50 border-red-200"
-      : "bg-sky-50 border-sky-300";
-  const timeText = isPaid
-    ? "text-emerald-700"
-    : isCancelled
-      ? "text-red-700"
-      : "text-sky-700";
+  const isCancelled = booking.status === "cancelled";
+  const isNoShow = booking.status === "no_show";
+  const isCheckin = booking.status === "checkin";
+  // SAME 6-way status-based scheme as View khách hàng > Khung giờ.
+  let chipBg: string;
+  let timeText: string;
+  if (isPaid) {
+    chipBg = "bg-white border-purple-400";
+    timeText = "text-purple-700";
+  } else if (isCancelled) {
+    chipBg = "bg-red-50 border-red-200";
+    timeText = "text-red-700";
+  } else if (isNoShow) {
+    chipBg = "bg-amber-50 border-amber-300";
+    timeText = "text-amber-700";
+  } else if (isCheckin) {
+    chipBg = "bg-green-50 border-green-300";
+    timeText = "text-green-700";
+  } else {
+    chipBg = "bg-sky-50 border-sky-300";
+    timeText = "text-sky-700";
+  }
 
   const timeStr = booking.date_time
     ? (() => {
@@ -1450,7 +1493,7 @@ function BookingChip({
           type="button"
           onClick={onClick}
           title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
-          className={`group flex w-full cursor-pointer flex-col overflow-hidden border p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
+          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
         >
           <div className="flex items-center justify-between">
             <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
@@ -1632,6 +1675,8 @@ export function BookingHoverDetails({
     }
   }
   // Fallback to booking services when invoice has no service items yet.
+  // Sort by sort_order so the numbering matches the multi-customer slot
+  // customer order (slots[i] ↔ services[i] in sort_order).
   const displayServices: Array<{
     name?: string;
     type?: string;
@@ -1646,16 +1691,19 @@ export function BookingHoverDetails({
         ...it,
         duration: (it.name && durationByName.get(it.name)) ?? undefined,
       }))
-    : bookingServices.map((s) => ({
-        name: s.service?.name || "Dịch vụ",
-        type: "service",
-        quantity: 1,
-        price: Number(s.service?.price) || 0,
-        discount: 0,
-        total: Number(s.service?.price) || 0,
-        staffName: s.staff?.name,
-        duration: s.service?.duration,
-      }));
+    : bookingServices
+        .slice()
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map((s) => ({
+          name: s.service?.name || "Dịch vụ",
+          type: "service",
+          quantity: 1,
+          price: Number(s.service?.price) || 0,
+          discount: 0,
+          total: Number(s.service?.price) || 0,
+          staffName: s.staff?.name,
+          duration: s.service?.duration,
+        }));
 
   const fmt = (n: number | string | null | undefined) => {
     const v = Number(n) || 0;
@@ -1667,6 +1715,9 @@ export function BookingHoverDetails({
   const finalAmount = invoiceData?.final_amount ?? booking.invoice?.final_amount;
   const promo = invoiceData?.promotion;
   const isPaid = booking.status === "checkout";
+  // Multi-customer "Cùng lịch" booking — detected via the [[MULTI]] note marker.
+  // Used to add customer/service numbering in the hover tooltip.
+  const isMulti = !!getAllSlotCustomers(booking.note);
   // When the booking has been checked in (customer is being served), the
   // "Đơn hàng" link becomes "Xem hóa đơn" — clicking it opens the invoice
   // dialog so the cashier can review/add items and proceed to payment.
@@ -1686,7 +1737,8 @@ export function BookingHoverDetails({
   return (
     <div className="space-y-1 p-2">
       {/* Line 1: customer name | phone — multi-customer "Cùng lịch" bookings
-          list every slot's customer; others show the single booking customer. */}
+          list every slot's customer WITH numbering (1. 2. 3. ...); others show
+          the single booking customer. */}
       {(() => {
         const slotCustomers = getAllSlotCustomers(booking.note);
         if (slotCustomers && slotCustomers.length > 0) {
@@ -1695,6 +1747,7 @@ export function BookingHoverDetails({
               {slotCustomers.map((sc, i) => (
                 <div key={i} className="flex items-center justify-between gap-2">
                   <span className="truncate text-sm font-semibold text-gray-900">
+                    <span className="text-emerald-600">{i + 1}.</span>{" "}
                     {sc.walkin ? <span className="text-gray-500">Khách vãng lai</span> : (sc.name || "Khách")}
                   </span>
                   {!sc.walkin && sc.phone && (
@@ -1736,8 +1789,8 @@ export function BookingHoverDetails({
               setSelectOpen(false);
             }}
           >
-            <SelectTrigger className="h-6 w-[130px] text-[11px]">
-              <SelectValue placeholder="Chọn trạng thái" />
+            <SelectTrigger className="h-6 w-auto min-w-0 max-w-[110px] text-[11px] gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+              <SelectValue placeholder="Đổi trạng thái" />
             </SelectTrigger>
             <SelectContent>
               {statusOptions.map((st) => (
@@ -1750,12 +1803,15 @@ export function BookingHoverDetails({
         ) : null}
       </div>
 
-      {/* Line 3: services — name (duration), staff name below in blue */}
+      {/* Line 3: services — name (duration), staff name below in blue.
+          For multi-customer bookings, each service is numbered to match the
+          customer numbering above (1. ↔ customer 1, 2. ↔ customer 2, etc.). */}
       {displayServices.length > 0 && (
         <div className="space-y-1 border-t pt-1">
           {displayServices.map((s, i) => (
             <div key={i} className="space-y-0.5">
               <div className="text-xs text-gray-900">
+                {isMulti && <span className="text-emerald-600">{i + 1}.</span>}{" "}
                 {s.name || "Dịch vụ"}
                 {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-// import { useState } from "react";
+import { useState } from "react";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import {
   useStaffOptions,
 } from "@/stores/report-customer-store";
 import { formatVND, paginationRange } from "@/lib/report-customer-utils";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 export function CustomerInvoiceView() {
   const { toast } = useToast();
@@ -32,6 +33,13 @@ export function CustomerInvoiceView() {
   const { summary, paginated, page, pageSize, total } = useCustomerInvoiceData();
   const customerGroupOptions = useCustomerGroupOptions();
   const staffOptions = useStaffOptions();
+  // Customer history dialog state — opened when clicking a customer's name
+  // (green link) in the table.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
+  } | null>(null);
 
   const { from, to } = paginationRange((page - 1) * pageSize, pageSize, total);
 
@@ -130,9 +138,20 @@ export function CustomerInvoiceView() {
               <tr key={item.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3">
                   <div className="space-y-0.5">
-                    <div className="text-blue-600 hover:underline cursor-pointer">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setHistoryCustomer({
+                          id: item.customerId,
+                          name: item.customerName,
+                          phone: item.phone || null,
+                        })
+                      }
+                      className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                      title="Xem lịch sử khách hàng"
+                    >
                       [{item.customerCode}] {item.customerName}
-                    </div>
+                    </button>
                     <div className="text-xs text-gray-500">
                       Đt: {item.phone} - Ngày t……o: {item.createdDate}
                     </div>
@@ -204,6 +223,14 @@ export function CustomerInvoiceView() {
           </Select>
         </div>
       </div>
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the table. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

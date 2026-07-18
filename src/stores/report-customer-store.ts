@@ -524,8 +524,7 @@ export function useCustomerInvoiceData(): {
 
       return {
         id: `cust-inv-${cid}`,
-        // Tag the row id with the customer id so we can filter below without
-        // adding a hidden field to the public type. The id is not displayed.
+        customerId: cid,
         customerCode: customer?.code || fallbackCode,
         customerName: customer?.name || fallbackName,
         phone: customer?.phone || invoices[0]?.customer?.phone || "",

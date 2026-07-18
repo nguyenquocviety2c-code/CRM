@@ -17,6 +17,7 @@ export interface InvoiceReport {
   stt: number;
   invoiceCode: string;       // "HD063788"
   createdAt: string;         // ISO datetime
+  customerId: string;        // For opening the customer history dialog
   customerName: string;
   totalAmount: number;
   surcharge: number;         // Thưởng (tiền tip cho thợ)

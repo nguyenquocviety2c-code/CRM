@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData, useQueries } from "@tanstack/react-query";
 import { Plus, Trash2, UserPlus, Loader2, ChevronDown, ChevronUp, X } from "lucide-react";
 import {
   Dialog,
@@ -155,6 +155,11 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // Which slot index's autocomplete dropdown is currently open. Only one
   // slot's dropdown shows at a time (the one the user is actively typing in).
   const [activeSlotDropdown, setActiveSlotDropdown] = useState<number | null>(null);
+  // Which field of the active slot is currently focused ("phone" | "name").
+  // The autocomplete query searches ONLY by the focused field's value, so the
+  // other field's text doesn't get combined into the search term (which would
+  // cause zero results + one API call per keystroke).
+  const [activeSlotField, setActiveSlotField] = useState<"phone" | "name">("phone");
   // Submit-in-flight flag for the multi-customer path (which does inline
   // fetches instead of useMutation, so createMutation.isPending doesn't cover it).
   const [isMultiSubmitting, setIsMultiSubmitting] = useState(false);
@@ -525,19 +530,23 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       : null;
   const activeSlotPhone = (activeSlotEntry?.customerPhone || "").trim();
   const activeSlotName = (activeSlotEntry?.customerName || "").trim();
+  // Search term = ONLY the value of the field the user is currently typing
+  // into. Searching by combined "phone name" returns zero results and fires
+  // one API call per keystroke. By restricting the search to the focused
+  // field, the dropdown stays useful and API calls are minimized.
+  const activeSlotSearchTerm = activeSlotField === "phone" ? activeSlotPhone : activeSlotName;
 
   const { data: slotCustomersData } = useQuery({
     queryKey: [
       "booking-dialog-slot-customers",
       activeSlotDropdown,
-      activeSlotPhone,
-      activeSlotName,
+      activeSlotField,
+      activeSlotSearchTerm,
     ],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("limit", "20");
-      const combined = [activeSlotPhone, activeSlotName].filter(Boolean).join(" ");
-      if (combined) params.set("search", combined);
+      if (activeSlotSearchTerm) params.set("search", activeSlotSearchTerm);
       const res = await fetch(`/api/supabase/customers?${params.toString()}`);
       const json = await res.json();
       if (!json.ok) return [];
@@ -554,7 +563,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       open &&
       isMultiCustomerMode &&
       activeSlotDropdown !== null &&
-      (!!activeSlotPhone || !!activeSlotName),
+      !!activeSlotSearchTerm,
     placeholderData: keepPreviousData,
     staleTime: 10_000,
   });
@@ -563,14 +572,18 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // Filter slot customers by phone-prefix when only phone is typed (mirrors
   // the top-level filteredCustomers logic).
   const filteredSlotCustomers = useMemo(() => {
-    if (!activeSlotPhone && !activeSlotName) return slotCustomers;
-    if (activeSlotPhone && !activeSlotName) {
+    if (!activeSlotSearchTerm) return slotCustomers;
+    // When the user is typing in the phone field, filter results by
+    // phone-prefix (mirrors the top-level filteredCustomers logic). When
+    // typing in the name field, show all API results (the API already
+    // searched by name).
+    if (activeSlotField === "phone") {
       return slotCustomers.filter((c) =>
         (c.phone || "").startsWith(activeSlotPhone)
       );
     }
     return slotCustomers;
-  }, [slotCustomers, activeSlotPhone, activeSlotName]);
+  }, [slotCustomers, activeSlotSearchTerm, activeSlotField, activeSlotPhone]);
 
   // Walk-in detection: when the customer source is "Khách vãng lai", the
   // phone/name fields are hidden and a guest customer record is created on
@@ -932,6 +945,92 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     });
   }, [serviceCategories, selectedCustomerType, watchedServices, isMultiCustomerMode]);
 
+  // ------------------------------------------------------------------
+  // Per-slot customer-type determination (multi-customer mode).
+  // For each slot, we fetch the customer's "old/new" type via the customer
+  // detail API (only when the slot has a resolved customerId from the
+  // autocomplete dropdown). The type controls which service categories are
+  // visible for that slot:
+  //   - Old customer → show "Dịch Vụ Cắt", hide "Dành cho khách hàng mới - DV Cắt"
+  //   - New customer (or no customerId, or no phone+name) → hide "Dịch Vụ Cắt",
+  //     show "Dành cho khách hàng mới - DV Cắt"
+  // ------------------------------------------------------------------
+  const slotCustomerIds = (watchedServicesForSlots || []).map(
+    (s) => s?.customerId || ""
+  );
+  const slotCustomerTypes = useQueries({
+    queries: slotCustomerIds.map((cid) => ({
+      queryKey: ["booking-slot-customer-type", cid],
+      queryFn: async () => {
+        if (!cid) return null;
+        const res = await fetch(
+          `/api/supabase/customers/${encodeURIComponent(cid)}`
+        );
+        const json = await res.json();
+        if (!json.ok) return null;
+        const groupName = (json.data.group?.name || "").toLowerCase();
+        const isOld =
+          json.data.customer_type === "old" ||
+          groupName.includes("khách cũ");
+        return { cid, type: isOld ? ("old" as const) : ("new" as const) };
+      },
+      enabled: !!cid && isMultiCustomerMode && open,
+      staleTime: 30_000,
+    })),
+  });
+  // Map: slotIndex → "old" | "new". Default "new" for slots with no
+  // customerId, no phone, or no name (per the spec: "chưa nhập SĐT và tên
+  // khách → hide Dịch Vụ Cắt", i.e. treat as new customer).
+  const slotTypeMap = new Map<number, "old" | "new">();
+  // Leading semicolon prevents ASI from merging this expression with the
+  // const declaration above (new Map()(arr).forEach — a call on the Map).
+  ;(watchedServicesForSlots || []).forEach((entry, idx) => {
+    const phone = (entry?.customerPhone || "").trim();
+    const name = (entry?.customerName || "").trim();
+    const cid = entry?.customerId || "";
+    // No info entered at all → new customer (show new-customer cut).
+    if (!phone && !name) {
+      slotTypeMap.set(idx, "new");
+      return;
+    }
+    // Has phone/name but no resolved customerId (typed free text, not picked
+    // from dropdown) → new customer.
+    if (!cid) {
+      slotTypeMap.set(idx, "new");
+      return;
+    }
+    // Has a resolved customerId → use the fetched customer type.
+    const q = slotCustomerTypes[idx];
+    slotTypeMap.set(idx, q?.data?.type === "old" ? "old" : "new");
+  });
+
+  // Returns the filtered service categories for a given slot, applying the
+  // same name-based rules as visibleServiceCategories but with the slot's
+  // own customer type. Always keeps the currently-selected category so
+  // editing doesn't hide the selected value.
+  const getSlotVisibleCategories = (slotIndex: number) => {
+    if (!isMultiCustomerMode) return visibleServiceCategories;
+    const slotType = slotTypeMap.get(slotIndex) || "new";
+    const selectedCatId =
+      (watchedServicesForSlots?.[slotIndex]?.serviceCategoryId || "").trim();
+    return serviceCategories.filter((cat) => {
+      // Always show the currently-selected category (edit mode / pre-fill).
+      if (selectedCatId && cat.id === selectedCatId) return true;
+      const name = cat.name.toLowerCase();
+      const isNewCustomerCut = name.includes("dành cho khách hàng mới");
+      const isRegularCut = !isNewCustomerCut &&
+        (name.includes("dịch vụ cắt") || name === "dịch vụ cắt");
+      if (slotType === "new") {
+        // New customer: hide regular "Dịch Vụ Cắt", keep new-customer cut.
+        if (isRegularCut) return false;
+      } else {
+        // Old customer: hide new-customer-only cut, keep regular.
+        if (isNewCustomerCut) return false;
+      }
+      return true;
+    });
+  };
+
   // Pre-fill form when editing
   useEffect(() => {
     if (booking) {
@@ -1158,6 +1257,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+      // Invalidate the Cashier module's day-bookings + standalone-invoices
+      // caches so a newly created booking appears in the cashier sidebar
+      // instantly (no manual refresh needed).
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
       onClose();
     },
     onError: (error: Error) => {
@@ -1236,6 +1341,11 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+      // Keep the Cashier module in sync when a booking is edited (services,
+      // staff, date/time, or customer may have changed).
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
       onClose();
     },
     onError: (error: Error) => {
@@ -1588,6 +1698,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       const matchRes = await fetch(`/api/supabase/customers?${params.toString()}`);
       const matchJson = await matchRes.json();
       let matchedId: string | null = null;
+      let matchedName: string | null = null;
       if (matchJson.ok && Array.isArray(matchJson.data)) {
         const exact = (matchJson.data as Array<{ id: string; phone?: string | null; name?: string }>).find(
           (c) =>
@@ -1595,9 +1706,28 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               ? (c.phone || "") === typedPhone
               : (c.name || "") === typedName
         );
-        if (exact) matchedId = exact.id;
+        if (exact) {
+          matchedId = exact.id;
+          matchedName = (exact.name as string) || "";
+        }
       }
       if (matchedId) {
+        // If the cashier typed a name that differs from the existing
+        // customer's current name (and the typed name is non-empty), update
+        // the customer profile so it reflects the latest info. This fulfils
+        // the requirement that entered info is saved to the customer profile.
+        if (typedName && typedName !== matchedName) {
+          try {
+            await fetch(`/api/supabase/customers/${matchedId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: typedName }),
+            });
+            queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+          } catch {
+            // Best-effort — the booking still proceeds with the matched id.
+          }
+        }
         return { ok: true, customerId: matchedId };
       }
       // No match → create a new customer with the typed phone + name.
@@ -1614,6 +1744,25 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       if (createJson.ok && createJson.data?.id) {
         queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
         return { ok: true, customerId: createJson.data.id };
+      }
+      // Edge case: the POST returned 409 because a customer with the same
+      // phone was created in the meantime (race condition or the search
+      // missed it). Use the existing customer returned in the 409 body.
+      if (createJson.existing_customer?.id) {
+        // Update the name if a different name was typed.
+        if (typedName && typedName !== (createJson.existing_customer.name || "")) {
+          try {
+            await fetch(`/api/supabase/customers/${createJson.existing_customer.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: typedName }),
+            });
+          } catch {
+            // best-effort
+          }
+        }
+        queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+        return { ok: true, customerId: createJson.existing_customer.id };
       }
       return { ok: false, error: createJson.error || "Không thể tạo khách hàng" };
     } catch {
@@ -1718,6 +1867,11 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             return;
           }
           queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          // Sync the Cashier module so the new multi-customer booking appears
+          // in the sidebar immediately.
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+          queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
           onClose();
         } catch (e) {
           setConflictMessage(
@@ -1786,6 +1940,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           );
         } else {
           queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          // Sync the Cashier module so the new bookings appear immediately.
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+          queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
           onClose();
         }
       }
@@ -2551,12 +2709,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setValue(`services.${index}.customerPhone`, val);
-                                // Editing phone clears name + selected customer.
-                                setValue(`services.${index}.customerName`, "");
+                                // Only clear the autocomplete selection link —
+                                // keep the name so the cashier can type BOTH
+                                // phone and name for a brand-new customer.
                                 setValue(`services.${index}.customerId`, "");
                                 setActiveSlotDropdown(index);
+                                setActiveSlotField("phone");
                               }}
-                              onFocus={() => setActiveSlotDropdown(index)}
+                              onFocus={() => {
+                                setActiveSlotDropdown(index);
+                                setActiveSlotField("phone");
+                              }}
                               onBlur={() => {
                                 // Delay so click events on dropdown items
                                 // fire before the dropdown closes.
@@ -2570,9 +2733,13 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                               name={`slot-phone-${index}-off`}
                             />
                             {/* Autocomplete dropdown — only for the ACTIVE
-                                slot, and only when there's text + matches. */}
+                                slot, and only when there's text + matches.
+                                Phone dropdown shows when the phone field is
+                                focused; name dropdown shows when the name
+                                field is focused. */}
                             {activeSlotDropdown === index &&
-                              (activeSlotPhone || activeSlotName) &&
+                              activeSlotField === "phone" &&
+                              activeSlotSearchTerm &&
                               filteredSlotCustomers.length > 0 && (
                                 <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
                                   {filteredSlotCustomers.map((customer) => (
@@ -2607,12 +2774,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setValue(`services.${index}.customerName`, val);
-                                // Editing name clears phone + selected customer.
-                                setValue(`services.${index}.customerPhone`, "");
+                                // Only clear the autocomplete selection link —
+                                // keep the phone so the cashier can type BOTH
+                                // phone and name for a brand-new customer.
                                 setValue(`services.${index}.customerId`, "");
                                 setActiveSlotDropdown(index);
+                                setActiveSlotField("name");
                               }}
-                              onFocus={() => setActiveSlotDropdown(index)}
+                              onFocus={() => {
+                                setActiveSlotDropdown(index);
+                                setActiveSlotField("name");
+                              }}
                               onBlur={() => {
                                 setTimeout(() => {
                                   setActiveSlotDropdown((cur) =>
@@ -2624,7 +2796,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                               name={`slot-name-${index}-off`}
                             />
                             {activeSlotDropdown === index &&
-                              (activeSlotPhone || activeSlotName) &&
+                              activeSlotField === "name" &&
+                              activeSlotSearchTerm &&
                               filteredSlotCustomers.length > 0 && (
                                 <div className="absolute z-50 mt-1 w-full rounded-md border bg-white shadow-lg max-h-60 overflow-y-auto">
                                   {filteredSlotCustomers.map((customer) => (
@@ -2694,7 +2867,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                             <SelectValue placeholder="Chọn nhóm dịch vụ" />
                           </SelectTrigger>
                           <SelectContent>
-                            {visibleServiceCategories.map((cat) => (
+                            {getSlotVisibleCategories(index).map((cat) => (
                               <SelectItem key={cat.id} value={cat.id} className="max-w-full">
                                 <span className="truncate block">{cat.name}</span>
                               </SelectItem>
@@ -2762,6 +2935,27 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                         </div>
                       )}
                     </div>
+
+                    {/* Per-slot Zod validation errors — shown when the user
+                        clicks "Lưu" but forgot to fill the service category
+                        or service for a slot. Without these messages the
+                        submit silently fails (handleSubmit catches the Zod
+                        error and never calls onSubmit), making it look like
+                        the "Lưu" button does nothing. */}
+                    {isMultiCustomerMode && (
+                      <div className="space-y-0.5">
+                        {errors.services?.[index]?.serviceCategoryId && (
+                          <p className="text-xs text-red-500">
+                            Khách #{index + 1}: {errors.services[index]?.serviceCategoryId?.message}
+                          </p>
+                        )}
+                        {errors.services?.[index]?.serviceId && (
+                          <p className="text-xs text-red-500">
+                            Khách #{index + 1}: {errors.services[index]?.serviceId?.message}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Per-service date/time inputs were removed. The booking-
                         level Ngày/Giờ (in "Thông tin lịch hẹn" above) is the

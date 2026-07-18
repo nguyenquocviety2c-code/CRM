@@ -513,26 +513,39 @@ function SegmentCard({
   // invoice and shows all services with durations.
   const dateLabel = getBookingDateLabel(booking);
 
-  // Card background color — groups the booking by payment/cancellation state
-  // so the cashier can tell at a glance which slots need attention:
-  // - Paid (checkout) → emerald tint (matches the status badge)
-  // - Unpaid active (new / confirmed / checkin) → sky tint (in-progress)
-  // - Cancelled / no-show → gray/red tint (dead slots)
-  // We use the SAME color tokens as the status badge (BookingStatusBadgeColors)
-  // so the card and its popover badge stay visually consistent. The badge text
-  // color is applied to the time label so the slot still has readable contrast.
+  // Card background color — based on booking status:
+  // - confirmed / new → sky blue (bg-sky-50, border-sky-300)
+  // - checkin → light green (bg-green-50, border-green-300)
+  // - no_show → yellow (bg-amber-50, border-amber-300)
+  // - cancelled → red (bg-red-50, border-red-200)
+  // - checkout (completed) → white with purple border (bg-white, border-purple-400)
   const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled" || booking.status === "no_show";
-  const cardBg = isPaid
-    ? "bg-emerald-50 border-emerald-300"
-    : isCancelled
-      ? "bg-red-50 border-red-200"
-      : "bg-sky-50 border-sky-300";
-  const timeText = isPaid
-    ? "text-emerald-700"
-    : isCancelled
-      ? "text-red-700"
-      : "text-sky-700";
+  const isCancelled = booking.status === "cancelled";
+  const isNoShow = booking.status === "no_show";
+  const isCheckin = booking.status === "checkin";
+
+  let cardBg: string;
+  let timeText: string;
+  if (isPaid) {
+    // Completed payment → white background with purple border.
+    cardBg = "bg-white border-purple-400";
+    timeText = "text-purple-700";
+  } else if (isCancelled) {
+    cardBg = "bg-red-50 border-red-200";
+    timeText = "text-red-700";
+  } else if (isNoShow) {
+    // No-show → yellow.
+    cardBg = "bg-amber-50 border-amber-300";
+    timeText = "text-amber-700";
+  } else if (isCheckin) {
+    // Checked in → light green.
+    cardBg = "bg-green-50 border-green-300";
+    timeText = "text-green-700";
+  } else {
+    // confirmed / new → sky blue (default).
+    cardBg = "bg-sky-50 border-sky-300";
+    timeText = "text-sky-700";
+  }
 
   // Determine which next-statuses are allowed — SAME logic as the list view
   // (booking-customer-view.tsx). Terminal statuses (checkout/no_show/cancelled)
@@ -563,7 +576,7 @@ function SegmentCard({
       <button
         type="button"
         onClick={onClick}
-        className={`group flex h-full w-full ${fullWidth ? "" : "w-[220px] shrink-0"} cursor-pointer flex-col overflow-hidden border p-2.5 text-left shadow-sm transition hover:shadow-md ${cardBg}`}
+        className={`group flex h-full w-full ${fullWidth ? "" : "w-[220px] shrink-0"} cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${cardBg}`}
       >
         {/* Time range for THIS segment's slice + date + multi-service badge.
             shrink-0 → always visible even when the slot is short. */}
@@ -1438,13 +1451,28 @@ function CustomerGridChip({
   const serviceName = svc?.service?.name || "Dịch vụ";
   const totalDuration = serviceRows.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
   const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled" || booking.status === "no_show";
-  const chipBg = isPaid
-    ? "bg-emerald-50 border-emerald-300"
-    : isCancelled
-      ? "bg-red-50 border-red-200"
-      : "bg-sky-50 border-sky-300";
-  const timeText = isPaid ? "text-emerald-700" : isCancelled ? "text-red-700" : "text-sky-700";
+  const isCancelled = booking.status === "cancelled";
+  const isNoShow = booking.status === "no_show";
+  const isCheckin = booking.status === "checkin";
+  // SAME 6-way status-based scheme as SegmentCard above.
+  let chipBg: string;
+  let timeText: string;
+  if (isPaid) {
+    chipBg = "bg-white border-purple-400";
+    timeText = "text-purple-700";
+  } else if (isCancelled) {
+    chipBg = "bg-red-50 border-red-200";
+    timeText = "text-red-700";
+  } else if (isNoShow) {
+    chipBg = "bg-amber-50 border-amber-300";
+    timeText = "text-amber-700";
+  } else if (isCheckin) {
+    chipBg = "bg-green-50 border-green-300";
+    timeText = "text-green-700";
+  } else {
+    chipBg = "bg-sky-50 border-sky-300";
+    timeText = "text-sky-700";
+  }
 
   const timeStr = booking.date_time
     ? (() => {
@@ -1463,7 +1491,7 @@ function CustomerGridChip({
           type="button"
           onClick={onClick}
           title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName}`}
-          className={`group flex w-full cursor-pointer flex-col overflow-hidden border p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
+          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
         >
           <div className="flex items-center justify-between">
             <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>

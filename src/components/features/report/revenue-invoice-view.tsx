@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 const INVOICE_COLUMN_DEFS: ColumnDef[] = [
   { key: "stt", label: "STT" },
@@ -59,6 +60,12 @@ export function RevenueInvoiceView() {
   // customer name + invoice code) so the view can render its header before
   // the detail fetch resolves.
   const [detailTarget, setDetailTarget] = useState<InvoiceViewTarget | null>(null);
+  // Customer history dialog state — opened when clicking a customer's name
+  // (green link) in the table.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+  } | null>(null);
   const toggleColumn = (key: string) =>
     setVisibleColumns((prev) => toggleColumnKey(prev, key));
 
@@ -186,7 +193,25 @@ export function RevenueInvoiceView() {
                     );
                     if (col.key === "createdAt") return <TableCell key="createdAt">{formatDate(invoice.createdAt, "datetime")}</TableCell>;
                     if (col.key === "customerName") return (
-                      <TableCell key="customerName">{invoice.customerName}</TableCell>
+                      <TableCell key="customerName">
+                        {invoice.customerId ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setHistoryCustomer({
+                                id: invoice.customerId,
+                                name: invoice.customerName,
+                              })
+                            }
+                            className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                            title="Xem lịch sử khách hàng"
+                          >
+                            {invoice.customerName}
+                          </button>
+                        ) : (
+                          <span>{invoice.customerName}</span>
+                        )}
+                      </TableCell>
                     );
                     if (col.key === "totalAmount") return <TableCell key="totalAmount">{formatVND(invoice.totalAmount)}</TableCell>;
                     if (col.key === "surcharge") return <TableCell key="surcharge">{formatVND(invoice.surcharge)}</TableCell>;
@@ -250,6 +275,14 @@ export function RevenueInvoiceView() {
           onClose={() => setDetailTarget(null)}
         />
       )}
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the table. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

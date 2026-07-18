@@ -13,7 +13,7 @@ const beVietnamPro = Be_Vietnam_Pro({
 });
 
 export const metadata: Metadata = {
-  title: "EasySalon CRM",
+  title: "Level 1 Haircare",
   description: "Salon Management System",
 };
 

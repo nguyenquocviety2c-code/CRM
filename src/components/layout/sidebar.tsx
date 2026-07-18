@@ -54,12 +54,9 @@ export function Sidebar() {
     <aside className="fixed left-0 top-0 z-40 h-screen w-48 bg-slate-900 text-white">
       {/* Logo */}
       <div className="flex h-16 items-center px-3">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded bg-emerald-500" />
-          <span className="text-lg font-bold tracking-wider text-emerald-400">
-            EASYSALON
-          </span>
-        </div>
+        <span className="text-sm font-bold tracking-wide text-emerald-400">
+          Level 1 Haircare
+        </span>
       </div>
 
       {/* Menu */}

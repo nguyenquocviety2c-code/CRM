@@ -38,6 +38,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+import { parseMultiCustomerNote, type SlotCustomer } from "@/lib/multi-customer";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 /**
  * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
@@ -92,6 +94,9 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   const invoice = activeTabId ? invoices[activeTabId] : null;
   const [discountInput, setDiscountInput] = useState("");
   const [tipInput, setTipInput] = useState("");
+  // Payment method chosen during checkout review ("cash" | "transfer").
+  // Default "cash". Sent as `payment_method` in the checkout payload.
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "transfer">("cash");
   // The promotion selected for this invoice (id of an incentives row, or ""
   // for none). When set, the discount amount auto-fills from the promotion's
   // percentage and the promotion metadata is sent with the checkout so the
@@ -140,6 +145,8 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   interface DayBooking {
     id: string;
     status: string;
+    note: string | null;
+    number_of_customers: number | null;
     customer: { id: string; name: string; phone: string | null } | null;
   }
   const { data: dayBookings } = useQuery<DayBooking[]>({
@@ -262,6 +269,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // for tabs opened from a booking.
   interface SavedInvoiceItem {
     name?: string;
+    type?: string;
     price?: number;
     quantity?: number;
     discount?: number;
@@ -481,6 +489,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // True while the change-staff conflict check is running (disables OK + shows
   // "Đang kiểm tra..." so the cashier knows the click registered).
   const [changeStaffChecking, setChangeStaffChecking] = useState(false);
+  // Customer history dialog state — opened when clicking a per-slot customer
+  // name (green link) in a multi-customer booking's invoice summary.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
+  } | null>(null);
 
   // Parse the promotion's serviceIds JSON string into a list (or null = all).
   // For "service_category" type these are category ids; otherwise service ids.
@@ -688,7 +703,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               tip: getTipAmount(activeTabId),
               promotion: null,
               final_amount: getInvoiceTotal(activeTabId),
-              payment_method: "cash",
+              payment_method: paymentMethod,
               status: "pending", // pending — not yet paid
               photos: [],
             }),
@@ -781,7 +796,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               tip,
               promotion: promotionMeta,
               final_amount: total,
-              payment_method: "cash",
+              payment_method: paymentMethod,
               status: "completed",
               photos: draftPhotos,
             }),
@@ -958,7 +973,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         tip,
         promotion: promotionMeta,
         final_amount: total,
-        payment_method: "cash",
+        payment_method: paymentMethod,
         status: "completed",
         photos: draftPhotos,
       };
@@ -1077,6 +1092,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       setDiscountInput("");
       setTipInput("");
       setSelectedPromoId("");
+      setPaymentMethod("cash");
       if (activeTabId) {
         setDraftPhotosByTab((prev) => {
           const next = { ...prev };
@@ -1149,7 +1165,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               tip: getTipAmount(activeTabId),
               promotion: null,
               final_amount: getInvoiceTotal(activeTabId),
-              payment_method: "cash",
+              payment_method: paymentMethod,
               status: "cancelled",
               photos: [],
             }),
@@ -1231,7 +1247,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         tip,
         promotion: null,
         final_amount: total,
-        payment_method: "cash",
+        payment_method: paymentMethod,
         status: "cancelled",
         photos: [],
       };
@@ -1304,6 +1320,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   const displayItems = showSaved
     ? (savedInvoice!.items || []).map((it) => ({
         name: it.name || "Dịch vụ",
+        type: (it.type as "service" | "product" | "package") || "service",
         price: Number(it.price) || 0,
         quantity: Number(it.quantity) || 1,
         discount: Number(it.discount) || 0,
@@ -1335,6 +1352,40 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   const displayTip = showSaved ? Number(savedInvoice!.tip) || 0 : tip;
   const displayPromo = showSaved ? savedInvoice!.promotion : null;
   const displayTotal = showSaved ? Number(savedInvoice!.final_amount) || 0 : total;
+
+  // Multi-customer "Cùng lịch" booking detection (Cashier module only).
+  // When the active booking has number_of_customers >= 2 AND a [[MULTI]] note,
+  // each service line item is rendered with a 3-line layout:
+  //   line 1: customer name + phone (or "Khách vãng lai" when the slot is empty
+  //           or marked walkin)
+  //   line 2: service name
+  //   line 3: staff name
+  // The per-slot customer is stored in the booking's note as a [[MULTI]] JSON
+  // block; slots[i] maps 1:1 to the i-th service in the booking's services
+  // array. For the invoice display, service items appear first (in booking
+  // order), so a service-only counter is used to look up the correct slot.
+  const activeMultiNote = activeBooking?.note
+    ? parseMultiCustomerNote(activeBooking.note)
+    : null;
+  const isMultiCustomerBooking =
+    !!activeMultiNote && (activeBooking?.number_of_customers ?? 1) >= 2;
+  // Precompute the slot index for each display item (services only). Products
+  // and packages don't have a slot → -1 (no customer line shown for them).
+  // Uses an immutable reduce (no in-render variable mutation) to satisfy the
+  // react-hooks/immutability lint rule.
+  const itemSlotIndices: number[] = displayItems.reduce<{
+    arr: number[];
+    svc: number;
+  }>(
+    (acc, it) => {
+      const isService = (it as { type?: string }).type === "service";
+      return {
+        arr: [...acc.arr, isService ? acc.svc : -1],
+        svc: isService ? acc.svc + 1 : acc.svc,
+      };
+    },
+    { arr: [], svc: 0 }
+  ).arr;
 
   // Resolve the invoice id for the activity-history table:
   //  - Paid/cancelled tabs → the saved invoice's id.
@@ -1401,6 +1452,50 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                 className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-1 px-4 py-2 text-sm"
               >
                 <div>
+                  {/* Multi-customer "Cùng lịch" booking (Cashier module only):
+                      each service line shows 3 lines —
+                        line 1: customer name + phone (or "Khách vãng lai"
+                                when the slot has no name/phone or is marked
+                                walkin)
+                        line 2: service name
+                        line 3: staff name
+                      The per-slot customer is looked up from the booking's
+                      [[MULTI]] note by a service-only index (products/packages
+                      are skipped — they have no slot). */}
+                  {isMultiCustomerBooking && itemSlotIndices[idx] >= 0 &&
+                    (() => {
+                      const sc: SlotCustomer | undefined =
+                        activeMultiNote?.slots[itemSlotIndices[idx]];
+                      const isWalkin = !sc || sc.walkin;
+                      const label = isWalkin
+                        ? "Khách vãng lai"
+                        : `${sc!.name}${sc!.phone ? " " + sc!.phone : ""}`;
+                      // Walk-in slots have no customer profile → plain text.
+                      // Named slots are green clickable links to the history dialog.
+                      if (isWalkin || !sc?.id) {
+                        return (
+                          <p className="text-[11px] text-gray-600 leading-tight">
+                            {label}
+                          </p>
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setHistoryCustomer({
+                              id: sc.id,
+                              name: sc.name,
+                              phone: sc.phone || null,
+                            })
+                          }
+                          className="text-[11px] text-emerald-600 hover:text-emerald-700 hover:underline leading-tight cursor-pointer text-left"
+                          title="Xem lịch sử khách hàng"
+                        >
+                          {label}
+                        </button>
+                      );
+                    })()}
                   {/* Service name 12px + leading-tight to reduce the name slot's
                       line/row height. Staff name 11px, also leading-tight. */}
                   <p className="font-medium text-gray-900 text-xs leading-tight">{item.name}</p>
@@ -1434,13 +1529,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       >
                         <UserCog className="h-3 w-3" />
                       </button>
-                      <p className="text-[11px] text-gray-500">
+                      <p className="text-[11px] text-sky-600">
                         {item.staffName ? `Nv: ${item.staffName}` : "Nv: (chưa có)"}
                       </p>
                     </div>
                   ) : (
                     item.staffName && (
-                      <p className="text-[11px] text-gray-500 leading-tight">
+                      <p className="text-[11px] text-sky-600 leading-tight">
                         Nv: {item.staffName}
                       </p>
                     )
@@ -1799,6 +1894,48 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               </span>
             )}
           </div>
+          {/* Phương thức thanh toán — shown in review mode (after pressing
+              "Thanh toán") and for paid orders. Lets the cashier pick
+              "Tiền mặt" (cash) or "Chuyển khoản" (transfer). In review mode
+              the choice is editable; for paid orders it's read-only (shows
+              what was recorded). */}
+          {(reviewMode || isPaid) && (
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600">Phương thức thanh toán</span>
+              {reviewMode ? (
+                <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-gray-100 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("cash")}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                      paymentMethod === "cash"
+                        ? "bg-white text-emerald-700 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    Tiền mặt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod("transfer")}
+                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                      paymentMethod === "transfer"
+                        ? "bg-white text-emerald-700 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    Chuyển khoản
+                  </button>
+                </div>
+              ) : (
+                <span className="font-medium text-gray-900">
+                  {savedInvoice?.payment_method === "transfer"
+                    ? "Chuyển khoản"
+                    : "Tiền mặt"}
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex justify-between text-sm font-medium">
             <span>Tổng tiền</span>
             <span>{displayTotal.toLocaleString("vi-VN")}</span>
@@ -2180,6 +2317,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Customer history dialog — opened when clicking a per-slot customer
+          name (green link) in a multi-customer booking's invoice summary. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ export type { ServicePackageReportView };
 
 export interface PurchasedPackageRow {
   id: string;
+  customerId: string;
   customerName: string;
   packageName: string;
   status: string; // active | expired | used_up
@@ -33,6 +34,7 @@ export interface PurchasedPackageResponse {
 export interface PackageUsageRow {
   id: string;
   packageName: string;
+  customerId: string;
   customerName: string;
   useDate: string;
   quantity: number;

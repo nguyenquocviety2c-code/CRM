@@ -43,10 +43,15 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="w-full max-w-md space-y-6 rounded-lg border bg-white p-8 shadow-sm">
         <div className="text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-emerald-500">
-            <span className="text-lg font-bold text-white">E</span>
+          {/* Logo — artistic AI-generated brand logo for Level 1 Haircare */}
+          <div className="mx-auto flex h-20 w-20 items-center justify-center overflow-hidden rounded-full">
+            <img
+              src="/level1-haircare-logo.png"
+              alt="Level 1 Haircare"
+              className="h-full w-full object-cover"
+            />
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-gray-900">EasySalon CRM</h1>
+          <h1 className="mt-4 text-2xl font-bold text-gray-900">Level 1 Haircare</h1>
           <p className="mt-2 text-sm text-gray-500">Đăng nhập để tiếp tục</p>
         </div>
 

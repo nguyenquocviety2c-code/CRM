@@ -11,6 +11,7 @@ export type FrequencyUnit = "hour" | "day";
 // --- View 1: Invoice ---
 export interface CustomerInvoice {
   id: string;
+  customerId: string;
   customerCode: string;
   customerName: string;
   phone: string;

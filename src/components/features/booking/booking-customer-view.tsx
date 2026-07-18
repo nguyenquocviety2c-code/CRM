@@ -28,6 +28,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { InvoiceDialog } from "./invoice-dialog";
 import { PaidInvoiceView } from "./paid-invoice-view";
+import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 interface BookingCustomerViewProps {
   bookings: Booking[];
@@ -85,6 +86,13 @@ export function BookingCustomerView({
   // Tracks which booking's reminder is currently being PATCHed (set → reset)
   // so we can disable the control and prevent double-clicks while in flight.
   const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
+  // Customer history dialog state — opened when clicking a customer's name
+  // (green link) in the customer column.
+  const [historyCustomer, setHistoryCustomer] = useState<{
+    id: string;
+    name?: string | null;
+    phone?: string | null;
+  } | null>(null);
 
   /**
    * Optimistically update the React Query cache for a booking's reminder_at.
@@ -205,18 +213,18 @@ export function BookingCustomerView({
       {/* Table (list view only — calendar view uses BookingTimeGrid at page level) */}
       {viewMode === "list" && (
       <div className="overflow-x-auto rounded-lg border bg-white">
-        <table className="w-full text-sm border-collapse">
+        <table className="w-full text-xs border-collapse" style={{ lineHeight: "1.3" }}>
           <thead>
             <tr className="border-b-2 border-gray-400 bg-gray-50">
-              {visibleColumns.date && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Ngày đặt</th>}
-              {visibleColumns.time && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Giờ</th>}
-              {visibleColumns.code && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Mã</th>}
-              {visibleColumns.customer && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Khách hàng</th>}
-              {visibleColumns.note && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Ghi chú & dịch vụ</th>}
-              {visibleColumns.payment && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Thanh toán</th>}
-              {visibleColumns.reminder && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Nhắc lịch</th>}
-              {visibleColumns.status && <th className="border-r border-gray-300 px-3 py-3 text-left font-medium text-gray-700">Trạng thái</th>}
-              <th className="px-3 py-3 text-left font-medium text-gray-700"></th>
+              {visibleColumns.date && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Ngày đặt</th>}
+              {visibleColumns.time && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Giờ</th>}
+              {visibleColumns.code && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Mã</th>}
+              {visibleColumns.customer && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Khách hàng</th>}
+              {visibleColumns.note && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Ghi chú & dịch vụ</th>}
+              {visibleColumns.payment && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Thanh toán</th>}
+              {visibleColumns.reminder && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Nhắc lịch</th>}
+              {visibleColumns.status && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Trạng thái</th>}
+              <th className="px-3 py-1 text-left font-medium text-gray-700"></th>
             </tr>
           </thead>
           <tbody>
@@ -225,17 +233,17 @@ export function BookingCustomerView({
               return (
               <tr key={booking.id} className="border-b border-gray-300 hover:bg-gray-50">
                 {visibleColumns.date && (
-                <td className="border-r border-gray-300 px-3 py-3 text-gray-600">
+                <td className="border-r border-gray-300 px-3 py-1 text-gray-600">
                   {getBookingDate(booking)}
                 </td>
                 )}
                 {visibleColumns.time && (
-                <td className="border-r border-gray-300 px-3 py-3 text-gray-600">
+                <td className="border-r border-gray-300 px-3 py-1 text-gray-600">
                   {getBookingTime(booking)}
                 </td>
                 )}
                 {visibleColumns.code && (
-                <td className="border-r border-gray-300 px-3 py-3">
+                <td className="border-r border-gray-300 px-3 py-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -251,7 +259,7 @@ export function BookingCustomerView({
                 </td>
                 )}
                 {visibleColumns.customer && (
-                <td className="border-r border-gray-300 px-3 py-3">
+                <td className="border-r border-gray-300 px-3 py-1">
                   {/* Multi-customer "Cùng lịch" booking: list every slot's
                       customer — those with info → name (line 1) + phone (line 2);
                       empty slots → "Khách vãng lai". Single-customer / "Khác
@@ -260,16 +268,35 @@ export function BookingCustomerView({
                     const slotCustomers = getAllSlotCustomers(booking.note);
                     if (slotCustomers && slotCustomers.length > 0) {
                       return (
-                        <div className="space-y-1">
+                        <div className="space-y-0.5">
                           {slotCustomers.map((sc, i) => (
                             <div key={i} className="space-y-0.5">
                               {/* Numbered customer label: "1. Hoàng Vũ" / "2. Khách vãng lai".
-                                  Walk-in customers use the SAME size + color as
-                                  named customers (font-medium text-gray-900) so the
-                                  column reads consistently. */}
-                              <div className="font-medium text-gray-900 text-sm">
-                                {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
-                              </div>
+                                  Uses the same text size as single-customer bookings
+                                  (font-medium, default table text-xs) so the column
+                                  reads consistently. Named customers are green
+                                  clickable links to the history dialog; walk-in
+                                  customers are plain text. */}
+                              {sc.walkin || !sc.id ? (
+                                <div className="font-medium text-gray-900">
+                                  {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setHistoryCustomer({
+                                      id: sc.id,
+                                      name: sc.name,
+                                      phone: sc.phone || null,
+                                    })
+                                  }
+                                  className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                                  title="Xem lịch sử khách hàng"
+                                >
+                                  {i + 1}. {sc.name || "Khách"}
+                                </button>
+                              )}
                               {!sc.walkin && (
                                 <div className="text-xs text-gray-500">
                                   {canViewCustomerPhone ? (sc.phone || "—") : maskPhone(sc.phone)}
@@ -282,7 +309,24 @@ export function BookingCustomerView({
                     }
                     return (
                       <div className="space-y-0.5">
-                        <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
+                        {booking.customer?.id ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setHistoryCustomer({
+                                id: booking.customer!.id,
+                                name: booking.customer?.name,
+                                phone: booking.customer?.phone || null,
+                              })
+                            }
+                            className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                            title="Xem lịch sử khách hàng"
+                          >
+                            {booking.customer?.name || "—"}
+                          </button>
+                        ) : (
+                          <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
+                        )}
                         <div className="text-xs text-gray-500">{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
                       </div>
                     );
@@ -290,8 +334,8 @@ export function BookingCustomerView({
                 </td>
                 )}
                 {visibleColumns.note && (
-                <td className="border-r border-gray-300 px-3 py-3">
-                  <div className="space-y-1">
+                <td className="border-r border-gray-300 px-3 py-1">
+                  <div className="space-y-0.5">
                     {(() => {
                       // Multi-customer "Cùng lịch" booking: the note carries a
                       // [[MULTI]] JSON block (per-slot customer map). Customer
@@ -346,9 +390,9 @@ export function BookingCustomerView({
                 </td>
                 )}
                 {visibleColumns.payment && (
-                <td className="border-r border-gray-300 px-3 py-3">
+                <td className="border-r border-gray-300 px-3 py-1">
                   {booking.status === "checkin" && (
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
                         Hóa đơn
                       </button>
@@ -360,7 +404,7 @@ export function BookingCustomerView({
                     </div>
                   )}
                   {booking.status === "checkout" && (
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Đã thanh toán</span>
                       <div>
                         <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
@@ -377,7 +421,7 @@ export function BookingCustomerView({
                 </td>
                 )}
                 {visibleColumns.reminder && (
-                <td className="border-r border-gray-300 px-3 py-3">
+                <td className="border-r border-gray-300 px-3 py-1">
                   {(() => {
                     const formatReminder = (iso: string) => {
                       try {
@@ -512,8 +556,8 @@ export function BookingCustomerView({
                 </td>
                 )}
                 {visibleColumns.status && (
-                <td className="border-r border-gray-300 px-3 py-3">
-                  <div className="space-y-1">
+                <td className="border-r border-gray-300 px-3 py-1">
+                  <div className="space-y-0.5">
                     <div>
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(booking.status)}`}>
                         {BookingStatusLabel[booking.status]}
@@ -535,8 +579,8 @@ export function BookingCustomerView({
                       if (nextStatuses.length === 0) return null;
                       return (
                         <Select value="" onValueChange={(value) => onStatusChange(booking.id, value as BookingStatusType)}>
-                          <SelectTrigger className="h-7 w-[120px] text-xs border-gray-300">
-                            <SelectValue placeholder="Chọn trạng thái" />
+                          <SelectTrigger className="h-6 w-full min-w-0 text-[11px] border-gray-300 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+                            <SelectValue placeholder="Đổi trạng thái" />
                           </SelectTrigger>
                           <SelectContent>
                             {nextStatuses.map((st) => (
@@ -549,7 +593,7 @@ export function BookingCustomerView({
                   </div>
                 </td>
                 )}
-                <td className="px-3 py-3">
+                <td className="px-3 py-1">
                   <div className="flex items-center gap-1">
                     <Button
                       variant="ghost"
@@ -632,6 +676,15 @@ export function BookingCustomerView({
           />
         )
       )}
+
+      {/* Customer history dialog — opened when clicking a customer's name
+          (green link) in the customer column. Shows visit history, spending
+          stats, and feedback for the clicked customer. */}
+      <CustomerHistoryDialog
+        customer={historyCustomer}
+        open={!!historyCustomer}
+        onClose={() => setHistoryCustomer(null)}
+      />
     </div>
   );
 }
