@@ -1217,12 +1217,14 @@ export function ServiceSelector() {
         </DropdownMenu>
       </div>
 
-      {/* Radio tabs — only show tabs that are visible (not unchecked via Cột) */}
+      {/* Radio tabs — only show tabs that are visible (not unchecked via Cột).
+          Compact height (py-1.5 = half of the original py-3) + whitespace-nowrap
+          so "Gói dịch vụ" stays on one line. */}
       <div className="flex border-b">
         {tabs.filter((tab) => visibleTabs[tab.id] !== false).map((tab) => (
           <label
             key={tab.id}
-            className={`flex flex-1 cursor-pointer items-center justify-center border-r px-4 py-3 text-sm font-medium transition-colors ${
+            className={`flex flex-1 cursor-pointer items-center justify-center border-r px-4 py-1.5 text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === tab.id
                 ? "bg-emerald-50 text-emerald-600"
                 : "bg-white text-gray-600 hover:bg-gray-50"

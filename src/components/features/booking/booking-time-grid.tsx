@@ -513,36 +513,43 @@ function SegmentCard({
   // invoice and shows all services with durations.
   const dateLabel = getBookingDateLabel(booking);
 
-  // Card background color — based on booking status:
-  // - confirmed / new → sky blue (bg-sky-50, border-sky-300)
-  // - checkin → light green (bg-green-50, border-green-300)
-  // - no_show → yellow (bg-amber-50, border-amber-300)
-  // - cancelled → red (bg-red-50, border-red-200)
-  // - checkout (completed) → white with purple border (bg-white, border-purple-400)
+  // Card background color — based on booking status + invoice state:
+  // - confirmed / new → sky blue
+  // - checkin + pending invoice (bấm Thanh toán, chưa Hoàn tất) → purple
+  // - checkin without pending invoice → green
+  // - no_show → yellow
+  // - cancelled → red
+  // - checkout (completed — đã Hoàn tất) → white with purple border
   const isPaid = booking.status === "checkout";
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
+  // "Pending invoice" = cashier pressed "Thanh toán" (invoice created with
+  // status "pending") but hasn't pressed "Hoàn tất" yet.
+  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
 
   let cardBg: string;
   let timeText: string;
   if (isPaid) {
-    // Completed payment → white background with purple border.
+    // Completed payment (đã Hoàn tất) → white background with purple border.
     cardBg = "bg-white border-purple-400";
     timeText = "text-purple-700";
   } else if (isCancelled) {
     cardBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
   } else if (isNoShow) {
-    // No-show → yellow.
     cardBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
+  } else if (isCheckin && hasPendingInvoice) {
+    // Payment started but not completed (đã bấm Thanh toán) → purple.
+    cardBg = "bg-purple-50 border-purple-400";
+    timeText = "text-purple-700";
   } else if (isCheckin) {
-    // Checked in → light green.
+    // Checked in, no payment yet → green.
     cardBg = "bg-green-50 border-green-300";
     timeText = "text-green-700";
   } else {
-    // confirmed / new → sky blue (default).
+    // confirmed / new → sky blue.
     cardBg = "bg-sky-50 border-sky-300";
     timeText = "text-sky-700";
   }
@@ -1454,7 +1461,8 @@ function CustomerGridChip({
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  // SAME 6-way status-based scheme as SegmentCard above.
+  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
+  // SAME scheme as SegmentCard above.
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
@@ -1466,6 +1474,9 @@ function CustomerGridChip({
   } else if (isNoShow) {
     chipBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
+  } else if (isCheckin && hasPendingInvoice) {
+    chipBg = "bg-purple-50 border-purple-400";
+    timeText = "text-purple-700";
   } else if (isCheckin) {
     chipBg = "bg-green-50 border-green-300";
     timeText = "text-green-700";

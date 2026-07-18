@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { localDayStartUtc, localDayEndUtc } from "@/lib/utils";
+import { getCurrentStaffId } from "@/lib/auth/current-staff";
 
 // Note: the `bookings` table does not have FK constraints registered
 // for `customer_id` -> `customers.id` or `customer_source_id` -> `customer_sources.id`
@@ -407,6 +408,29 @@ export async function PATCH(
 
     const { services, ...rest } = body;
 
+    // Fetch the booking's current state BEFORE updating, so we can detect
+    // status transitions and log the appropriate invoice_activity.
+    let oldStatus: string | null = null;
+    let bookingInvoiceId: string | null = null;
+    let bookingInvoiceCode: string | null = null;
+    let bookingBranchId: string | null = null;
+    try {
+      const { data: before } = await supabaseAdmin
+        .from("bookings")
+        .select("status, branch_id, invoice:invoices(id, code)")
+        .eq("id", id)
+        .maybeSingle();
+      oldStatus = (before as { status?: string | null } | null)?.status ?? null;
+      bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
+      const inv = (before as { invoice?: { id?: string; code?: string } | null } | null)?.invoice;
+      bookingInvoiceId = inv?.id ?? null;
+      bookingInvoiceCode = inv?.code ?? null;
+    } catch {
+      // best-effort — proceed without activity logging
+    }
+
+    const newStatus = rest.status !== undefined ? String(rest.status) : null;
+
     const updateData: Record<string, unknown> = {};
     const allowedFields = [
       "code",
@@ -455,6 +479,46 @@ export async function PATCH(
       }
     }
 
+
+    // === Log invoice activity for status transitions ===
+    // When the booking's status changes, log the appropriate activity so the
+    // "Lịch sử thao tác" table reflects it. The actor is the currently
+    // logged-in staff (from the auth cookie). For kiosk-placed bookings
+    // (created_by is null), the actor remains null — enriched with the
+    // customer name on read.
+    if (newStatus && newStatus !== oldStatus && bookingInvoiceId) {
+      const actorStaffId = getCurrentStaffId(request);
+      let activityAction: string | null = null;
+      let activityDetail = "";
+      if (newStatus === "checkin") {
+        activityAction = "CHECKIN";
+        activityDetail = "Checkin lịch hẹn";
+      } else if (newStatus === "no_show") {
+        activityAction = "NO_SHOW";
+        activityDetail = "Đánh dấu không đến";
+      } else if (newStatus === "cancelled") {
+        activityAction = "CANCEL";
+        activityDetail = "Hủy lịch hẹn";
+      } else if (newStatus === "checkout") {
+        activityAction = "CHECKOUT";
+        activityDetail = "Hoàn tất thanh toán";
+      }
+      if (activityAction) {
+        try {
+          await supabaseAdmin.from("invoice_activities").insert({
+            invoice_id: bookingInvoiceId,
+            invoice_code: bookingInvoiceCode,
+            action: activityAction,
+            detail: activityDetail,
+            value: null,
+            branch_id: bookingBranchId,
+            created_by: actorStaffId,
+          });
+        } catch {
+          // best-effort — don't fail the booking update
+        }
+      }
+    }
     const { data: refreshed, error: fetchErr } = await supabaseAdmin
       .from("bookings")
       .select(BOOKING_SELECT)

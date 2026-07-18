@@ -408,6 +408,16 @@ export async function POST(request: NextRequest) {
     // created from a booking with status "pending" (the checkin flow), label
     // it CHECKIN; otherwise CREATE_INVOICE (standalone) or
     // CREATE_INVOICE_FROM_BOOKING (booking linked but completed directly).
+    //
+    // Actor attribution:
+    //   - CREATE_INVOICE / CREATE_INVOICE_FROM_BOOKING: the entity that
+    //     CREATED the invoice. For kiosk bookings (customer-placed), this is
+    //     the customer (null created_by, enriched on read). For staff-created
+    //     bookings, it's the staff.
+    //   - CHECKIN: ALWAYS the logged-in staff — the customer placed the
+    //     booking, but the STAFF performs the checkin. So use actorStaffId
+    //     regardless of isKioskBooking.
+    //   - PAYMENT / CHECKOUT: ALWAYS the logged-in staff (same reasoning).
     try {
       const isCheckinFlow = !!booking_id && status === "pending";
       const createAction = isCheckinFlow
@@ -415,6 +425,10 @@ export async function POST(request: NextRequest) {
         : booking_id
           ? "CREATE_INVOICE_FROM_BOOKING"
           : "CREATE_INVOICE";
+      // CHECKIN is a staff action → always attribute to the logged-in staff.
+      // CREATE_INVOICE / CREATE_INVOICE_FROM_BOOKING → attribute to the
+      // original creator (customer for kiosk, staff otherwise).
+      const logActorId = isCheckinFlow ? actorStaffId : createActorId;
       await supabaseAdmin.from("invoice_activities").insert({
         invoice_id: data.id,
         invoice_code: finalCode,
@@ -425,7 +439,7 @@ export async function POST(request: NextRequest) {
             : `Tạo hóa đơn ${finalCode} - ${itemRows.length} mặt hàng${tipAmount > 0 ? ` - thưởng thợ ${tipAmount}` : ""}`,
         value: String(finalAmount),
         branch_id,
-        created_by: createActorId,
+        created_by: logActorId,
       });
     } catch {
       // Activity logging is best-effort; don't fail the invoice creation.
@@ -442,6 +456,16 @@ export async function POST(request: NextRequest) {
           invoice_code: finalCode,
           action: "PAYMENT",
           detail: `Thanh toán hóa đơn ${finalCode} - ${finalAmount}đ${payment_method ? ` (${payment_method})` : ""}`,
+          value: String(finalAmount),
+          branch_id,
+          created_by: actorStaffId,
+        });
+        // Also log a CHECKOUT ("Hoàn tất") activity.
+        await supabaseAdmin.from("invoice_activities").insert({
+          invoice_id: data.id,
+          invoice_code: finalCode,
+          action: "CHECKOUT",
+          detail: `Hoàn tất thanh toán hóa đơn ${finalCode}`,
           value: String(finalAmount),
           branch_id,
           created_by: actorStaffId,

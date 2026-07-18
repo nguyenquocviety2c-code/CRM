@@ -864,17 +864,18 @@ function SegmentBlock({
   // - Cancelled / no-show → red tint (dead slots)
   // We use the SAME color tokens as the status badge (BookingStatusBadgeColors)
   // so the block and its popover badge stay visually consistent.
-  // Card background color — SAME 6-way status-based scheme as View khách hàng >
-  // Khung giờ (booking-time-grid.tsx):
+  // Card background color — SAME scheme as View khách hàng > Khung giờ:
   // - confirmed / new → sky blue
-  // - checkin → light green
+  // - checkin + pending invoice (bấm Thanh toán) → purple
+  // - checkin (no invoice) → green
   // - no_show → yellow
   // - cancelled → red
-  // - checkout (completed) → white with purple border
+  // - checkout (đã Hoàn tất) → white with purple border
   const isPaid = booking.status === "checkout";
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
+  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
 
   let blockBg: string;
   let timeText: string;
@@ -887,6 +888,9 @@ function SegmentBlock({
   } else if (isNoShow) {
     blockBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
+  } else if (isCheckin && hasPendingInvoice) {
+    blockBg = "bg-purple-50 border-purple-400";
+    timeText = "text-purple-700";
   } else if (isCheckin) {
     blockBg = "bg-green-50 border-green-300";
     timeText = "text-green-700";
@@ -1456,7 +1460,8 @@ function BookingChip({
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  // SAME 6-way status-based scheme as View khách hàng > Khung giờ.
+  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
+  // SAME scheme as SegmentBlock above.
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
@@ -1468,6 +1473,9 @@ function BookingChip({
   } else if (isNoShow) {
     chipBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
+  } else if (isCheckin && hasPendingInvoice) {
+    chipBg = "bg-purple-50 border-purple-400";
+    timeText = "text-purple-700";
   } else if (isCheckin) {
     chipBg = "bg-green-50 border-green-300";
     timeText = "text-green-700";

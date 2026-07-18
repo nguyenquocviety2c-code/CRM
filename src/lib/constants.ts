@@ -4,10 +4,13 @@ export const InvoiceActivityAction = {
   CREATE_INVOICE_FROM_BOOKING: "CREATE_INVOICE_FROM_BOOKING",
   UPDATE_INVOICE: "UPDATE_INVOICE",
   CHECKIN: "CHECKIN",
+  NO_SHOW: "NO_SHOW",
+  CANCEL: "CANCEL",
+  PAYMENT: "PAYMENT",
+  CHECKOUT: "CHECKOUT",
   DELETE_ITEM: "DELETE_ITEM",
   CHANGE_PRICE: "CHANGE_PRICE",
   ASSIGN_STAFF: "ASSIGN_STAFF",
-  PAYMENT: "PAYMENT",
   CHANGE_PROMOTION: "CHANGE_PROMOTION",
 } as const;
 
@@ -15,13 +18,16 @@ export type InvoiceActivityActionType = (typeof InvoiceActivityAction)[keyof typ
 
 export const InvoiceActivityActionLabel: Record<InvoiceActivityActionType, string> = {
   CREATE_INVOICE: "Khởi tạo",
-  CREATE_INVOICE_FROM_BOOKING: "Tạo hóa đơn từ lịch hẹn",
+  CREATE_INVOICE_FROM_BOOKING: "Khởi tạo",
   UPDATE_INVOICE: "Chỉnh sửa",
   CHECKIN: "Checkin",
+  NO_SHOW: "Không đến",
+  CANCEL: "Hủy",
+  PAYMENT: "Thanh toán",
+  CHECKOUT: "Hoàn tất",
   DELETE_ITEM: "Xóa mặt hàng",
   CHANGE_PRICE: "Thay đổi giá",
   ASSIGN_STAFF: "Xếp nhân viên",
-  PAYMENT: "Thanh toán",
   CHANGE_PROMOTION: "Thay đổi khuyến mãi",
 };
 
@@ -30,11 +36,14 @@ export const ActionBadgeColors: Record<InvoiceActivityActionType, { bg: string; 
   CREATE_INVOICE: { bg: "bg-blue-100", text: "text-blue-700" },
   CREATE_INVOICE_FROM_BOOKING: { bg: "bg-blue-100", text: "text-blue-700" },
   UPDATE_INVOICE: { bg: "bg-amber-100", text: "text-amber-700" },
-  CHECKIN: { bg: "bg-sky-100", text: "text-sky-700" },
+  CHECKIN: { bg: "bg-green-100", text: "text-green-700" },
+  NO_SHOW: { bg: "bg-amber-100", text: "text-amber-700" },
+  CANCEL: { bg: "bg-red-100", text: "text-red-700" },
+  PAYMENT: { bg: "bg-emerald-100", text: "text-emerald-700" },
+  CHECKOUT: { bg: "bg-purple-100", text: "text-purple-700" },
   DELETE_ITEM: { bg: "bg-red-100", text: "text-red-700" },
   CHANGE_PRICE: { bg: "bg-orange-100", text: "text-orange-700" },
   ASSIGN_STAFF: { bg: "bg-orange-100", text: "text-orange-700" },
-  PAYMENT: { bg: "bg-emerald-100", text: "text-emerald-700" },
   CHANGE_PROMOTION: { bg: "bg-orange-100", text: "text-orange-700" },
 };
 
@@ -96,7 +105,7 @@ export const BookingStatusLabel: Record<BookingStatusType, string> = {
 export const BookingStatusBadgeColors: Record<BookingStatusType, { bg: string; text: string }> = {
   new: { bg: "bg-blue-100", text: "text-blue-700" },
   confirmed: { bg: "bg-sky-100", text: "text-sky-700" },
-  checkin: { bg: "bg-amber-100", text: "text-amber-700" },
+  checkin: { bg: "bg-green-100", text: "text-green-700" },
   checkout: { bg: "bg-emerald-100", text: "text-emerald-700" },
   no_show: { bg: "bg-red-100", text: "text-red-700" },
   cancelled: { bg: "bg-gray-100", text: "text-gray-500" },

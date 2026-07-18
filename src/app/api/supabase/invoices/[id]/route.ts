@@ -323,6 +323,17 @@ export async function PUT(
           body.final_amount != null ? String(body.final_amount) : null,
           actorStaffId
         );
+        // Also log a CHECKOUT ("Hoàn tất") activity — the cashier pressed
+        // "Hoàn tất" to finalize the payment.
+        await logActivity(
+          id,
+          invoiceCode,
+          branchIdForActivity,
+          "CHECKOUT",
+          `Hoàn tất thanh toán hóa đơn ${invoiceCode}`,
+          body.final_amount != null ? String(body.final_amount) : null,
+          actorStaffId
+        );
       }
 
       // When the invoice transitions to "completed" (paid), mark the linked
