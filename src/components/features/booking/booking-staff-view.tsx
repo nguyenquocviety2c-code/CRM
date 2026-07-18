@@ -9,6 +9,7 @@ import {
   BookingStatusType,
 } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
+import { useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamTime, toVietnamDay } from "@/lib/utils";
 import { getAllSlotCustomers } from "@/lib/multi-customer";
@@ -814,6 +815,10 @@ function SegmentBlock({
   const booking = segment.booking;
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
   const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
+  // Payment-review flag — must be called BEFORE any early return (rules of
+  // hooks). Shared across Booking + Cashier via sessionStorage; true when the
+  // cashier has pressed "Thanh toán" (review mode), cleared on Hủy/Hoàn tất.
+  const isReviewing = useIsReviewing(booking.id);
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
 
@@ -864,39 +869,43 @@ function SegmentBlock({
   // - Cancelled / no-show → red tint (dead slots)
   // We use the SAME color tokens as the status badge (BookingStatusBadgeColors)
   // so the block and its popover badge stay visually consistent.
-  // Card background color — SAME scheme as View khách hàng > Khung giờ:
-  // - confirmed / new → sky blue
-  // - checkin + pending invoice (bấm Thanh toán) → purple
-  // - checkin (no invoice) → green
+  // Card background color — SAME scheme as View khách hàng > Khung giờ
+  // (user's color spec):
+  // - confirmed / new → XANH DƯƠNG (blue)
+  // - checkin, chưa bấm Thanh toán → XANH (green)
+  // - checkin + đang review (đã bấm Thanh toán, chưa Hoàn tất) → TÍM ĐẬM (darker purple)
   // - no_show → yellow
   // - cancelled → red
-  // - checkout (đã Hoàn tất) → white with purple border
+  // - checkout (đã Hoàn tất) → TRẮNG (white)
+  //
+  // "đã bấm Thanh toán" is the shared payment-review flag (useIsReviewing),
+  // NOT the invoice's pending status — every checkin booking auto-creates a
+  // pending invoice, so pending-status can't tell the two states apart.
   const isPaid = booking.status === "checkout";
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
 
   let blockBg: string;
   let timeText: string;
   if (isPaid) {
-    blockBg = "bg-white border-purple-400";
-    timeText = "text-purple-700";
+    blockBg = "bg-white border-gray-300";
+    timeText = "text-gray-700";
   } else if (isCancelled) {
     blockBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
   } else if (isNoShow) {
     blockBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
-  } else if (isCheckin && hasPendingInvoice) {
-    blockBg = "bg-purple-50 border-purple-400";
-    timeText = "text-purple-700";
+  } else if (isCheckin && isReviewing) {
+    blockBg = "bg-purple-300 border-purple-600";
+    timeText = "text-purple-900";
   } else if (isCheckin) {
-    blockBg = "bg-green-50 border-green-300";
-    timeText = "text-green-700";
+    blockBg = "bg-green-200 border-green-500";
+    timeText = "text-green-900";
   } else {
-    blockBg = "bg-sky-50 border-sky-300";
-    timeText = "text-sky-700";
+    blockBg = "bg-blue-100 border-blue-500";
+    timeText = "text-blue-800";
   }
 
   // Status options — the user wants the status Select to only offer the
@@ -1460,28 +1469,29 @@ function BookingChip({
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
-  // SAME scheme as SegmentBlock above.
+  const isReviewing = useIsReviewing(booking.id);
+  // SAME scheme as SegmentBlock above (user's color spec):
+  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
-    chipBg = "bg-white border-purple-400";
-    timeText = "text-purple-700";
+    chipBg = "bg-white border-gray-300";
+    timeText = "text-gray-700";
   } else if (isCancelled) {
     chipBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
   } else if (isNoShow) {
     chipBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
-  } else if (isCheckin && hasPendingInvoice) {
-    chipBg = "bg-purple-50 border-purple-400";
-    timeText = "text-purple-700";
+  } else if (isCheckin && isReviewing) {
+    chipBg = "bg-purple-300 border-purple-600";
+    timeText = "text-purple-900";
   } else if (isCheckin) {
-    chipBg = "bg-green-50 border-green-300";
-    timeText = "text-green-700";
+    chipBg = "bg-green-200 border-green-500";
+    timeText = "text-green-900";
   } else {
-    chipBg = "bg-sky-50 border-sky-300";
-    timeText = "text-sky-700";
+    chipBg = "bg-blue-100 border-blue-500";
+    timeText = "text-blue-800";
   }
 
   const timeStr = booking.date_time

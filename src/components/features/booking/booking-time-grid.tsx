@@ -9,6 +9,7 @@ import {
   BookingStatusType,
 } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
+import { useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamTime, toVietnamDay } from "@/lib/utils";
 import {
@@ -513,45 +514,52 @@ function SegmentCard({
   // invoice and shows all services with durations.
   const dateLabel = getBookingDateLabel(booking);
 
-  // Card background color — based on booking status + invoice state:
-  // - confirmed / new → sky blue
-  // - checkin + pending invoice (bấm Thanh toán, chưa Hoàn tất) → purple
-  // - checkin without pending invoice → green
+  // Card background color — based on booking status + payment-review state
+  // (per user's color spec for View khách hàng > Khung giờ & View nhân viên):
+  // - confirmed / new → XANH DƯƠNG (blue)
+  // - checkin, chưa bấm Thanh toán → XANH (green)
+  // - checkin + đã bấm Thanh toán (đang ở chế độ review, chưa Hoàn tất) → TÍM ĐẬM (darker purple)
   // - no_show → yellow
   // - cancelled → red
-  // - checkout (completed — đã Hoàn tất) → white with purple border
+  // - checkout (đã Hoàn tất) → TRẮNG (white)
+  //
+  // IMPORTANT: "đã bấm Thanh toán" is tracked by the shared payment-review
+  // store (useIsReviewing), which is set when the cashier presses "Thanh toán"
+  // and cleared on "Hủy" / "Hoàn tất". It is NOT the invoice's "pending"
+  // status — every checkin booking has a pending invoice (auto-created at
+  // checkin), so pending-status alone cannot distinguish "chưa bấm Thanh toán"
+  // from "đã bấm Thanh toán". The review flag (persisted to sessionStorage,
+  // shared across Booking + Cashier) is the only reliable signal.
   const isPaid = booking.status === "checkout";
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  // "Pending invoice" = cashier pressed "Thanh toán" (invoice created with
-  // status "pending") but hasn't pressed "Hoàn tất" yet.
-  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
+  const isReviewing = useIsReviewing(booking.id);
 
   let cardBg: string;
   let timeText: string;
   if (isPaid) {
-    // Completed payment (đã Hoàn tất) → white background with purple border.
-    cardBg = "bg-white border-purple-400";
-    timeText = "text-purple-700";
+    // Completed payment (đã Hoàn tất) → TRẮNG (white background, neutral border).
+    cardBg = "bg-white border-gray-300";
+    timeText = "text-gray-700";
   } else if (isCancelled) {
     cardBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
   } else if (isNoShow) {
     cardBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
-  } else if (isCheckin && hasPendingInvoice) {
-    // Payment started but not completed (đã bấm Thanh toán) → purple.
-    cardBg = "bg-purple-50 border-purple-400";
-    timeText = "text-purple-700";
+  } else if (isCheckin && isReviewing) {
+    // Payment started but not completed (đã bấm Thanh toán, đang review) → TÍM ĐẬM (darker purple).
+    cardBg = "bg-purple-300 border-purple-600";
+    timeText = "text-purple-900";
   } else if (isCheckin) {
-    // Checked in, no payment yet → green.
-    cardBg = "bg-green-50 border-green-300";
-    timeText = "text-green-700";
+    // Checked in, chưa bấm Thanh toán → XANH (green).
+    cardBg = "bg-green-200 border-green-500";
+    timeText = "text-green-900";
   } else {
-    // confirmed / new → sky blue.
-    cardBg = "bg-sky-50 border-sky-300";
-    timeText = "text-sky-700";
+    // confirmed / new → XANH DƯƠNG (blue).
+    cardBg = "bg-blue-100 border-blue-500";
+    timeText = "text-blue-800";
   }
 
   // Determine which next-statuses are allowed — SAME logic as the list view
@@ -1461,28 +1469,29 @@ function CustomerGridChip({
   const isCancelled = booking.status === "cancelled";
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
-  const hasPendingInvoice = !!booking.invoice && booking.invoice.status === "pending";
-  // SAME scheme as SegmentCard above.
+  const isReviewing = useIsReviewing(booking.id);
+  // SAME scheme as SegmentCard above (user's color spec):
+  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
-    chipBg = "bg-white border-purple-400";
-    timeText = "text-purple-700";
+    chipBg = "bg-white border-gray-300";
+    timeText = "text-gray-700";
   } else if (isCancelled) {
     chipBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
   } else if (isNoShow) {
     chipBg = "bg-amber-50 border-amber-300";
     timeText = "text-amber-700";
-  } else if (isCheckin && hasPendingInvoice) {
-    chipBg = "bg-purple-50 border-purple-400";
-    timeText = "text-purple-700";
+  } else if (isCheckin && isReviewing) {
+    chipBg = "bg-purple-300 border-purple-600";
+    timeText = "text-purple-900";
   } else if (isCheckin) {
-    chipBg = "bg-green-50 border-green-300";
-    timeText = "text-green-700";
+    chipBg = "bg-green-200 border-green-500";
+    timeText = "text-green-900";
   } else {
-    chipBg = "bg-sky-50 border-sky-300";
-    timeText = "text-sky-700";
+    chipBg = "bg-blue-100 border-blue-500";
+    timeText = "text-blue-800";
   }
 
   const timeStr = booking.date_time
