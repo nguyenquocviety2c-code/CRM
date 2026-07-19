@@ -1,6 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,8 +26,6 @@ import { useServicePackageReportStore } from "@/stores/report-service-package-st
 import { useToast } from "@/hooks/use-toast";
 import { formatDate } from "@/lib/cash-fund-utils";
 import type { PackageUsageResponse } from "@/types/report-service-package";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 function formatDateTime(iso: string): string {
   return formatDate(iso, "datetime");

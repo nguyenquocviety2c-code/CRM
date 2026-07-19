@@ -1,6 +1,12 @@
 "use client";
 
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import dynamic from "next/dynamic";
+// Lazy-load InvoiceDialog — only opened on demand.
+const InvoiceDialog = dynamic(
+  () => import("@/components/features/booking/invoice-dialog").then((m) => m.InvoiceDialog),
+  { ssr: false }
+);
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
 import { ChevronLeft, ChevronRight, ArrowLeft, Camera, Loader2, ChevronDown } from "lucide-react";
@@ -27,8 +33,10 @@ import {
   buildDefaultVisibleColumns,
   toggleColumnKey,
 } from "@/components/shared/column-toggle";
-import { InvoiceDialog } from "@/components/features/booking/invoice-dialog";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
 import {
   BookingStatusType,
 } from "@/lib/constants";

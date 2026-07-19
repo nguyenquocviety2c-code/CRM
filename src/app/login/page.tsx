@@ -43,16 +43,17 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <div className="w-full max-w-md space-y-6 rounded-lg border bg-white p-8 shadow-sm">
         <div className="text-center">
-          {/* Logo — artistic AI-generated brand logo for Level 1 Haircare */}
-          <div className="mx-auto flex h-20 w-20 items-center justify-center overflow-hidden rounded-full">
+          {/* Design A — high-res brand composition (logo emblem + "Level 1
+              Haircare" text below, in the logo's own style). Pure white
+              background wrapper guarantees the logo area is white. Enlarged
+              (h-72) so the logo + its text are prominent. */}
+          <div className="mx-auto flex items-center justify-center bg-white">
             <img
-              src="/level1-haircare-logo.png"
+              src="/level1-haircare-logo-full.png"
               alt="Level 1 Haircare"
-              className="h-full w-full object-cover"
+              className="mx-auto h-72 w-auto object-contain"
             />
           </div>
-          <h1 className="mt-4 text-2xl font-bold text-gray-900">Level 1 Haircare</h1>
-          <p className="mt-2 text-sm text-gray-500">Đăng nhập để tiếp tục</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

@@ -12,7 +12,17 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 60 * 1000,
+            // 5-minute staleTime — the app's data (staff, services, branches,
+            // bookings, invoices) rarely changes within a working session, and
+            // all mutations already invalidate the affected queries. A longer
+            // staleTime means far fewer refetches when switching between
+            // modules → faster navigation. Individual queries can override
+            // this with their own staleTime when they need fresher data.
+            staleTime: 5 * 60 * 1000,
+            // Don't refetch when the user switches browser tabs and comes back.
+            // The data is already cached (and mutations invalidate as needed),
+            // so window-focus refetches just add latency without benefit.
+            refetchOnWindowFocus: false,
           },
         },
       })

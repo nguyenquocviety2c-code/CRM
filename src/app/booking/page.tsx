@@ -9,13 +9,28 @@ import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { format as fmtDate } from "date-fns";
 import { useBookingStore, Booking } from "@/stores/booking-store";
 import { useAuthStore } from "@/stores/auth-store";
+import dynamic from "next/dynamic";
+// Lazy-load BookingDialog — it's only opened when the user creates/edits a
+// booking. Loading its 3,000+ lines only when first needed keeps the Booking
+// module's initial bundle small.
+const BookingDialog = dynamic(
+  () => import("@/components/features/booking/booking-dialog").then((m) => m.BookingDialog),
+  { ssr: false }
+);
 import { BookingFilter } from "@/components/features/booking/booking-filter";
-import { BookingDialog } from "@/components/features/booking/booking-dialog";
 import { BookingCustomerView } from "@/components/features/booking/booking-customer-view";
 import { BookingStaffView } from "@/components/features/booking/booking-staff-view";
 import { BookingTimeGrid } from "@/components/features/booking/booking-time-grid";
-import { InvoiceDialog } from "@/components/features/booking/invoice-dialog";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+// Lazy-load InvoiceDialog + PaidInvoiceView — only shown when the user clicks
+// a checkin/checkout booking. Keeps the Booking module's initial bundle small.
+const InvoiceDialog = dynamic(
+  () => import("@/components/features/booking/invoice-dialog").then((m) => m.InvoiceDialog),
+  { ssr: false }
+);
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
 import { BookingStatusType } from "@/lib/constants";
 import { BranchSelector } from "@/components/layout/branch-selector";
 import { useBranchStore } from "@/stores/branch-store";

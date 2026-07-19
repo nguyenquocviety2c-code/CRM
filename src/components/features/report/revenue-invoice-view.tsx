@@ -1,6 +1,15 @@
 "use client";
 
 import React, { useState } from "react";
+import dynamic from "next/dynamic";
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { Printer, Download, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,18 +32,16 @@ import {
 } from "@/components/shared/column-toggle";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 const INVOICE_COLUMN_DEFS: ColumnDef[] = [
   { key: "stt", label: "STT" },
   { key: "invoiceCode", label: "Mã hóa đơn" },
   { key: "createdAt", label: "Ngày tạo" },
   { key: "customerName", label: "Khách hàng" },
-  { key: "totalAmount", label: "Tổng tiền" },
   { key: "surcharge", label: "Thưởng" },
+  { key: "discount", label: "Giảm giá" },
   { key: "promotionName", label: "Khuyến mãi" },
-  { key: "paidAmount", label: "Đã thanh toán" },
+  { key: "totalAmount", label: "Tổng tiền" },
 ];
 
 /** Shape of the invoice row carried into the full-page PaidInvoiceView. */
@@ -213,10 +220,10 @@ export function RevenueInvoiceView() {
                         )}
                       </TableCell>
                     );
-                    if (col.key === "totalAmount") return <TableCell key="totalAmount">{formatVND(invoice.totalAmount)}</TableCell>;
                     if (col.key === "surcharge") return <TableCell key="surcharge">{formatVND(invoice.surcharge)}</TableCell>;
+                    if (col.key === "discount") return <TableCell key="discount">{formatVND(invoice.discount)}</TableCell>;
                     if (col.key === "promotionName") return <TableCell key="promotionName">{renderPromotion(invoice)}</TableCell>;
-                    if (col.key === "paidAmount") return <TableCell key="paidAmount">{formatVND(invoice.paidAmount)}</TableCell>;
+                    if (col.key === "totalAmount") return <TableCell key="totalAmount">{formatVND(invoice.totalAmount)}</TableCell>;
                     return null;
                   })}
                 </TableRow>

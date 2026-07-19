@@ -1,6 +1,16 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
+// Lazy-load PaidInvoiceView + CustomerHistoryDialog — only opened on demand.
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Trash2,
@@ -37,9 +47,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
 import { parseMultiCustomerNote, type SlotCustomer } from "@/lib/multi-customer";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 /**
  * Read a File as a base64 data URL (for storing photos in the invoice note JSON).

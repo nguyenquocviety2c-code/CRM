@@ -1,6 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,7 +26,6 @@ import {
   CustomerPackageStatusBadgeColors,
 } from "@/lib/constants";
 import type { PurchasedPackageResponse } from "@/types/report-service-package";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 function formatDateOnly(iso: string): string {
   if (!iso) return "-";

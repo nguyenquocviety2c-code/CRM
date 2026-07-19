@@ -1,6 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
+// Lazy-load InvoiceDialog — only opened when the user clicks "Xác nhận thanh
+// toán" on a pending past-date order. Keeps the invoice list page lighter.
+const InvoiceDialog = dynamic(
+  () => import("@/components/features/booking/invoice-dialog").then((m) => m.InvoiceDialog),
+  { ssr: false }
+);
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -29,8 +36,10 @@ import {
   toggleColumnKey,
 } from "@/components/shared/column-toggle";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
-import { InvoiceDialog } from "@/components/features/booking/invoice-dialog";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
 import {
   BookingStatusType,
 } from "@/lib/constants";

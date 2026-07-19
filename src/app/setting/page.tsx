@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   Store,
   Users,
@@ -14,15 +15,32 @@ import { useSettingStore, SettingTabs, SettingTab } from "@/stores/setting-store
 import { cn } from "@/lib/utils";
 import { StaffSettingsView } from "@/components/features/setting/staff-settings-view";
 import { StaffGroupsView } from "@/components/features/setting/staff-groups-view";
-import { StaffCreateDialog } from "@/components/features/setting/staff-create-dialog";
-import { StaffGroupCreateDialog } from "@/components/features/setting/staff-group-create-dialog";
 import { ShiftSettingsView } from "@/components/features/setting/shift-settings-view";
-import { ShiftCreateDialog } from "@/components/features/setting/shift-create-dialog";
 import { CustomerSourcesView } from "@/components/features/setting/customer-sources-view";
-import { CustomerSourceCreateDialog } from "@/components/features/setting/customer-source-create-dialog";
 import { BookingChannelsView } from "@/components/features/setting/booking-channels-view";
 import { SalonInfoView } from "@/components/features/setting/salon-info-view";
 import { BranchSelector } from "@/components/layout/branch-selector";
+
+// Lazy-load the create dialogs — they're only opened on demand (user clicks
+// "Thêm" / "Tạo mới"). Loading their code only when first needed keeps the
+// Setting module's initial bundle small and the tab loads faster. ssr:false
+// because these are client-only interactive dialogs.
+const StaffCreateDialog = dynamic(
+  () => import("@/components/features/setting/staff-create-dialog").then((m) => m.StaffCreateDialog),
+  { ssr: false }
+);
+const StaffGroupCreateDialog = dynamic(
+  () => import("@/components/features/setting/staff-group-create-dialog").then((m) => m.StaffGroupCreateDialog),
+  { ssr: false }
+);
+const ShiftCreateDialog = dynamic(
+  () => import("@/components/features/setting/shift-create-dialog").then((m) => m.ShiftCreateDialog),
+  { ssr: false }
+);
+const CustomerSourceCreateDialog = dynamic(
+  () => import("@/components/features/setting/customer-source-create-dialog").then((m) => m.CustomerSourceCreateDialog),
+  { ssr: false }
+);
 
 const tabIcons: Record<SettingTab, React.ComponentType<{ className?: string }>> = {
   "salon-info": Store,

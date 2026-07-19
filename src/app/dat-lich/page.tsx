@@ -682,11 +682,24 @@ export default function DatLichPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-emerald-50">
       {/* Top bar with brand + login button (top-right corner) */}
-      <header className="flex items-center justify-between border-b bg-white/80 px-6 py-4 backdrop-blur">
-        <div className="flex items-center gap-2">
-          <Scissors className="h-6 w-6 text-emerald-600" />
-          <span className="text-lg font-bold text-gray-900">EasySalon</span>
-          <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+      <header className="flex items-center justify-between border-b bg-white px-6 py-4">
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/level1-haircare-logo.png"
+            alt="Level 1 Haircare"
+            className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-amber-300/60"
+          />
+          <span
+            className="text-lg font-semibold tracking-wide"
+            style={{
+              fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif",
+              color: "#004D40",
+              letterSpacing: "0.02em",
+            }}
+          >
+            Level 1 Haircare
+          </span>
+          <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
             Đặt lịch
           </span>
         </div>
@@ -709,8 +722,9 @@ export default function DatLichPage() {
         </div>
 
         <div className="space-y-6">
-          {/* Part 1: Customer info */}
-          <section className="rounded-xl border bg-white p-6 shadow-sm">
+          {/* Part 1: Customer info. All text inside is forced to black + bold
+              for clarity. */}
+          <section className="rounded-xl border bg-white p-6 shadow-sm [&_*]:!text-black [&_label]:!font-bold [&_h2]:!font-bold [&_span:not(.text-red-500)]:!text-black [&_.text-red-500]:!text-red-500">
             <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-gray-900">
               <User className="h-4 w-4 text-emerald-600" />
               Thông tin khách hàng
@@ -856,7 +870,7 @@ export default function DatLichPage() {
               model) so the Khung giờ picker is a single shared field below. */}
           <section
             className={cn(
-              "rounded-xl border bg-white p-6 shadow-sm transition-opacity",
+              "rounded-xl border bg-white p-6 shadow-sm transition-opacity [&_*]:!text-black [&_label]:!font-bold [&_h2]:!font-bold [&_span:not(.text-red-500)]:!text-black [&_.text-red-500]:!text-red-500",
               !part1Complete && "opacity-50"
             )}
           >

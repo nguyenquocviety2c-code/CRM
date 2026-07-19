@@ -1,6 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
+// Lazy-load InvoiceDialog + PaidInvoiceView + CustomerHistoryDialog — only
+// opened on demand (user clicks a checkin/checkout booking or a customer
+// history button). Keeps the customer view's initial bundle small.
+const InvoiceDialog = dynamic(
+  () => import("./invoice-dialog").then((m) => m.InvoiceDialog),
+  { ssr: false }
+);
+const PaidInvoiceView = dynamic(
+  () => import("./paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { useQueryClient } from "@tanstack/react-query";
 import { Pencil, Trash2, List, Clock, ChevronDown, Columns3, RotateCcw } from "lucide-react";
 import { Booking } from "stores/booking-store";
@@ -26,9 +42,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { InvoiceDialog } from "./invoice-dialog";
-import { PaidInvoiceView } from "./paid-invoice-view";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 interface BookingCustomerViewProps {
   bookings: Booking[];

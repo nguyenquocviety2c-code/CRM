@@ -1,7 +1,16 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { PaidInvoiceView } from "@/components/features/booking/paid-invoice-view";
+import dynamic from "next/dynamic";
+// Lazy-load PaidInvoiceView + CustomerHistoryDialog — only opened on demand.
+const PaidInvoiceView = dynamic(
+  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const CustomerHistoryDialog = dynamic(
+  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
+  { ssr: false }
+);
 import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2, RotateCcw } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCashierStore, type InvoiceItem, type TabMeta } from "@/stores/cashier-store";
@@ -26,7 +35,6 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { parseMultiCustomerNote } from "@/lib/multi-customer";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 // Fetch a customer's "Khách cũ" status from the API. A customer counts as
 // "old" (Khách cũ) when they have at least one completed invoice OR belong

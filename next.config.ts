@@ -23,6 +23,19 @@ const nextConfig: NextConfig = {
     "preview-chat-93d75e59-6a6c-41a9-a31c-2eb20f997079.space-z.ai",
     "*.space-z.ai",
   ],
+  // Tree-shake barrel imports for these libraries so only the used exports
+  // end up in the bundle (instead of the whole package). Zero behavior change
+  // — Next.js handles the transform automatically. Significantly reduces the
+  // initial bundle size (lucide-react + date-fns + recharts are heavy).
+  experimental: {
+    optimizePackageImports: [
+      "lucide-react",
+      "date-fns",
+      "recharts",
+      "radix-ui",
+      "react-day-picker",
+    ],
+  },
 };
 
 export default nextConfig;
