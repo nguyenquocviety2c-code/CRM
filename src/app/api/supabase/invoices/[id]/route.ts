@@ -303,15 +303,28 @@ export async function PUT(
         existingPromotion as { id?: string; name?: string } | null,
         existingPhotos
       );
-      await logActivity(
-        id,
-        invoiceCode,
-        branchIdForActivity,
-        "UPDATE_INVOICE",
-        changeDetail,
-        body.final_amount != null ? String(body.final_amount) : null,
-        actorStaffId
-      );
+      // Only log an UPDATE_INVOICE ("Chỉnh sửa") activity when there's an
+      // ACTUAL content change (items, tip, promotion, photos, note, amount,
+      // payment_method) — NOT when the only change is the status transition
+      // to "completed" (that's the payment flow, already covered by the
+      // PAYMENT + CHECKOUT activities logged below). Parse the change detail
+      // to see if it contains anything other than just "trạng thái:".
+      const isPaymentOnlyChange =
+        body.status === "completed" &&
+        beforeState.status !== "completed" &&
+        !changeDetail.includes(",") && // only one part (no comma = single change)
+        changeDetail.includes("trạng thái");
+      if (!isPaymentOnlyChange) {
+        await logActivity(
+          id,
+          invoiceCode,
+          branchIdForActivity,
+          "UPDATE_INVOICE",
+          changeDetail,
+          body.final_amount != null ? String(body.final_amount) : null,
+          actorStaffId
+        );
+      }
       // If this update completed payment, log a PAYMENT activity too.
       if (body.status === "completed" && beforeState.status !== "completed") {
         await logActivity(
@@ -389,15 +402,24 @@ export async function PUT(
     if (body.status !== undefined) changeParts.push(`trạng thái: ${body.status}`);
     if (body.note !== undefined) changeParts.push("ghi chú");
     const changeDetail = changeParts.length > 0 ? `Chỉnh sửa: ${changeParts.join(", ")}` : "Chỉnh sửa hóa đơn";
-    await logActivity(
-      id,
-      updatedRow?.code || "",
-      updatedRow?.branch_id || null,
-      "UPDATE_INVOICE",
-      changeDetail,
-      body.final_amount != null ? String(body.final_amount) : null,
-      actorStaffId
-    );
+    // Same rule as the items-branch above: skip the "Chỉnh sửa" activity when
+    // the ONLY change is the status → "completed" transition (payment flow —
+    // already covered by the PAYMENT + CHECKOUT activities).
+    const isPaymentOnlyChange2 =
+      body.status === "completed" &&
+      changeParts.length === 1 &&
+      changeParts[0].startsWith("trạng thái");
+    if (!isPaymentOnlyChange2) {
+      await logActivity(
+        id,
+        updatedRow?.code || "",
+        updatedRow?.branch_id || null,
+        "UPDATE_INVOICE",
+        changeDetail,
+        body.final_amount != null ? String(body.final_amount) : null,
+        actorStaffId
+      );
+    }
     // If this update completed payment, log a PAYMENT activity too.
     if (body.status === "completed") {
       await logActivity(

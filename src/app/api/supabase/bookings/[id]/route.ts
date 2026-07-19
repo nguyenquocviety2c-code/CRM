@@ -168,17 +168,26 @@ export async function PUT(
     let bookingInvoiceId: string | null = null;
     let bookingInvoiceCode: string | null = null;
     let bookingBranchId: string | null = null;
+    let beforeServices: Array<{ service_id: string; staff_id: string | null; service_category_id: string | null; sort_order: number }> = [];
     try {
       const { data: before } = await supabaseAdmin
         .from("bookings")
-        .select("status, branch_id, date_time, duration, note, number_of_customers, customer_id, invoice:invoices(id, code)")
+        .select("status, branch_id, date_time, duration, note, number_of_customers, customer_id, customer_source_id, customer_channel_id, invoice:invoices(id, code)")
         .eq("id", id)
         .maybeSingle();
       beforeBooking = before as Record<string, unknown> | null;
       bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
-      const inv = (before as { invoice?: { id?: string; code?: string } | null } | null)?.invoice;
+      // The invoice join returns an ARRAY (PostgREST to-many), so extract [0].
+      const invRaw = (before as { invoice?: unknown })?.invoice;
+      const inv = Array.isArray(invRaw) ? invRaw[0] as { id?: string; code?: string } | null : invRaw as { id?: string; code?: string } | null;
       bookingInvoiceId = inv?.id ?? null;
       bookingInvoiceCode = inv?.code ?? null;
+      const { data: svcRows } = await supabaseAdmin
+        .from("booking_services")
+        .select("service_id, staff_id, service_category_id, sort_order")
+        .eq("booking_id", id)
+        .order("sort_order", { ascending: true });
+      beforeServices = (svcRows ?? []) as typeof beforeServices;
     } catch {
       // best-effort — proceed without activity logging
     }
@@ -390,37 +399,54 @@ export async function PUT(
       }
     }
 
-    // === Log a "Chỉnh sửa" (UPDATE_INVOICE) activity when the booking is edited ===
-    // The user wants ANY booking edit (date/time, customer, services, note, etc.)
-    // to produce a "Chỉnh sửa" row in the invoice activity history, attributed to
-    // the logged-in staff. Only logged when the booking has a linked invoice
-    // (checkin/checkout state) — activities are tied to invoices.
+    // === Log a "Chỉnh sửa" (UPDATE_INVOICE) activity ONLY when the booking
+    //     actually changed ===
+    // The user wants the "Chỉnh sửa" row to appear ONLY when there's a real
+    // change (time, services, customer, note, etc.). If the user opens the edit
+    // dialog and clicks Save without changing anything, NO "Chỉnh sửa" row is
+    // logged. Only logged when the booking has a linked invoice (activities are
+    // tied to invoices).
     if (bookingInvoiceId && beforeBooking) {
       const actorStaffId = getCurrentStaffId(request) || (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
-      // Build a human-readable change description from the edited fields.
+      // Build a change description by comparing BEFORE vs AFTER for each field.
       const parts: string[] = [];
       if (rest.date_time !== undefined && rest.date_time !== (beforeBooking as { date_time?: string | null }).date_time) parts.push("ngày giờ");
       if (rest.duration !== undefined && Number(rest.duration) !== Number((beforeBooking as { duration?: number | null }).duration)) parts.push("thời lượng");
       if (rest.customer_id !== undefined && rest.customer_id !== (beforeBooking as { customer_id?: string | null }).customer_id) parts.push("khách hàng");
       if (rest.note !== undefined && rest.note !== (beforeBooking as { note?: string | null }).note) parts.push("ghi chú");
       if (rest.number_of_customers !== undefined && Number(rest.number_of_customers) !== Number((beforeBooking as { number_of_customers?: number | null }).number_of_customers)) parts.push("số khách");
-      if (rest.customer_source_id !== undefined) parts.push("nguồn khách");
-      if (rest.customer_channel_id !== undefined) parts.push("kênh đặt lịch");
+      if (rest.customer_source_id !== undefined && (rest.customer_source_id || null) !== ((beforeBooking as { customer_source_id?: string | null }).customer_source_id || null)) parts.push("nguồn khách");
+      if (rest.customer_channel_id !== undefined && (rest.customer_channel_id || null) !== ((beforeBooking as { customer_channel_id?: string | null }).customer_channel_id || null)) parts.push("kênh đặt lịch");
       if (rest.branch_id !== undefined && rest.branch_id !== (beforeBooking as { branch_id?: string | null }).branch_id) parts.push("chi nhánh");
-      if (services !== undefined) parts.push("dịch vụ");
-      const changeDetail = parts.length > 0 ? `Chỉnh sửa lịch hẹn: ${parts.join(", ")}` : "Chỉnh sửa lịch hẹn";
-      try {
-        await supabaseAdmin.from("invoice_activities").insert({
-          invoice_id: bookingInvoiceId,
-          invoice_code: bookingInvoiceCode,
-          action: "UPDATE_INVOICE",
-          detail: changeDetail,
-          value: null,
-          branch_id: bookingBranchId,
-          created_by: actorStaffId,
-        });
-      } catch {
-        // best-effort — don't fail the booking edit
+      // Services: compare old vs new by serializing (service_id + staff_id +
+      // service_category_id + sort_order) for each slot. Only flag as changed
+      // when the set of service slots actually differs.
+      if (services !== undefined && Array.isArray(services)) {
+        const newSvcKey = services
+          .map((s: { service_id?: string; staff_id?: string | null; service_category_id?: string | null; sort_order?: number }) =>
+            `${s.service_id || ""}|${s.staff_id || ""}|${s.service_category_id || ""}|${s.sort_order ?? 0}`)
+          .sort().join(";");
+        const oldSvcKey = beforeServices
+          .map((s) => `${s.service_id}|${s.staff_id || ""}|${s.service_category_id || ""}|${s.sort_order ?? 0}`)
+          .sort().join(";");
+        if (newSvcKey !== oldSvcKey) parts.push("dịch vụ");
+      }
+      // Only log the activity if at least one field actually changed.
+      if (parts.length > 0) {
+        const changeDetail = `Chỉnh sửa lịch hẹn: ${parts.join(", ")}`;
+        try {
+          await supabaseAdmin.from("invoice_activities").insert({
+            invoice_id: bookingInvoiceId,
+            invoice_code: bookingInvoiceCode,
+            action: "UPDATE_INVOICE",
+            detail: changeDetail,
+            value: null,
+            branch_id: bookingBranchId,
+            created_by: actorStaffId,
+          });
+        } catch {
+          // best-effort — don't fail the booking edit
+        }
       }
     }
 
@@ -478,7 +504,9 @@ export async function PATCH(
         .maybeSingle();
       oldStatus = (before as { status?: string | null } | null)?.status ?? null;
       bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
-      const inv = (before as { invoice?: { id?: string; code?: string } | null } | null)?.invoice;
+      // The invoice join returns an ARRAY (PostgREST to-many), so extract [0].
+      const invRaw2 = (before as { invoice?: unknown })?.invoice;
+      const inv = Array.isArray(invRaw2) ? invRaw2[0] as { id?: string; code?: string } | null : invRaw2 as { id?: string; code?: string } | null;
       bookingInvoiceId = inv?.id ?? null;
       bookingInvoiceCode = inv?.code ?? null;
     } catch {
