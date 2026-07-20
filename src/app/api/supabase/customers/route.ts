@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { decodeCustomerNote } from "@/lib/customer-meta";
 
 const CUSTOMER_SELECT =
   "*, source:customer_sources(id, name), group:customer_groups(id, name), branch:branches(id, name)";
@@ -179,8 +180,15 @@ export async function GET(request: NextRequest) {
     }
 
     const enriched = customers.map((c) => {
+      // Decode the `note` field: customers with photos now store their note as
+      // an encoded JSON blob ({"__kind":"customer_meta","note":null,"photos":[...]}).
+      // Decode it so the list response exposes the plain human `note` text +
+      // `photos` array as separate fields (matching the /customers/[id] route).
+      const decoded = decodeCustomerNote(c.note);
       return {
         ...c,
+        note: decoded.note,
+        photos: decoded.photos,
         has_completed_invoice: customerTypeMap.get(c.id as string) === "old",
         customer_type: customerTypeMap.get(c.id as string) ?? "new",
       };

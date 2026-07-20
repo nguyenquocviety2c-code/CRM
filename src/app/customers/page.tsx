@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Plus,
@@ -39,7 +40,6 @@ import { useCustomerStore, Customer } from "@/stores/customer-store";
 import { getCustomerColumns } from "@/components/features/customers/customer-columns";
 import { CustomerDialog } from "@/components/features/customers/customer-dialog";
 import { CustomerDeleteDialog } from "@/components/features/customers/customer-delete-dialog";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { useBranchStore } from "@/stores/branch-store";
 
@@ -74,6 +74,7 @@ const COLUMN_KEYS = [
   "source",
   "channel",
   "actions",
+  "history",
 ] as const;
 
 const COLUMN_LABELS: Record<string, string> = {
@@ -84,13 +85,14 @@ const COLUMN_LABELS: Record<string, string> = {
   source: "Nguồn KH",
   channel: "Kênh liên lạc",
   actions: "Thao tác",
+  history: "Lịch sử",
 };
 
 
 export default function CustomersPage() {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [historyCustomer, setHistoryCustomer] = useState<Customer | null>(null);
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
     () =>
       Object.fromEntries(COLUMN_KEYS.map((k) => [k, true])) as Record<
@@ -188,7 +190,7 @@ export default function CustomersPage() {
   const columns = getCustomerColumns({
     onEdit: openEditDialog,
     onDelete: openDeleteDialog,
-    onViewHistory: (c) => setHistoryCustomer(c),
+    onViewHistory: (c) => router.push(`/customers/${c.id}`),
   });
 
   // Filter columns by visibility state.
@@ -399,11 +401,6 @@ export default function CustomersPage() {
         open={deleteDialogOpen}
         onClose={closeDeleteDialog}
         customer={deletingCustomer}
-      />
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
       />
     </div>
   );

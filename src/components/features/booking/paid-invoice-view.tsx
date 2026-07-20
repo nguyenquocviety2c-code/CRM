@@ -268,9 +268,16 @@ export function PaidInvoiceView({
                           body: JSON.stringify({ photos: updated }),
                         });
                         if (res.ok) {
-                          // Refetch the invoice query (no full page reload — that
-                          // would lose the auth cookie through the gateway proxy).
+                          // Optimistic update: immediately set the cached invoice
+                          // data with the new photos so the UI updates instantly
+                          // (no need to wait for the background refetch).
+                          queryClient.setQueryData<SavedInvoice>(
+                            ["paid-invoice-view", invoiceId],
+                            (old) => (old ? { ...old, photos: updated } : old)
+                          );
+                          // Invalidate for background refetch + cross-tab sync.
                           queryClient.invalidateQueries({ queryKey: ["paid-invoice-view", invoiceId] });
+                          queryClient.invalidateQueries({ queryKey: ["customer-info-invoices"] });
                         }
                       } catch {
                         // Best-effort — don't crash on upload error.
@@ -282,33 +289,46 @@ export function PaidInvoiceView({
                 </label>
                 <button
                   onClick={() => {
-                    const checkboxes = document.querySelectorAll('.photo-checkbox');
-                    const allChecked = Array.from(checkboxes).every((c) => (c as HTMLInputElement).checked);
-                    checkboxes.forEach((c) => ((c as HTMLInputElement).checked = !allChecked));
+                    const allPhotos = invoice.photos || [];
+                    const allSelected = selectedPhotoIndices.length === allPhotos.length && allPhotos.length > 0;
+                    setSelectedPhotoIndices(allSelected ? [] : allPhotos.map((_, i) => i));
                   }}
                   className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50"
                 >
                   <CheckSquare className="h-4 w-4" />
                   Chọn tất cả
                 </button>
-                {selectedPhotoIndices.length > 0 && (
-                  <button
-                    onClick={async () => {
-                      const remaining = (invoice.photos || []).filter((_, idx) => !selectedPhotoIndices.includes(idx));
-                      await fetch(`/api/supabase/invoices/${invoice.id}`, {
-                        method: "PUT",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ photos: remaining }),
-                      });
-                      setSelectedPhotoIndices([]);
-                      queryClient.invalidateQueries({ queryKey: ["paid-invoice-view", invoiceId] });
-                    }}
-                    className="flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
-                  >
-                    <X className="h-4 w-4" />
-                    Xóa đã chọn ({selectedPhotoIndices.length})
-                  </button>
-                )}
+                <button
+                  onClick={async () => {
+                    if (selectedPhotoIndices.length === 0) return;
+                    const remaining = (invoice.photos || []).filter((_, idx) => !selectedPhotoIndices.includes(idx));
+                    await fetch(`/api/supabase/invoices/${invoice.id}`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ photos: remaining }),
+                    });
+                    setSelectedPhotoIndices([]);
+                    // Optimistic update: immediately set the cached invoice data
+                    // with the remaining photos so the UI updates instantly
+                    // (photos disappear right away — no need to exit & re-enter).
+                    queryClient.setQueryData<SavedInvoice>(
+                      ["paid-invoice-view", invoiceId],
+                      (old) => (old ? { ...old, photos: remaining } : old)
+                    );
+                    queryClient.invalidateQueries({ queryKey: ["paid-invoice-view", invoiceId] });
+                    queryClient.invalidateQueries({ queryKey: ["customer-info-invoices"] });
+                  }}
+                  disabled={selectedPhotoIndices.length === 0}
+                  className={`flex items-center gap-1 rounded-lg border px-3 py-1 text-sm transition-colors ${
+                    selectedPhotoIndices.length > 0
+                      ? "border-red-300 text-red-600 hover:bg-red-50 cursor-pointer"
+                      : "border-gray-200 text-gray-300 cursor-not-allowed"
+                  }`}
+                  title={selectedPhotoIndices.length === 0 ? "Chọn ảnh để xóa" : `Xóa ${selectedPhotoIndices.length} ảnh đã chọn`}
+                >
+                  <X className="h-4 w-4" />
+                  Xóa{selectedPhotoIndices.length > 0 ? ` (${selectedPhotoIndices.length})` : ""}
+                </button>
               </div>
               {invoice.photos && invoice.photos.length > 0 && (
                 <div className="flex flex-wrap gap-2">
@@ -316,7 +336,8 @@ export function PaidInvoiceView({
                     <div key={idx} className="relative h-20 w-20 overflow-hidden rounded-lg border">
                       <input
                         type="checkbox"
-                        className="photo-checkbox absolute left-1 top-1 z-10 h-4 w-4"
+                        checked={selectedPhotoIndices.includes(idx)}
+                        className="absolute left-1 top-1 z-10 h-4 w-4"
                         onChange={(e) => {
                           if (e.target.checked) {
                             setSelectedPhotoIndices((prev) => [...prev, idx]);

@@ -2,12 +2,9 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 const PaidInvoiceView = dynamic(
   () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
-  { ssr: false }
-);
-const CustomerHistoryDialog = dynamic(
-  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
   { ssr: false }
 );
 import { useQuery } from "@tanstack/react-query";
@@ -33,6 +30,7 @@ function formatDateTime(iso: string): string {
 
 export function PackageUsageView() {
   const { toast } = useToast();
+  const router = useRouter();
   const {
     customerSearch,
     categoryId,
@@ -50,13 +48,6 @@ export function PackageUsageView() {
     invoiceId: string;
     customerName?: string;
     code?: string | null;
-  } | null>(null);
-  // Customer history dialog state — opened when clicking a customer's name
-  // (green link) in the table.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-    phone?: string | null;
   } | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -152,11 +143,7 @@ export function PackageUsageView() {
                       <button
                         type="button"
                         onClick={() =>
-                          setHistoryCustomer({
-                            id: row.customerId,
-                            name: row.customerName,
-                            phone: row.customerPhone || null,
-                          })
+                          router.push(`/customers/${row.customerId}`)
                         }
                         className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
                         title="Xem lịch sử khách hàng"
@@ -263,14 +250,6 @@ export function PackageUsageView() {
           onClose={() => setDetailTarget(null)}
         />
       )}
-
-      {/* Customer history dialog — opened when clicking a customer's name
-          (green link) in the table. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

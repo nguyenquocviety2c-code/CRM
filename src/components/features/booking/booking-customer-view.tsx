@@ -2,19 +2,16 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
-// Lazy-load InvoiceDialog + PaidInvoiceView + CustomerHistoryDialog — only
-// opened on demand (user clicks a checkin/checkout booking or a customer
-// history button). Keeps the customer view's initial bundle small.
+import { useRouter } from "next/navigation";
+// Lazy-load InvoiceDialog + PaidInvoiceView — only opened on demand (user
+// clicks a checkin/checkout booking). Keeps the customer view's initial
+// bundle small. Customer history now navigates to /customers/[id].
 const InvoiceDialog = dynamic(
   () => import("./invoice-dialog").then((m) => m.InvoiceDialog),
   { ssr: false }
 );
 const PaidInvoiceView = dynamic(
   () => import("./paid-invoice-view").then((m) => m.PaidInvoiceView),
-  { ssr: false }
-);
-const CustomerHistoryDialog = dynamic(
-  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
   { ssr: false }
 );
 import { useQueryClient } from "@tanstack/react-query";
@@ -96,16 +93,10 @@ export function BookingCustomerView({
   const canEditReminder = hasPermission("edit_reminder");
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const router = useRouter();
   // Tracks which booking's reminder is currently being PATCHed (set → reset)
   // so we can disable the control and prevent double-clicks while in flight.
   const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
-  // Customer history dialog state — opened when clicking a customer's name
-  // (green link) in the customer column.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-    phone?: string | null;
-  } | null>(null);
 
   /**
    * Optimistically update the React Query cache for a booking's reminder_at.
@@ -298,11 +289,7 @@ export function BookingCustomerView({
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setHistoryCustomer({
-                                      id: sc.id,
-                                      name: sc.name,
-                                      phone: sc.phone || null,
-                                    })
+                                    router.push(`/customers/${sc.id}`)
                                   }
                                   className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
                                   title="Xem lịch sử khách hàng"
@@ -326,11 +313,7 @@ export function BookingCustomerView({
                           <button
                             type="button"
                             onClick={() =>
-                              setHistoryCustomer({
-                                id: booking.customer!.id,
-                                name: booking.customer?.name,
-                                phone: booking.customer?.phone || null,
-                              })
+                              router.push(`/customers/${booking.customer!.id}`)
                             }
                             className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
                             title="Xem lịch sử khách hàng"
@@ -690,14 +673,6 @@ export function BookingCustomerView({
         )
       )}
 
-      {/* Customer history dialog — opened when clicking a customer's name
-          (green link) in the customer column. Shows visit history, spending
-          stats, and feedback for the clicked customer. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

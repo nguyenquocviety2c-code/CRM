@@ -2,13 +2,11 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
-// Lazy-load PaidInvoiceView + CustomerHistoryDialog — only opened on demand.
+import { useRouter } from "next/navigation";
+// Lazy-load PaidInvoiceView — only opened on demand. Customer history now
+// navigates to /customers/[id].
 const PaidInvoiceView = dynamic(
   () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
-  { ssr: false }
-);
-const CustomerHistoryDialog = dynamic(
-  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
   { ssr: false }
 );
 import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2, RotateCcw } from "lucide-react";
@@ -175,14 +173,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [addingCustomer, setAddingCustomer] = useState(false);
-  // State for the customer history dialog — opened when the cashier clicks a
-  // customer's name (green link) in the info bar.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-    phone?: string | null;
-    code?: string | null;
-  } | null>(null);
+  const router = useRouter();
 
   const activeCustomer = activeCustomers.find(
     (c) => c.customerId === activeTabId
@@ -1025,11 +1016,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                   <button
                     type="button"
                     onClick={() =>
-                      setHistoryCustomer({
-                        id: activeMeta.customerId!,
-                        name: activeCustomer.customerName,
-                        phone: activeCustomer.phone || null,
-                      })
+                      router.push(`/customers/${activeMeta.customerId}`)
                     }
                     className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                     title="Xem lịch sử khách hàng"
@@ -1165,11 +1152,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                       <button
                         type="button"
                         onClick={() =>
-                          setHistoryCustomer({
-                            id: activeBooking.customer!.id,
-                            name: activeCustomer.customerName,
-                            phone: activeCustomer.phone || null,
-                          })
+                          router.push(`/customers/${activeBooking.customer!.id}`)
                         }
                         className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                         title="Xem lịch sử khách hàng"
@@ -1353,14 +1336,6 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         />
       )}
 
-      {/* Customer history dialog — opened when clicking a customer's name
-          (green link) in the info bar. Shows visit history, spending stats,
-          and feedback for the linked customer. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

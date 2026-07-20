@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,19 +20,12 @@ import {
 import { formatVND, formatDate, paginationRange } from "@/lib/report-liabilities-utils";
 import { RevenueSummaryCards } from "./revenue-summary-cards";
 import { EmptyState } from "../customer-care/empty-state";
-import { CustomerHistoryDialog } from "@/components/features/customers/customer-history-dialog";
 
 export function LiabilitiesTransactionView() {
   const { toast } = useToast();
+  const router = useRouter();
   const { setPage, setPageSize } = useReportLiabilitiesStore();
   const { data, summary, page, pageSize, total } = useLiabilitiesTransactionData();
-  // Customer history dialog state — opened when clicking a customer's name
-  // (green link) in the table.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-    phone?: string | null;
-  } | null>(null);
 
   const cards = [
     { label: "NỢ ĐẦU KỲ", value: formatVND(summary.initialDebt) },
@@ -96,11 +89,7 @@ export function LiabilitiesTransactionView() {
                       <button
                         type="button"
                         onClick={() =>
-                          setHistoryCustomer({
-                            id: transaction.customerId,
-                            name: transaction.customerName,
-                            phone: transaction.customerPhone || null,
-                          })
+                          router.push(`/customers/${transaction.customerId}`)
                         }
                         className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
                         title="Xem lịch sử khách hàng"
@@ -154,14 +143,6 @@ export function LiabilitiesTransactionView() {
           </select>
         </div>
       </div>
-
-      {/* Customer history dialog — opened when clicking a customer's name
-          (green link) in the table. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

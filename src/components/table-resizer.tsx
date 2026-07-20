@@ -1,18 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import { useAuthStore } from "@/stores/auth-store";
 
 /**
- * Global table column resizer with persistence.
+ * Global table column + row resizer with persistence.
  *
  * Automatically finds all <table> elements on the page and adds drag handles
  * to their <th> elements, allowing users to resize columns by dragging the
- * vertical edge between them.
+ * vertical edge between them. Also adds row-height drag handles so users can
+ * resize row heights by dragging the horizontal edge between rows.
+ *
+ * Universal: resizing is available to ALL logged-in users (no permission
+ * gate). This is a basic table-interaction feature, not a security-relevant
+ * action, so every staff member can resize tables and have their preferences
+ * persisted per-browser.
  *
  * Persistence:
- * - Each table's column widths are saved to localStorage so they survive
- *   page switches / tab changes / browser refreshes.
+ * - Each table's column widths AND row heights are saved to localStorage so
+ *   they survive page switches / tab changes / browser refreshes.
  * - The storage key is derived from the current URL path + the table's
  *   position in the document (nth-of-type) + the number of columns + a
  *   stable hash of the header text. This keeps different tables on the same
@@ -29,9 +34,10 @@ import { useAuthStore } from "@/stores/auth-store";
  *      strictly respected (required for resizing to work in both directions).
  *    - Sets the table's width to the sum of column widths so resizing one
  *      column doesn't shrink others (the table grows/shrinks instead).
- *    - Appends an 8px-wide transparent drag handle to the right edge of
- *      each <th>.
- * 3. After each drag, saves the new widths to localStorage (debounced).
+ *    - Appends an 8px-wide drag handle to the right edge of each <th> (column
+ *      resize) and a handle to the bottom edge of each body row's first cell
+ *      (row resize).
+ * 3. After each drag, saves the new widths/heights to localStorage (debounced).
  * 4. A MutationObserver (debounced) catches tables added dynamically (page
  *    switches, dialog opens, data loads) and enhances them too.
  *
@@ -120,13 +126,6 @@ function computeTableKey(table: HTMLTableElement): string {
 }
 
 export function TableResizer() {
-  // Permission gate: only staff whose group has "resize_table" can drag table
-  // edges to resize columns/rows. Without it, no drag handles are added (the
-  // tables render normally with their default/fixed widths). When the
-  // permission changes (e.g. an admin grants it via the staff-group dialog),
-  // this re-renders and the effect re-runs so handles are added/removed.
-  const hasResizePermission = useAuthStore((s) => s.hasPermission("resize_table"));
-
   useEffect(() => {
     const processedTables = new WeakSet<HTMLTableElement>();
     // Map each table element to its storage key + a debounce timer, so we can
@@ -349,8 +348,6 @@ export function TableResizer() {
 
     /** Enhance a <table> with resizable columns. */
     function setupTable(table: HTMLTableElement) {
-      // Permission gate — no handles added without "resize_table".
-      if (!hasResizePermission) return;
       // Opt-out via data attribute.
       if (table.hasAttribute("data-no-resize")) return;
       const ths = table.querySelectorAll("thead th");
@@ -608,8 +605,6 @@ export function TableResizer() {
 
     /** Enhance a CSS-grid "table" with resizable columns + rows. */
     function setupGridTable(root: HTMLElement) {
-      // Permission gate — no handles added without "resize_table".
-      if (!hasResizePermission) return;
       if (root.hasAttribute("data-no-resize")) return;
       const rows = findGridRows(root);
       if (rows.length < 1) return;
@@ -734,28 +729,37 @@ export function TableResizer() {
       clearTimeout(initialTimer);
       if (scanTimer) clearTimeout(scanTimer);
     };
-  // Re-run when the resize permission changes (e.g. admin grants/revokes it).
-  // hasResizePermission is a boolean derived from the auth store; when it
-  // flips, the effect tears down the old observer + timers and re-scans so
-  // handles are added (now permitted) or skipped (now denied).
-  }, [hasResizePermission]);
+  }, []);
 
   return (
     <style>{`
-      /* Visual hint: a subtle line on the right edge of each header cell. */
+      /* ===========================================================
+         Column-resize visual hints (right edge of each <th>)
+         - Always-visible subtle grip line so users can discover the
+           drag handle.
+         - Brightens to green on hover for clear "you can drag this"
+           feedback.
+         =========================================================== */
       table[data-resizable] thead th {
         position: relative;
       }
       table[data-resizable] thead th::after {
         content: "";
         position: absolute;
-        top: 20%;
+        top: 15%;
         right: 0;
-        width: 2px;
-        height: 60%;
-        background-color: rgba(15, 23, 42, 0.08);
+        width: 3px;
+        height: 70%;
+        background-color: rgba(15, 23, 42, 0.16);
+        border-radius: 2px;
         pointer-events: none;
         z-index: 5;
+        transition: background-color 0.15s ease, width 0.15s ease;
+      }
+      /* Hover the <th> (or the resizer div inside it) → highlight the grip. */
+      table[data-resizable] thead th:hover::after {
+        background-color: rgba(16, 185, 129, 0.7);
+        width: 4px;
       }
       /* Prevent content from visually overflowing when a column is resized
          very narrow — most cells already use truncate, but this is a
@@ -763,38 +767,55 @@ export function TableResizer() {
       table[data-resizable] td > * {
         max-width: 100%;
       }
-      /* Visual hint: a subtle line on the bottom edge of each body row's FIRST
-         cell only — matches where the row-resize handle lives (first column). */
+      /* ===========================================================
+         Row-resize visual hints (bottom edge of each body row's FIRST
+         cell — that's where the row-resize handle lives).
+         =========================================================== */
       table[data-resizable] tbody td {
         position: relative;
       }
       table[data-resizable] tbody tr td:first-child::after {
         content: "";
         position: absolute;
-        left: 20%;
+        left: 15%;
         bottom: 0;
-        width: 60%;
-        height: 2px;
-        background-color: rgba(15, 23, 42, 0.1);
+        width: 70%;
+        height: 3px;
+        background-color: rgba(15, 23, 42, 0.16);
+        border-radius: 2px;
         pointer-events: none;
         z-index: 5;
+        transition: background-color 0.15s ease, height 0.15s ease;
       }
-      /* ---- CSS-grid "tables" (data-grid-resizable) visual hints ----
-         Same subtle lines: vertical on header cells' right edge (column resize),
-         horizontal on each body row's first cell bottom edge (row resize). */
+      /* Hover the first cell (or the resizer inside it) → highlight. */
+      table[data-resizable] tbody tr td:first-child:hover::after {
+        background-color: rgba(16, 185, 129, 0.7);
+        height: 4px;
+      }
+      /* ===========================================================
+         CSS-grid "tables" (data-grid-resizable) — same grip hints.
+         Vertical grip on header cells' right edge (column resize),
+         horizontal grip on each body row's first cell bottom edge.
+         =========================================================== */
       [data-grid-resizable] [data-grid-header] > * {
         position: relative;
       }
       [data-grid-resizable] [data-grid-header] > *::after {
         content: "";
         position: absolute;
-        top: 20%;
+        top: 15%;
         right: 0;
-        width: 2px;
-        height: 60%;
-        background-color: rgba(15, 23, 42, 0.08);
+        width: 3px;
+        height: 70%;
+        background-color: rgba(15, 23, 42, 0.16);
+        border-radius: 2px;
         pointer-events: none;
         z-index: 5;
+        transition: background-color 0.15s ease, width 0.15s ease;
+      }
+      [data-grid-resizable] [data-grid-header] > *:hover::after {
+        background-color: rgba(16, 185, 129, 0.7);
+        width: 4px;
       }
       [data-grid-resizable] [data-grid-body] > * > * {
         position: relative;
@@ -802,13 +823,29 @@ export function TableResizer() {
       [data-grid-resizable] [data-grid-body] > * > *:first-child::after {
         content: "";
         position: absolute;
-        left: 20%;
+        left: 15%;
         bottom: 0;
-        width: 60%;
-        height: 2px;
-        background-color: rgba(15, 23, 42, 0.1);
+        width: 70%;
+        height: 3px;
+        background-color: rgba(15, 23, 42, 0.16);
+        border-radius: 2px;
         pointer-events: none;
         z-index: 5;
+        transition: background-color 0.15s ease, height 0.15s ease;
+      }
+      [data-grid-resizable] [data-grid-body] > * > *:first-child:hover::after {
+        background-color: rgba(16, 185, 129, 0.7);
+        height: 4px;
+      }
+      /* Dark-mode: the slate grip lines are hard to see on dark backgrounds,
+         so switch to a light translucent grip. */
+      @media (prefers-color-scheme: dark) {
+        table[data-resizable] thead th::after,
+        table[data-resizable] tbody tr td:first-child::after,
+        [data-grid-resizable] [data-grid-header] > *::after,
+        [data-grid-resizable] [data-grid-body] > * > *:first-child::after {
+          background-color: rgba(255, 255, 255, 0.22);
+        }
       }
     `}</style>
   );

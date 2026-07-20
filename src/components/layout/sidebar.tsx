@@ -52,9 +52,8 @@ export function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-48 bg-slate-900 text-white">
-      {/* Logo — brand name + the Level 1 Haircare logo image (same one shown
-          on the login page) placed to the right of the text. */}
-      <div className="flex h-16 items-center gap-2 px-3">
+      {/* Logo — brand name only (the logo image was removed per request). */}
+      <div className="flex h-16 items-center px-3">
         <span
           className="text-sm font-semibold tracking-wide"
           style={{
@@ -64,11 +63,6 @@ export function Sidebar() {
         >
           Level 1 Haircare
         </span>
-        <img
-          src="/level1-haircare-logo.png"
-          alt="Level 1 Haircare"
-          className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-amber-300/60"
-        />
       </div>
 
       {/* Menu */}

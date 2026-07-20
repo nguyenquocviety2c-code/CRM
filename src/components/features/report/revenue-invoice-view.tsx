@@ -2,12 +2,9 @@
 
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 const PaidInvoiceView = dynamic(
   () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
-  { ssr: false }
-);
-const CustomerHistoryDialog = dynamic(
-  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
   { ssr: false }
 );
 import { Printer, Download, ChevronLeft, ChevronRight } from "lucide-react";
@@ -55,6 +52,7 @@ export function RevenueInvoiceView() {
   const { toast } = useToast();
   const { data, summary, page, pageSize, total } = useInvoiceReportData();
   const { setPage, setPageSize } = useReportRevenueStore();
+  const router = useRouter();
   // Permission: only staff with "view_all_invoices" can click an invoice code
   // to open its detail. Without it, the code renders as plain text.
   const { hasPermission } = useAuthStore();
@@ -67,12 +65,6 @@ export function RevenueInvoiceView() {
   // customer name + invoice code) so the view can render its header before
   // the detail fetch resolves.
   const [detailTarget, setDetailTarget] = useState<InvoiceViewTarget | null>(null);
-  // Customer history dialog state — opened when clicking a customer's name
-  // (green link) in the table.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-  } | null>(null);
   const toggleColumn = (key: string) =>
     setVisibleColumns((prev) => toggleColumnKey(prev, key));
 
@@ -205,10 +197,7 @@ export function RevenueInvoiceView() {
                           <button
                             type="button"
                             onClick={() =>
-                              setHistoryCustomer({
-                                id: invoice.customerId,
-                                name: invoice.customerName,
-                              })
+                              router.push(`/customers/${invoice.customerId}`)
                             }
                             className="text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
                             title="Xem lịch sử khách hàng"
@@ -282,14 +271,6 @@ export function RevenueInvoiceView() {
           onClose={() => setDetailTarget(null)}
         />
       )}
-
-      {/* Customer history dialog — opened when clicking a customer's name
-          (green link) in the table. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

@@ -2,13 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
-// Lazy-load PaidInvoiceView + CustomerHistoryDialog — only opened on demand.
+import { useRouter } from "next/navigation";
+// Lazy-load PaidInvoiceView — only opened on demand. Customer history now
+// navigates to /customers/[id].
 const PaidInvoiceView = dynamic(
   () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
-  { ssr: false }
-);
-const CustomerHistoryDialog = dynamic(
-  () => import("@/components/features/customers/customer-history-dialog").then((m) => m.CustomerHistoryDialog),
   { ssr: false }
 );
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -97,6 +95,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   const canEditUnpaidInvoice = hasPermission("edit_unpaid_invoice");
   const canUsePromotion = hasPermission("invoice_discount");
   const canCancelPayment = hasPermission("cancel_payment");
+  const router = useRouter();
   const queryClient = useQueryClient();
 
   const invoice = activeTabId ? invoices[activeTabId] : null;
@@ -497,13 +496,6 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // True while the change-staff conflict check is running (disables OK + shows
   // "Đang kiểm tra..." so the cashier knows the click registered).
   const [changeStaffChecking, setChangeStaffChecking] = useState(false);
-  // Customer history dialog state — opened when clicking a per-slot customer
-  // name (green link) in a multi-customer booking's invoice summary.
-  const [historyCustomer, setHistoryCustomer] = useState<{
-    id: string;
-    name?: string | null;
-    phone?: string | null;
-  } | null>(null);
 
   // Parse the promotion's serviceIds JSON string into a list (or null = all).
   // For "service_category" type these are category ids; otherwise service ids.
@@ -1495,11 +1487,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                         <button
                           type="button"
                           onClick={() =>
-                            setHistoryCustomer({
-                              id: sc.id,
-                              name: sc.name,
-                              phone: sc.phone || null,
-                            })
+                            router.push(`/customers/${sc.id}`)
                           }
                           className="text-[11px] text-emerald-600 hover:text-emerald-700 hover:underline leading-tight cursor-pointer text-left"
                           title="Xem lịch sử khách hàng"
@@ -2329,14 +2317,6 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Customer history dialog — opened when clicking a per-slot customer
-          name (green link) in a multi-customer booking's invoice summary. */}
-      <CustomerHistoryDialog
-        customer={historyCustomer}
-        open={!!historyCustomer}
-        onClose={() => setHistoryCustomer(null)}
-      />
     </div>
   );
 }

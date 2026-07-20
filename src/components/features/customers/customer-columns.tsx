@@ -109,5 +109,20 @@ export function getCustomerColumns(actions: {
       ),
       className: "text-center",
     },
+    {
+      key: "history",
+      header: "Lịch sử",
+      render: (customer) => (
+        <button
+          type="button"
+          onClick={() => actions.onViewHistory?.(customer)}
+          className="text-sm font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+          title="Xem lịch sử khách hàng"
+        >
+          Xem lịch sử
+        </button>
+      ),
+      className: "text-center",
+    },
   ];
 }
