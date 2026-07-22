@@ -193,13 +193,26 @@ export function ServiceSelector() {
     Array<{ id: string; date: string; time: string; status: string; branchName: string; services: Array<{ name: string; staffName: string }> }>
   >([]);
   const [skipExistingBookingsCheck, setSkipExistingBookingsCheck] = useState(false);
-  // Staff-picker dialog for PRODUCT and PACKAGE items. Unlike services (which
-  // have a date/time dialog), products/packages just need a staff name before
-  // they're added — the cashier MUST pick a staff before OK is enabled. We
-  // reuse the same state + Dialog for both product and package clicks (the
-  // active tab determines the item type at add time via `handleAddItem`).
+  // Shared "Thêm sản phẩm / Thêm gói dịch vụ" dialog for PRODUCT and PACKAGE
+  // items. Per the user's latest request, BOTH item types now open this dialog
+  // (products no longer add directly). The dialog shows:
+  //   - Item name + price
+  //   - Date + Time (DISABLED, pre-filled with the current date/time when the
+  //     dialog opens — the cashier can't change them; they're stamped "now")
+  //   - Staff Select — shown ONLY for packages (required). Products have NO
+  //     staff field (per the earlier "no required staff for products" request).
+  // On OK: the item is added with the stamped date/time (+ staff name for
+  // packages). On Cancel: nothing is added. We reuse the same state + Dialog
+  // for both product and package clicks (the active tab determines the item
+  // type at add time via `handleAddItem`).
   const [simpleStaffDialogItem, setSimpleStaffDialogItem] = useState<ServiceItem | null>(null);
   const [simpleStaffPickStaffId, setSimpleStaffPickStaffId] = useState<string>("");
+  // Date/time stamped when the dialog opens (= the moment the cashier clicked
+  // "Thêm sản phẩm" / "Thêm gói dịch vụ"). Read-only in the UI; passed to
+  // `handleAddItem` on confirm so each product/package line item carries the
+  // timestamp of when it was added.
+  const [simpleStaffDialogDate, setSimpleStaffDialogDate] = useState<string>("");
+  const [simpleStaffDialogTime, setSimpleStaffDialogTime] = useState<string>("");
 
   // Fetch services from Supabase
   const { data: servicesData, isLoading: servicesLoading } = useQuery({
@@ -584,45 +597,71 @@ export function ServiceSelector() {
       }
       setIsParallelService(true);
     } else {
-      // First service on this tab → default date = today. Time is left EMPTY
-      // so the cashier can choose: pick a staff + time to create a booking in
-      // Lịch hẹn, or leave them empty to just add the service to the invoice
-      // (no booking). See handleDialogConfirm for the conditional logic.
+      // First service on this tab → default date = today AND time = current
+      // time (HH:MM). Per the user's request, the date/time fields in the
+      // dialog are DISABLED (read-only) and always pre-filled with the moment
+      // the cashier clicked "Thêm dịch vụ" — the cashier can't change them.
+      // This means every service add carries a date/time, so
+      // `shouldSyncBooking` (staff + date + time all set) is true whenever a
+      // staff is picked → a Lịch hẹn booking is always created/synced. The
+      // cashier just picks the staff and confirms; the booking is stamped
+      // "now".
       const now = new Date();
       const d = String(now.getDate()).padStart(2, "0");
       const m = String(now.getMonth() + 1).padStart(2, "0");
       const y = now.getFullYear();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
       setSelectedDate(`${d}/${m}/${y}`);
-      setSelectedTime("");
+      setSelectedTime(`${hh}:${mm}`);
       setIsParallelService(false);
     }
     setServiceDialogOpen(true);
   };
 
-  // Clicking a product OR a package opens a SIMPLE staff-picker dialog (no
-  // date/time — those item types aren't booked into Lịch hẹn). The cashier
-  // must select a staff before OK is enabled. The item is added on OK with
-  // the picked staff's name; on Cancel it is NOT added.
+  // Clicking a PRODUCT or PACKAGE opens the shared "Thêm sản phẩm / Thêm gói
+  // dịch vụ" dialog. The dialog pre-fills the current date + time (disabled —
+  // the cashier can't change them) and shows a staff Select ONLY for packages
+  // (products have no staff field). On OK the item is added with the stamped
+  // date/time (+ staff name for packages); on Cancel it is NOT added.
   const handleProductOrPackageClick = (item: ServiceItem) => {
-    if (!canAssignStaff) {
-      // No permission to assign staff → fall back to the old direct-add
-      // behavior (item added with no staff assignment).
-      handleAddItem(item);
-      return;
-    }
+    // Stamp the current date/time — these are read-only in the dialog.
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yyyy = now.getFullYear();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mi = String(now.getMinutes()).padStart(2, "0");
+    setSimpleStaffDialogDate(`${dd}/${mm}/${yyyy}`);
+    setSimpleStaffDialogTime(`${hh}:${mi}`);
     setSimpleStaffDialogItem(item);
     setSimpleStaffPickStaffId("");
   };
 
-  // OK on the simple staff-picker dialog: add the product/package to the
-  // invoice with the picked staff's name, then close.
+  // OK on the shared dialog: add the product/package to the invoice with the
+  // stamped date/time (+ the picked staff's name for packages), then close.
+  // For products: no staff required → OK is always enabled. For packages: the
+  // cashier MUST pick a staff (OK disabled until one is picked) — UNLESS they
+  // lack the assign_staff permission, in which case the item is added with no
+  // staff (the Select is hidden and OK is enabled).
   const handleSimpleStaffDialogConfirm = () => {
     if (!simpleStaffDialogItem) return;
-    const staff = allStaff.find((s) => s.id === simpleStaffPickStaffId);
-    if (!staff) return; // safety — OK button is disabled in this case anyway
-    handleAddItem(simpleStaffDialogItem, { staffName: staff.name });
+    // Packages require a staff (when the cashier can assign staff). Products
+    // never require a staff.
+    const isPackage = activeTab === "package";
+    const staff = isPackage
+      ? allStaff.find((s) => s.id === simpleStaffPickStaffId)
+      : null;
+    if (isPackage && canAssignStaff && !staff) return; // safety — OK disabled
+    handleAddItem(simpleStaffDialogItem, {
+      staffName: staff?.name,
+      date: simpleStaffDialogDate,
+      time: simpleStaffDialogTime,
+    });
     setSimpleStaffDialogItem(null);
     setSimpleStaffPickStaffId("");
+    setSimpleStaffDialogDate("");
+    setSimpleStaffDialogTime("");
   };
 
   // OK on the service dialog: ALWAYS adds the service to the invoice. A booking
@@ -1419,20 +1458,24 @@ export function ServiceSelector() {
         )}
       </div>
 
-      {/* Service dialog: pick staff + date + time before adding the service */}
+      {/* Service dialog: pick staff + date + time before adding the service.
+          COMPACT layout: tighter padding (p-3 gap-3), smaller fonts
+          (text-[11px] labels, text-xs inputs), equal-height controls (all
+          inputs/triggers/buttons = h-8). The date/time + staff fields share
+          the same height so the dialog looks tidy and narrow. */}
       <Dialog
         open={serviceDialogOpen}
         onOpenChange={(v) => {
           if (!addingFromDialog) setServiceDialogOpen(v);
         }}
       >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Thêm dịch vụ</DialogTitle>
+        <DialogContent className="max-w-sm sm:max-w-sm p-3 gap-3 compact-add-dialog">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm font-semibold">Thêm dịch vụ</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-2">
             {selectedService && (
-              <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
+              <div className="rounded-md border bg-gray-50 px-2.5 py-1.5 text-xs">
                 <span className="font-medium text-gray-900">
                   {selectedService.name}
                 </span>
@@ -1443,15 +1486,15 @@ export function ServiceSelector() {
             )}
 
             {canAssignStaff && (
-            <div className="space-y-2">
-              <Label htmlFor="svc-staff">
+            <div className="space-y-1">
+              <Label htmlFor="svc-staff" className="text-[11px] text-gray-600">
                 Nhân viên<span className="ml-0.5 text-red-500">*</span>
               </Label>
               <Select
                 value={selectedStaffId}
                 onValueChange={(v) => setSelectedStaffId(v)}
               >
-                <SelectTrigger id="svc-staff" className="w-full">
+                <SelectTrigger id="svc-staff" className="w-full h-8 text-xs" size="sm">
                   <SelectValue placeholder="Chọn nhân viên" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1461,7 +1504,7 @@ export function ServiceSelector() {
                     </div>
                   ) : (
                     staffList.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
+                      <SelectItem key={s.id} value={s.id} className="text-xs">
                         {s.name}
                       </SelectItem>
                     ))
@@ -1469,7 +1512,7 @@ export function ServiceSelector() {
                 </SelectContent>
               </Select>
               {!selectedStaffId && (
-                <p className="text-xs text-red-500">Vui lòng chọn nhân viên</p>
+                <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
               )}
             </div>
             )}
@@ -1482,12 +1525,19 @@ export function ServiceSelector() {
               // picks the staff. No visible note per the user's request.
               null
             ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <Label htmlFor="svc-date">
-                    Ngày{!selectedStaffId && <span className="ml-1 text-xs text-gray-400">(chọn nhân viên trước)</span>}
-                  </Label>
-                  <div className={selectedStaffId ? "" : "pointer-events-none opacity-60"}>
+              // First service: date/time are pre-filled with the current
+              // date + time (set in handleServiceClick) and DISABLED — the
+              // cashier can't click into the DatePicker/TimePicker to change
+              // them. The `pointer-events-none opacity-60` wrapper makes the
+              // inputs visually read-only and non-interactive. The values are
+              // still sent in the booking payload as "now". Compact: grid
+              // gap-2, labels text-[11px], inputs forced to h-8 via the
+              // [&_input]:h-8 selector so DatePicker/TimePicker inputs match
+              // the staff Select's h-8 height.
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="svc-date" className="text-[11px] text-gray-600">Ngày</Label>
+                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
                     <DatePicker
                       id="svc-date"
                       value={selectedDate}
@@ -1495,11 +1545,9 @@ export function ServiceSelector() {
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="svc-time">
-                    Giờ{!selectedStaffId && <span className="ml-1 text-xs text-gray-400">(chọn nhân viên trước)</span>}
-                  </Label>
-                  <div className={selectedStaffId ? "" : "pointer-events-none opacity-60"}>
+                <div className="space-y-1">
+                  <Label htmlFor="svc-time" className="text-[11px] text-gray-600">Giờ</Label>
+                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
                     <TimePicker
                       id="svc-time"
                       value={selectedTime}
@@ -1513,20 +1561,22 @@ export function ServiceSelector() {
             )}
 
             {dialogError && (
-              <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
                 {dialogError}
               </div>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button
               variant="outline"
+              size="sm"
               onClick={() => setServiceDialogOpen(false)}
               disabled={addingFromDialog}
             >
               Hủy
             </Button>
             <Button
+              size="sm"
               onClick={handleDialogConfirm}
               disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}
               title={canAssignStaff && !selectedStaffId ? "Vui lòng chọn nhân viên" : undefined}
@@ -1605,29 +1655,38 @@ export function ServiceSelector() {
         </DialogContent>
       </Dialog>
 
-      {/* Simple staff-picker dialog for PRODUCT and PACKAGE items. The cashier
-          MUST pick a staff before OK is enabled — the item is only added on OK.
-          Cancel closes the dialog without adding anything. Uses `allStaff`
-          (the hairdresser list fetched regardless of active tab) so the dialog
-          works on the product and package tabs too. */}
+      {/* Shared "Thêm sản phẩm / Thêm gói dịch vụ" dialog for PRODUCT and
+          PACKAGE items. COMPACT layout (mirrors the service dialog): tighter
+          padding (p-3 gap-3), smaller fonts (text-[11px] labels, text-xs
+          inputs), equal-height controls (all inputs/triggers/buttons = h-8).
+          Shows:
+            - Item name + price
+            - Date + Time (DISABLED, pre-filled with "now" — the cashier can't
+              change them; they're stamped to the moment the dialog opened)
+            - Staff Select — ONLY for packages (required, when canAssignStaff).
+              Products have NO staff field.
+          On OK: the item is added with the stamped date/time (+ staff name for
+          packages). On Cancel: nothing is added. */}
       <Dialog
         open={!!simpleStaffDialogItem}
         onOpenChange={(v) => {
           if (!v) {
             setSimpleStaffDialogItem(null);
             setSimpleStaffPickStaffId("");
+            setSimpleStaffDialogDate("");
+            setSimpleStaffDialogTime("");
           }
         }}
       >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>
+        <DialogContent className="max-w-sm sm:max-w-sm p-3 gap-3 compact-add-dialog">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm font-semibold">
               {activeTab === "package" ? "Thêm gói dịch vụ" : "Thêm sản phẩm"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-2">
             {simpleStaffDialogItem && (
-              <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
+              <div className="rounded-md border bg-gray-50 px-2.5 py-1.5 text-xs">
                 <span className="font-medium text-gray-900">
                   {simpleStaffDialogItem.name}
                 </span>
@@ -1636,50 +1695,101 @@ export function ServiceSelector() {
                 </span>
               </div>
             )}
-            <div className="space-y-2">
-              <Label htmlFor="simple-staff">
-                Nhân viên<span className="ml-0.5 text-red-500">*</span>
-              </Label>
-              <Select
-                value={simpleStaffPickStaffId}
-                onValueChange={setSimpleStaffPickStaffId}
-              >
-                <SelectTrigger id="simple-staff" className="w-full">
-                  <SelectValue placeholder="Chọn nhân viên" />
-                </SelectTrigger>
-                <SelectContent>
-                  {allStaff.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-gray-500">
-                      Không có nhân viên ở cửa hàng này
-                    </div>
-                  ) : (
-                    allStaff.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-              {!simpleStaffPickStaffId && (
-                <p className="text-xs text-red-500">Vui lòng chọn nhân viên</p>
-              )}
+            {/* Date + Time — DISABLED, pre-filled with "now". Shown for BOTH
+                products and packages. The `pointer-events-none opacity-60`
+                wrapper makes the DatePicker/TimePicker read-only and
+                non-interactive. The `[&_input]:h-8 [&_input]:text-xs` forces
+                the inner inputs to h-8 so they match the staff Select's
+                height — all controls in the dialog share the same height. */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="simple-date" className="text-[11px] text-gray-600">Ngày</Label>
+                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+                  <DatePicker
+                    id="simple-date"
+                    value={simpleStaffDialogDate}
+                    onChange={setSimpleStaffDialogDate}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="simple-time" className="text-[11px] text-gray-600">Giờ</Label>
+                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+                  <TimePicker
+                    id="simple-time"
+                    value={simpleStaffDialogTime}
+                    onChange={setSimpleStaffDialogTime}
+                  />
+                </div>
+              </div>
             </div>
+            {/* Staff Select — ONLY for packages (when canAssignStaff). Products
+                have NO staff field. For packages, the cashier MUST pick a
+                staff before OK is enabled. h-8 + text-xs matches the date/time
+                inputs' height so all controls are equal. */}
+            {activeTab === "package" && canAssignStaff && (
+              <div className="space-y-1">
+                <Label htmlFor="simple-staff" className="text-[11px] text-gray-600">
+                  Nhân viên<span className="ml-0.5 text-red-500">*</span>
+                </Label>
+                <Select
+                  value={simpleStaffPickStaffId}
+                  onValueChange={setSimpleStaffPickStaffId}
+                >
+                  <SelectTrigger id="simple-staff" className="w-full h-8 text-xs" size="sm">
+                    <SelectValue placeholder="Chọn nhân viên" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allStaff.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-gray-500">
+                        Không có nhân viên ở cửa hàng này
+                      </div>
+                    ) : (
+                      allStaff.map((s) => (
+                        <SelectItem key={s.id} value={s.id} className="text-xs">
+                          {s.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+                {!simpleStaffPickStaffId && (
+                  <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+                )}
+              </div>
+            )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button
               variant="outline"
+              size="sm"
               onClick={() => {
                 setSimpleStaffDialogItem(null);
                 setSimpleStaffPickStaffId("");
+                setSimpleStaffDialogDate("");
+                setSimpleStaffDialogTime("");
               }}
             >
               Hủy
             </Button>
             <Button
+              size="sm"
               onClick={handleSimpleStaffDialogConfirm}
-              disabled={!simpleStaffPickStaffId}
-              title={!simpleStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              // OK is disabled ONLY for packages requiring a staff that hasn't
+              // been picked yet. Products (and packages without assign_staff
+              // permission) are always enabled — no staff required.
+              disabled={
+                activeTab === "package" &&
+                canAssignStaff &&
+                !simpleStaffPickStaffId
+              }
+              title={
+                activeTab === "package" &&
+                canAssignStaff &&
+                !simpleStaffPickStaffId
+                  ? "Vui lòng chọn nhân viên"
+                  : undefined
+              }
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               OK

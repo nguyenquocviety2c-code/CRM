@@ -20,6 +20,8 @@ import {
   X,
   CheckSquare,
   UserCog,
+  Minus,
+  Plus,
 } from "lucide-react";
 import { useCashierStore } from "@/stores/cashier-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
@@ -44,6 +46,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { parseMultiCustomerNote, type SlotCustomer } from "@/lib/multi-customer";
 
@@ -65,8 +68,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     activeCustomers,
     invoices,
     updateInvoiceItemDiscount,
+    updateInvoiceItemQuantity,
     removeInvoiceItem,
     setInvoiceItemStaff,
+    setAllInvoiceItemsStaff,
     setDiscountAmount,
     setTipAmount,
     getSubtotal,
@@ -496,6 +501,44 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // True while the change-staff conflict check is running (disables OK + shows
   // "Đang kiểm tra..." so the cashier knows the click registered).
   const [changeStaffChecking, setChangeStaffChecking] = useState(false);
+  // Bulk "Xếp nhân viên" dialog state (action-bar button). Opens a dialog where
+  // the cashier picks ONE staff; on confirm, that staff is assigned to EVERY
+  // line item in the current invoice (services + products + packages). This is
+  // a bulk operation — it does NOT run the per-item conflict check (the cashier
+  // explicitly chooses to assign the whole order to one staff). OK is disabled
+  // until a staff is picked; Cancel closes without changing anything.
+  const [assignAllStaffOpen, setAssignAllStaffOpen] = useState(false);
+  const [assignAllStaffPickStaffId, setAssignAllStaffPickStaffId] = useState<string>("");
+  // Payment confirmation dialog state. When the cashier clicks the action-bar
+  // "Thanh toán" button, this dialog opens FIRST (instead of immediately
+  // entering review mode). The dialog shows the amount due, one or more
+  // PAYMENT ROWS (each row = Phương thức + Số tiền on the SAME line), and a
+  // notes field. (The "Mã hóa đơn" field was removed per request — the system
+  // auto-generates the real code.) Only when the cashier clicks "Thanh toán"
+  // INSIDE this dialog does the actual `handleThanhToan()` run (which auto-
+  // checkins the booking, creates a pending invoice, and enters the "chờ bấm
+  // Hoàn tất" review state). "Hủy" closes the dialog without changing
+  // anything. This matches the reference mockup: a 2-step payment flow where
+  // the first click opens the form and the second click (inside the dialog)
+  // confirms.
+  //
+  // Multi-row payment: the dialog starts with ONE payment row. A small square
+  // [+] button next to the row lets the cashier add a SECOND row. Because there
+  // are only 2 payment methods (cash / transfer), the second row's method is
+  // LOCKED to the opposite of the first row's (if row 1 = Tiền mặt, row 2 =
+  // Chuyển khoản, and vice versa). So at most 2 rows exist. The [+] button is
+  // hidden once 2 rows exist; a [×] remove button appears on row 2 to drop it.
+  // Amount entry: BOTH rows are EDITABLE — the cashier types each amount
+  // manually. Row 1 starts pre-filled with the full invoice total (so a
+  // single-method payment needs no editing); when the cashier clicks [+] to
+  // add row 2, row 2 starts EMPTY (NO auto-split — the cashier types both
+  // amounts themselves). A small hint shows the sum vs amount due.
+  type PayRow = { method: "cash" | "transfer"; amount: string };
+  const [payConfirmOpen, setPayConfirmOpen] = useState(false);
+  const [payConfirmRows, setPayConfirmRows] = useState<PayRow[]>([
+    { method: "cash", amount: "" },
+  ]);
+  const [payConfirmNote, setPayConfirmNote] = useState("");
 
   // Parse the promotion's serviceIds JSON string into a list (or null = all).
   // For "service_category" type these are category ids; otherwise service ids.
@@ -655,11 +698,32 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     try {
       const meta = tabMeta[activeTabId];
       const bookingId = meta?.bookingId;
-      // 1. Auto-checkin the booking if it's not already checkin/checkout.
+      // 1. Auto-checkin the booking. FIRST fetch the booking's CURRENT status
+      //    + date_time so we can detect the "Đã xác nhận → pay directly" case:
+      //    when the booking was "confirmed" (NOT yet checked in), the checkin
+      //    activity should be backdated to the booking's date_time (the service
+      //    registration time) per the user's request. Then PATCH → "checkin".
+      //    The PATCH is idempotent (if already checkin, it stays checkin).
+      let checkinAt: string | null = null;
       if (bookingId) {
-        // The booking status is in dayBookings; check it.
-        // We PATCH to "checkin" — the API is idempotent (if already checkin,
-        // it stays checkin).
+        try {
+          // Read the booking's current status + date_time BEFORE patching, so
+          // we know whether this is a "direct pay from confirmed" case.
+          const getRes = await fetch(
+            `/api/supabase/bookings/${encodeURIComponent(bookingId)}`
+          );
+          const getJson = await getRes.json();
+          if (getJson.ok && getJson.data) {
+            const b = getJson.data as { status?: string; date_time?: string };
+            if (b.status === "confirmed" && b.date_time) {
+              // Confirmed, NOT yet checked in → the checkin activity will be
+              // backdated to the booking's date_time (registration time).
+              checkinAt = b.date_time;
+            }
+          }
+        } catch {
+          // best-effort — if the GET fails, checkinAt stays null (defaults to now)
+        }
         try {
           await fetch(`/api/supabase/bookings/${bookingId}`, {
             method: "PATCH",
@@ -674,44 +738,61 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       }
       // 2. Create a PENDING invoice for this booking (if one doesn't exist yet)
       //    so the Booking module's invoice dialog can open it and show the
-      //    Payment dialog (review mode synced).
+      //    Payment dialog (review mode synced). SKIP when the customer_id would
+      //    be a synthetic "walkin-" id (not a real UUID) — the invoices API
+      //    requires a valid customer_id UUID, and the real customer is created
+      //    at checkout (checkoutMutation) anyway. This is best-effort (the
+      //    pending invoice is only for the Booking module's preview); skipping
+      //    it here avoids the "invalid input syntax for type uuid" error.
       if (bookingId && !meta?.invoiceId) {
         try {
           const realCustomerId = meta?.customerId || activeCustomer?.customerId || "";
-          const hasServices = invoice.items.some((it) => it.type === "service");
-          const res = await fetch("/api/supabase/invoices", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              customer_id: realCustomerId,
-              branch_id: selectedBranchId || null,
-              booking_id: shouldSyncBookingFor(activeTabId) ? bookingId : undefined,
-              items: invoice.items.map((it) => ({
-                id: it.id,
-                itemId: it.itemId,
-                name: it.name,
-                type: it.type,
-                quantity: it.quantity,
-                price: it.price,
-                discount: it.discount,
-                discountType: it.discountType || "VND",
-                total: it.total,
-                staffName: it.staffName,
-              })),
-              subtotal: getSubtotal(activeTabId),
-              discount: invoice.discountAmount,
-              tip: getTipAmount(activeTabId),
-              promotion: null,
-              final_amount: getInvoiceTotal(activeTabId),
-              payment_method: paymentMethod,
-              status: "pending", // pending — not yet paid
-              photos: [],
-              created_by: useAuthStore.getState().user?.id,
-            }),
-          });
-          const json = await res.json();
-          if (json.ok && json.data?.id) {
-            updateTabMeta(activeTabId, { invoiceId: json.data.id });
+          if (!realCustomerId || realCustomerId.startsWith("walkin-")) {
+            // Synthetic id — skip the pending-invoice preview. The real
+            // customer + completed invoice are created at checkout
+            // (checkoutMutation handles customer creation for synthetic ids).
+          } else {
+            const hasServices = invoice.items.some((it) => it.type === "service");
+            const res = await fetch("/api/supabase/invoices", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                customer_id: realCustomerId,
+                branch_id: selectedBranchId || null,
+                booking_id: shouldSyncBookingFor(activeTabId) ? bookingId : undefined,
+                items: invoice.items.map((it) => ({
+                  id: it.id,
+                  itemId: it.itemId,
+                  name: it.name,
+                  type: it.type,
+                  quantity: it.quantity,
+                  price: it.price,
+                  discount: it.discount,
+                  discountType: it.discountType || "VND",
+                  total: it.total,
+                  staffName: it.staffName,
+                })),
+                subtotal: getSubtotal(activeTabId),
+                discount: invoice.discountAmount,
+                tip: getTipAmount(activeTabId),
+                promotion: null,
+                final_amount: getInvoiceTotal(activeTabId),
+                payment_method: paymentMethod,
+                status: "pending", // pending — not yet paid
+                photos: [],
+                created_by: useAuthStore.getState().user?.id,
+                // Pass the backdated checkin timestamp when this is a "direct
+                // pay from confirmed" case (booking was "confirmed", not yet
+                // checked in). The server uses it for the CHECKIN activity's
+                // created_at so the history shows the checkin at the booking's
+                // date_time (service registration time). Null/omitted → now().
+                checkin_at: checkinAt || undefined,
+              }),
+            });
+            const json = await res.json();
+            if (json.ok && json.data?.id) {
+              updateTabMeta(activeTabId, { invoiceId: json.data.id });
+            }
           }
         } catch {
           // Best-effort — continue to review even if invoice creation fails.
@@ -918,12 +999,31 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         }
       }
 
-      // Product-only walk-in / new tabs have no real customer yet (a customer
-      // is normally created lazily when a SERVICE is added, because services
-      // require a booking + customer). For product-only purchases we still
-      // need a real customer_id for the invoice, so create one now — mirroring
-      // the service-selector's walk-in customer creation.
-      if (!hasServices && meta && (meta.type === "walkin" || meta.type === "new")) {
+      // Ensure realCustomerId is a VALID UUID before building the invoice
+      // payload. Walk-in / new tabs use a SYNTHETIC tab id ("walkin-<uuid>") as
+      // the activeCustomer.customerId — that's NOT a real customer and NOT a
+      // valid UUID, so it can't be sent as `customer_id` (Postgres rejects it
+      // with "invalid input syntax for type uuid"). A real customer is
+      // normally created lazily when a SERVICE is added (createBookingForTab
+      // creates the customer + sets meta.customerId). But several edge cases
+      // leave meta.customerId unset with a synthetic activeCustomer.customerId:
+      //   - Product-only walk-in tabs (no service → no booking → no customer).
+      //   - Walk-in tabs where a service was added WITHOUT a staff (no booking
+      //     created → no customer) — e.g. when the cashier lacks assign_staff
+      //     permission, or the booking creation failed.
+      // In ALL these cases, create a real customer NOW so the invoice has a
+      // valid customer_id. This runs whenever realCustomerId is missing or
+      // synthetic (starts with "walkin-"), regardless of whether the invoice
+      // has services. Tabs that already have a real customer (booking tabs,
+      // walk-in tabs linked via search/Thêm-khách-mới) keep their real UUID —
+      // the condition is false → no duplicate customer is created.
+      const isSyntheticCustomerId =
+        !realCustomerId || realCustomerId.startsWith("walkin-");
+      if (
+        isSyntheticCustomerId &&
+        meta &&
+        (meta.type === "walkin" || meta.type === "new")
+      ) {
         const isWalkin = meta.type === "walkin";
         const custRes = await fetch("/api/supabase/customers", {
           method: "POST",
@@ -1501,11 +1601,15 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                   <p className="font-medium text-gray-900 text-xs leading-tight">{item.name}</p>
                   {editableDisplay ? (
                     <div className="flex items-center gap-1 leading-tight">
-                      {/* Small square button — clicking opens a per-item staff
-                          picker. Visible for ALL item types (service/product/
-                          package). Pre-fills with the current staff's id (if
+                      {/* "Xếp nhân viên" button — clicking opens a per-item
+                          staff picker dialog. Visible for ALL item types
+                          (service/product/package). The button shows the text
+                          "Xếp nhân viên" + a small UserCog icon (no longer an
+                          icon-only square) so the cashier immediately sees its
+                          purpose. Pre-fills with the current staff's id (if
                           any). OK is required (disabled until a staff is
-                          picked). */}
+                          picked). Compact: h-5, text-[10px], tight padding so
+                          it fits inline next to the "Nv: <name>" label. */}
                       <button
                         type="button"
                         onClick={() => {
@@ -1522,12 +1626,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                         }}
                         title={
                           item.staffName
-                            ? `Đổi nhân viên (hiện: ${item.staffName})`
-                            : "Chọn nhân viên cho mặt hàng này"
+                            ? `Xếp nhân viên (hiện: ${item.staffName})`
+                            : "Xếp nhân viên cho mặt hàng này"
                         }
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-yellow-400 bg-yellow-400 text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                        className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
                       >
-                        <UserCog className="h-3 w-3" />
+                        <UserCog className="h-2.5 w-2.5" />
+                        Xếp nhân viên
                       </button>
                       <p className="text-[11px] text-yellow-600">
                         {item.staffName ? `Nv: ${item.staffName}` : "Nv: (chưa có)"}
@@ -1542,10 +1647,54 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                   )}
                 </div>
                 <div className="flex items-center justify-center">
-                  {/* Quantity: +/- buttons removed per request; value 14px → 13px. */}
-                  <span className="text-center text-[13px] text-gray-700">
-                    {item.quantity}
-                  </span>
+                  {/* Quantity: +/- controls for ALL item types (service, product,
+                      package). When editable, the cashier can increase or
+                      decrease the quantity; the store recomputes the line's
+                      `total` (price*qty − discount) AND the invoice subtotal /
+                      total live on every change. Minimum is 1 — at 1 the
+                      minus button is disabled (use the trash button to remove
+                      the line entirely). When NOT editable (paid / cancelled /
+                      review mode), the quantity is shown read-only. */}
+                  {editableDisplay ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateInvoiceItemQuantity(
+                            activeTabId!,
+                            item.id,
+                            Math.max(1, item.quantity - 1)
+                          )
+                        }
+                        disabled={item.quantity <= 1}
+                        title="Giảm số lượng"
+                        className="flex h-5 w-5 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="min-w-[20px] text-center text-[13px] font-medium text-gray-700">
+                        {item.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateInvoiceItemQuantity(
+                            activeTabId!,
+                            item.id,
+                            item.quantity + 1
+                          )
+                        }
+                        title="Tăng số lượng"
+                        className="flex h-5 w-5 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-center text-[13px] text-gray-700">
+                      {item.quantity}
+                    </span>
+                  )}
                 </div>
                 <div className="text-center text-[13px] text-gray-600">
                   {item.price.toLocaleString("vi-VN")}
@@ -1894,48 +2043,15 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               </span>
             )}
           </div>
-          {/* Phương thức thanh toán — shown in review mode (after pressing
-              "Thanh toán") and for paid orders. Lets the cashier pick
-              "Tiền mặt" (cash) or "Chuyển khoản" (transfer). In review mode
-              the choice is editable; for paid orders it's read-only (shows
-              what was recorded). */}
-          {(reviewMode || isPaid) && (
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Phương thức thanh toán</span>
-              {reviewMode ? (
-                <div className="flex items-center gap-1 rounded-lg border border-gray-300 bg-gray-100 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod("cash")}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                      paymentMethod === "cash"
-                        ? "bg-white text-emerald-700 shadow-sm"
-                        : "text-gray-500 hover:text-gray-700"
-                    }`}
-                  >
-                    Tiền mặt
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod("transfer")}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                      paymentMethod === "transfer"
-                        ? "bg-white text-emerald-700 shadow-sm"
-                        : "text-gray-500 hover:text-gray-700"
-                    }`}
-                  >
-                    Chuyển khoản
-                  </button>
-                </div>
-              ) : (
-                <span className="font-medium text-gray-900">
-                  {savedInvoice?.payment_method === "transfer"
-                    ? "Chuyển khoản"
-                    : "Tiền mặt"}
-                </span>
-              )}
-            </div>
-          )}
+          {/* NOTE: The "Phương thức thanh toán" row that used to appear here
+              (in review mode + for paid orders) was REMOVED per request — the
+              payment confirmation dialog now handles method selection (the
+              cashier picks Tiền mặt / Chuyển khoản in the dialog before the
+              review state is entered), so this inline toggle was redundant.
+              The `paymentMethod` state is still set by the dialog and used in
+              the checkout payload; only the inline UI display is gone. For
+              paid orders, the saved payment_method remains on the server
+              (just no longer shown in this summary). */}
           <div className="flex justify-between text-sm font-medium">
             <span>Tổng tiền</span>
             <span>{displayTotal.toLocaleString("vi-VN")}</span>
@@ -1959,6 +2075,20 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
             <X className="h-4 w-4" />
             Đơn hàng đã hủy
+          </div>
+        ) : checkoutMutation.isPending ? (
+          // While the checkout API call is in flight (after pressing "Hoàn
+          // tất"), the [Hủy][Hoàn tất] review buttons are HIDDEN and replaced
+          // by a non-interactive "Đang xử lý thanh toán..." indicator. This
+          // guarantees the cashier can't click Hủy/Hoàn tất again while the
+          // order is being finalized. Once the API resolves: on success →
+          // isPaid flips true → this branch is skipped → the paid banner
+          // (below) shows; on error → isPending false → reviewMode is still
+          // true → the [Hủy][Hoàn tất] buttons reappear so the cashier can
+          // retry or cancel.
+          <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Đang xử lý thanh toán...
           </div>
         ) : reviewMode ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-emerald-50 px-4 py-2">
@@ -2018,6 +2148,29 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               {cancelBookingMutation.isPending ? "Đang hủy..." : "Hủy thanh toán"}
             </button>
             )}
+            {/* "Xếp nhân viên" — bulk-assign ONE staff to EVERY line item in the
+                current invoice (services + products + packages). Opens a dialog
+                where the cashier picks a staff; on confirm, all items get that
+                staff's name. Disabled when the invoice is empty (no items to
+                assign). Behaves like the other action buttons: only shown for
+                editable unpaid orders (the parent `!isPaid && !reviewMode`
+                guard already hides it for paid/review/cancelled states). */}
+            <button
+              onClick={() => {
+                setAssignAllStaffPickStaffId("");
+                setAssignAllStaffOpen(true);
+              }}
+              disabled={!invoice || invoice.items.length === 0}
+              title={
+                !invoice || invoice.items.length === 0
+                  ? "Đơn hàng chưa có mặt hàng nào để xếp nhân viên"
+                  : "Xếp một nhân viên cho toàn bộ đơn hàng"
+              }
+              className="flex items-center gap-2 rounded-lg border border-cyan-200 px-4 py-1 text-sm font-medium text-cyan-600 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <UserCog className="h-4 w-4" />
+              Xếp nhân viên
+            </button>
             <button className="flex items-center gap-2 rounded-lg border border-yellow-200 px-4 py-1 text-sm font-medium text-yellow-600 hover:bg-yellow-50">
               <Smile className="h-4 w-4" />
               Mời đánh giá
@@ -2027,7 +2180,23 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               In hóa đơn
             </button>
             <button
-              onClick={() => handleThanhToan()}
+              onClick={() => {
+                // Open the payment confirmation dialog FIRST. The actual
+                // `handleThanhToan()` (which enters the "chờ bấm Hoàn tất"
+                // review state) only runs when the cashier clicks "Thanh toán"
+                // INSIDE that dialog. Initialize the payment rows with ONE row
+                // whose method = the current component-level paymentMethod and
+                // whose amount = the full invoice total (so the cashier can
+                // just confirm, or split into 2 rows via the [+] button — in
+                // which case row 2 starts EMPTY and the cashier types both
+                // amounts manually, no auto-split).
+                const total = activeTabId ? getInvoiceTotal(activeTabId) : 0;
+                setPayConfirmRows([
+                  { method: paymentMethod, amount: String(total) },
+                ]);
+                setPayConfirmNote("");
+                setPayConfirmOpen(true);
+              }}
               disabled={
                 thanhToanPending ||
                 checkoutMutation.isPending ||
@@ -2091,7 +2260,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         </Dialog>
       )}
 
-      {/* Per-item "Đổi nhân viên" dialog — opened by the small square button
+      {/* Per-item "Xếp nhân viên" dialog — opened by the small square button
           next to each line item's staff name. Updates ONLY the one item
           identified by `changeStaffItemId`. REQUIRED — OK disabled until a
           staff is picked (no "Không chọn" option). On confirm, runs a staff
@@ -2110,11 +2279,11 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       >
         <DialogContent className="max-w-[380px] sm:max-w-[380px] p-4 gap-3">
           <DialogHeader className="space-y-0">
-            <DialogTitle className="text-sm">Đổi nhân viên</DialogTitle>
+            <DialogTitle className="text-sm">Xếp nhân viên</DialogTitle>
           </DialogHeader>
           <div className="space-y-1">
             <p className="text-[11px] text-gray-500">
-              Chọn nhân viên cho mặt hàng này. Bắt buộc.
+              Xếp nhân viên cho mặt hàng này. Bắt buộc.
             </p>
             <Select
               value={changeStaffPickStaffId}
@@ -2313,6 +2482,377 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               }}
             >
               {changeStaffChecking ? "Đang kiểm tra..." : "Xác nhận"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk "Xếp nhân viên" dialog — opened by the action-bar button of the
+          same name. The cashier picks ONE staff; on confirm, that staff is
+          assigned to EVERY line item in the current invoice (services +
+          products + packages). This is a BULK operation: it does NOT run the
+          per-item booking-conflict check (the cashier is explicitly choosing
+          to assign the whole order to one staff). OK is disabled until a staff
+          is picked. Cancel closes without changing anything. Uses the same
+          `eligibleBranchStaff` list as the per-item dialog so the options are
+          consistent (only stylist-title staff for the selected branch). */}
+      <Dialog
+        open={assignAllStaffOpen}
+        onOpenChange={(v) => {
+          if (!v) {
+            setAssignAllStaffOpen(false);
+            setAssignAllStaffPickStaffId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-[400px] sm:max-w-[400px] p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm">Xếp nhân viên cho toàn bộ đơn</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1">
+            <p className="text-[11px] text-gray-500">
+              Chọn một nhân viên — toàn bộ dịch vụ, sản phẩm và gói dịch vụ
+              trong đơn sẽ do nhân viên này thực hiện. Bắt buộc.
+            </p>
+            <Select
+              value={assignAllStaffPickStaffId}
+              onValueChange={(v) => setAssignAllStaffPickStaffId(v)}
+            >
+              <SelectTrigger className="w-full h-8 text-xs">
+                <SelectValue placeholder="Chọn nhân viên" />
+              </SelectTrigger>
+              <SelectContent>
+                {(eligibleBranchStaff || []).length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-500">
+                    Không có nhân viên ở cửa hàng này
+                  </div>
+                ) : (
+                  (eligibleBranchStaff || []).map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {!assignAllStaffPickStaffId && (
+              <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+            )}
+            {/* Summary of how many items will be updated, so the cashier knows
+                the scope of the bulk action before confirming. */}
+            {invoice && invoice.items.length > 0 && (
+              <p className="mt-1 text-[11px] text-gray-400">
+                Sẽ áp dụng cho {invoice.items.length} mặt hàng trong đơn.
+              </p>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setAssignAllStaffOpen(false);
+                setAssignAllStaffPickStaffId("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              size="sm"
+              disabled={!assignAllStaffPickStaffId || !activeTabId || !invoice || invoice.items.length === 0}
+              title={!assignAllStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              onClick={() => {
+                if (!activeTabId || !invoice || invoice.items.length === 0) return;
+                const staffName =
+                  (eligibleBranchStaff || []).find(
+                    (s) => s.id === assignAllStaffPickStaffId
+                  )?.name || "";
+                if (!staffName) return; // safety — OK is disabled in this case
+                // Bulk-assign the picked staff to EVERY line item in the invoice.
+                setAllInvoiceItemsStaff(activeTabId, staffName);
+                setAssignAllStaffOpen(false);
+                setAssignAllStaffPickStaffId("");
+              }}
+              className="bg-cyan-600 hover:bg-cyan-700 text-white"
+            >
+              Xác nhận
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment confirmation dialog — opened by the action-bar "Thanh toán"
+          button. Two-step payment flow: the first click opens this dialog
+          (instead of immediately entering review mode); the cashier reviews
+          the amount due, picks a payment method, can add a note, and only
+          when they click "Thanh toán" INSIDE this dialog does the real
+          `handleThanhToan()` run (auto-checkin → create pending invoice →
+          enter "chờ bấm Hoàn tất" review state). "Hủy" closes the dialog
+          with no side effects. Compact layout: "Khách cần thanh toán" amount
+          + one or more payment rows (Phương thức + Số tiền on the same line)
+          + Ghi chú + Hủy/Thanh toán buttons. The "Mã hóa đơn" field was
+          removed per request (the system auto-generates the real code). */}
+      <Dialog
+        open={payConfirmOpen}
+        onOpenChange={(v) => {
+          if (!v) {
+            setPayConfirmOpen(false);
+            setPayConfirmRows([{ method: "cash", amount: "" }]);
+            setPayConfirmNote("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-[440px] sm:max-w-[440px] p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm font-semibold text-gray-900">
+              Thanh toán
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2.5">
+            {/* Amount due — the invoice total (items − discount + tip). Read-only
+                display; reflects live changes if the cashier edited quantities
+                before opening the dialog. Compact: small padding, smaller
+                amount font so the dialog stays tight. */}
+            <div className="flex items-center justify-between rounded-md bg-gray-50 px-2.5 py-1.5">
+              <span className="text-xs text-gray-600">Khách cần thanh toán:</span>
+              <span className="text-lg font-bold text-gray-900">
+                {activeTabId
+                  ? getInvoiceTotal(activeTabId).toLocaleString("vi-VN")
+                  : "0"}
+                <span className="ml-0.5 text-xs font-normal text-gray-500">đ</span>
+              </span>
+            </div>
+            {/* Payment rows — each row has Phương thức + Số tiền on the SAME
+                line, plus a small square [+] button (on the last row, when
+                fewer than 2 rows exist) to add a second payment row, or a [×]
+                button (on row 2) to remove it. Multi-row logic: because there
+                are only 2 payment methods (cash / transfer), row 2's method is
+                always the OPPOSITE of row 1's — so when the cashier adds a 2nd
+                row it auto-locks to the other method, and changing row 1's
+                method flips row 2's to match.
+
+                Amount entry: BOTH rows are EDITABLE — the cashier types each
+                amount manually. Row 1 starts pre-filled with the full invoice
+                total (so a single-method payment needs no editing); when the
+                cashier clicks [+] to add row 2, row 2 starts EMPTY (no auto-
+                split) and they type both amounts themselves. A small hint
+                shows the sum of the two entered amounts vs the amount due so
+                the cashier can see if they need to adjust. */}
+            {payConfirmRows.map((row, idx) => {
+              const isLast = idx === payConfirmRows.length - 1;
+              const canAdd = payConfirmRows.length < 2 && isLast;
+              const canRemove = payConfirmRows.length === 2 && idx === 1;
+              // Row 2's method is the opposite of row 1's. Row 1 shows both
+              // options in its Select; row 2's Select is DISABLED (locked) —
+              // the cashier changes it by changing row 1.
+              const oppositeMethod: "cash" | "transfer" =
+                payConfirmRows[0].method === "cash" ? "transfer" : "cash";
+              return (
+                <div key={idx} className="space-y-1">
+                  {idx === 0 && (
+                    <Label className="text-[11px] font-medium text-gray-600">
+                      Phương thức &amp; Số tiền
+                    </Label>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    {/* Phương thức — row 1 editable, row 2 locked to the
+                        opposite method. */}
+                    <Select
+                      value={idx === 0 ? row.method : oppositeMethod}
+                      disabled={idx === 1}
+                      onValueChange={(v) => {
+                        if (idx !== 0) return; // row 2 is locked
+                        const newMethod = v as "cash" | "transfer";
+                        setPayConfirmRows((prev) =>
+                          prev.map((r, i) =>
+                            i === 0
+                              ? { ...r, method: newMethod }
+                              : i === 1
+                                ? { ...r, method: newMethod === "cash" ? "transfer" : "cash" }
+                                : r
+                          )
+                        );
+                      }}
+                    >
+                      <SelectTrigger className="h-8 flex-1 text-xs">
+                        <SelectValue placeholder="Chọn phương thức" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {/* Row 1 shows both options. Row 2 shows ONLY the
+                            locked opposite method (the Select is disabled
+                            anyway, but this keeps the dropdown honest). */}
+                        {idx === 0 ? (
+                          <>
+                            <SelectItem value="cash">Tiền mặt</SelectItem>
+                            <SelectItem value="transfer">Chuyển khoản</SelectItem>
+                          </>
+                        ) : (
+                          <SelectItem value={oppositeMethod}>
+                            {oppositeMethod === "cash" ? "Tiền mặt" : "Chuyển khoản"}
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                    {/* Số tiền — BOTH rows editable. The cashier types each
+                        amount manually (no auto-fill on row 2). Digits only;
+                        the value is stored as a raw integer string. */}
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      value={row.amount}
+                      onChange={(e) => {
+                        // Allow only digits; strip any non-numeric chars.
+                        const digits = e.target.value.replace(/[^\d]/g, "");
+                        setPayConfirmRows((prev) =>
+                          prev.map((r, i) =>
+                            i === idx ? { ...r, amount: digits } : r
+                          )
+                        );
+                      }}
+                      placeholder="0"
+                      className="h-8 flex-1 text-xs"
+                    />
+                    {/* [+] add-row button — only on the last row when fewer
+                        than 2 rows exist. Adds a 2nd row locked to the
+                        opposite method, with amount EMPTY (the cashier types
+                        both amounts themselves — no auto-split). */}
+                    {canAdd && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayConfirmRows((prev) => {
+                            if (prev.length >= 2) return prev;
+                            const row1Method = prev[0].method;
+                            const row2Method: "cash" | "transfer" =
+                              row1Method === "cash" ? "transfer" : "cash";
+                            // Add row 2 with an EMPTY amount — the cashier
+                            // types both amounts themselves (no auto-split).
+                            return [
+                              ...prev,
+                              { method: row2Method, amount: "" },
+                            ];
+                          });
+                        }}
+                        title="Thêm dòng thanh toán"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-emerald-300 bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                      >
+                      <Plus className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {/* [×] remove-row button — only on row 2. Drops the 2nd
+                        row and leaves row 1 as the sole payment. Row 1's
+                        amount is left AS-IS (the cashier may have already
+                        edited it; we don't force-reset to the full total). */}
+                    {canRemove && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPayConfirmRows((prev) => {
+                            if (prev.length < 2) return prev;
+                            return [prev[0]];
+                          });
+                        }}
+                        title="Xóa dòng thanh toán này"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                      >
+                      <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {/* Split summary — when 2 rows exist, show the sum of the two
+                ENTERED amounts vs the amount due so the cashier can see if
+                they need to adjust. Helps catch typos before confirming.
+                Both amounts are user-entered, so the sum may be <, =, or > the
+                total — the hint shows which. */}
+            {payConfirmRows.length === 2 && activeTabId && (() => {
+              const total = getInvoiceTotal(activeTabId);
+              const row1 = Number(payConfirmRows[0].amount || "0") || 0;
+              const row2 = Number(payConfirmRows[1].amount || "0") || 0;
+              const sum = row1 + row2;
+              const diff = sum - total;
+              if (diff === 0) {
+                return (
+                  <p className="text-[11px] text-emerald-600 leading-tight">
+                    Tổng 2 dòng = {sum.toLocaleString("vi-VN")}đ (đủ tiền khách cần trả).
+                  </p>
+                );
+              }
+              return (
+                <p className="text-[11px] text-amber-600 leading-tight">
+                  Tổng 2 dòng = {sum.toLocaleString("vi-VN")}đ
+                  {diff > 0
+                    ? ` (dư ${diff.toLocaleString("vi-VN")}đ so với khách cần trả).`
+                    : ` (thiếu ${Math.abs(diff).toLocaleString("vi-VN")}đ so với khách cần trả).`}
+                </p>
+              );
+            })()}
+            {/* Notes — optional, free-text. Currently not persisted (the
+                review-mode checkout doesn't read it), but kept so the cashier
+                has a place to jot a quick note. Compact: 2 rows. */}
+            <div className="space-y-1">
+              <Label className="text-[11px] font-medium text-gray-600">
+                Ghi chú
+              </Label>
+              <textarea
+                value={payConfirmNote}
+                onChange={(e) => setPayConfirmNote(e.target.value)}
+                placeholder="Ghi chú"
+                rows={2}
+                className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-xs text-gray-700 placeholder:text-gray-400 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setPayConfirmOpen(false);
+                setPayConfirmRows([{ method: "cash", amount: "" }]);
+                setPayConfirmNote("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              size="sm"
+              disabled={
+                thanhToanPending ||
+                checkoutMutation.isPending ||
+                !activeTabId ||
+                !invoice ||
+                invoice.items.length === 0
+              }
+              onClick={async () => {
+                // Commit the dialog's payment-method choice to the
+                // component-level state so the review-mode "Phương thức"
+                // toggle and the eventual checkout payload use it. When 2
+                // payment rows exist, the primary method = row 1's method
+                // (row 2 is always the opposite — it's a secondary split, not
+                // the primary method). When only 1 row exists, that's the
+                // method. This keeps the existing single-method checkout
+                // payload working; the 2-row split is a UI-level affordance
+                // for the cashier to record both cash + transfer amounts.
+                setPaymentMethod(payConfirmRows[0]?.method || "cash");
+                // Close the dialog FIRST so the UI switches to review mode
+                // cleanly, then run the actual payment flow (auto-checkin →
+                // create pending invoice → enter "chờ bấm Hoàn tất").
+                setPayConfirmOpen(false);
+                setPayConfirmRows([{ method: "cash", amount: "" }]);
+                setPayConfirmNote("");
+                await handleThanhToan();
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {thanhToanPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              {thanhToanPending ? "Đang xử lý..." : "Thanh toán"}
             </Button>
           </DialogFooter>
         </DialogContent>

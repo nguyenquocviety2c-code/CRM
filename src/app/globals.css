@@ -221,6 +221,28 @@ button.h-8.w-8 { height: 26px !important; width: 26px !important; min-height: 26
 textarea { min-height: 56px !important; }
 
 /*
+ * Cashier "add item" dialogs (Thêm dịch vụ / Thêm sản phẩm / Thêm gói dịch vụ)
+ * — equal-height controls. The dialogs add the `compact-add-dialog` class to
+ * their DialogContent. Inside it, EVERY input / select trigger / button /
+ * popover-trigger (the TimePicker's input) is forced to the SAME height
+ * (32px) with !important so the controls look tidy. This overrides the
+ * per-slot heights set above ([data-slot="select-trigger"]=26px,
+ * [data-slot="input"]=28px) which were causing a 6px spread. 32px is chosen
+ * (not 26/28) so the controls are still comfortable to tap and the footer
+ * buttons have enough room for their text.
+ */
+.compact-add-dialog [data-slot="select-trigger"],
+.compact-add-dialog [data-slot="input"],
+.compact-add-dialog [data-slot="popover-trigger"] input,
+.compact-add-dialog button.h-8,
+.compact-add-dialog button[data-slot="button"] {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+}
+
+/*
  * Cashier tables (Danh sách đơn hàng + Lịch sử hóa đơn) — reduce ALL text
  * inside the table so the rows are more compact and more rows fit on screen.
  * Scoped to .cashier-table so only these two tables are affected.

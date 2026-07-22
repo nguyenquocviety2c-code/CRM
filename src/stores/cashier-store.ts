@@ -182,6 +182,18 @@ interface CashierState {
     itemId: string,
     staffName: string
   ) => void;
+  /**
+   * Set the SAME staff name on EVERY line item in the given invoice (services,
+   * products, AND packages). Used by the cashier's "Xếp nhân viên" action-bar
+   * button to bulk-assign one staff to perform the whole order. Pass "" to
+   * clear all staff assignments. Only updates staffName — does NOT recompute
+   * totals (staff doesn't affect pricing) and does NOT merge items (each line
+   * keeps its own `id` so they remain visually distinct).
+   */
+  setAllInvoiceItemsStaff: (
+    customerId: string,
+    staffName: string
+  ) => void;
   setVoucherCode: (customerId: string, code: string) => void;
   setDiscountAmount: (customerId: string, amount: number) => void;
   setTipAmount: (customerId: string, amount: number) => void;
@@ -421,6 +433,32 @@ export const useCashierStore = create<CashierState>()(
               item.id === itemId
                 ? { ...item, staffName: staffName || undefined }
                 : item
+            ),
+          },
+        },
+      };
+    });
+  },
+
+  setAllInvoiceItemsStaff: (customerId, staffName) => {
+    set((state) => {
+      const invoice = state.invoices[customerId];
+      if (!invoice) return state;
+      const targetName = staffName || undefined;
+      return {
+        invoices: {
+          ...state.invoices,
+          [customerId]: {
+            ...invoice,
+            // Apply the SAME staffName to every line item. Each item keeps its
+            // own `id` (no merge) so they remain visually distinct lines —
+            // price/qty/discount/total are untouched (staff doesn't affect
+            // pricing). Skipping items already equal to the target is a
+            // micro-optimization that also avoids needless re-renders.
+            items: invoice.items.map((item) =>
+              (item.staffName || "") === (targetName || "")
+                ? item
+                : { ...item, staffName: targetName }
             ),
           },
         },

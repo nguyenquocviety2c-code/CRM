@@ -303,6 +303,14 @@ export async function POST(request: NextRequest) {
       note,
       created_by,
       booking_id,
+      // Optional explicit timestamp for the "CHECKIN" activity. Used when the
+      // cashier pays a "Đã xác nhận" (confirmed, NOT yet checked-in) booking
+      // directly: the checkin is backdated to the booking's date_time (the
+      // service registration time) so the activity history shows the checkin
+      // at the scheduled appointment time, not at the moment the cashier
+      // clicked "Thanh toán". When omitted (or invalid), the CHECKIN activity
+      // falls back to the default `now()`.
+      checkin_at,
     } = body;
 
     if (!customer_id) {
@@ -437,8 +445,15 @@ export async function POST(request: NextRequest) {
         created_by: createActorId,
       });
       // For the checkin flow, ALSO log a "Checkin" row (the staff action).
+      // When `checkin_at` is provided (a valid ISO timestamp), the activity's
+      // `created_at` is set to that value instead of the default `now()`. This
+      // is used when the cashier pays a "Đã xác nhận" booking directly: the
+      // checkin is backdated to the booking's date_time (the service
+      // registration time) so the history shows the checkin at the scheduled
+      // appointment time. Validate the timestamp before inserting — if it's
+      // not a parseable date, fall back to the default (omit the field).
       if (isCheckinFlow) {
-        await supabaseAdmin.from("invoice_activities").insert({
+        const checkinInsert: Record<string, unknown> = {
           invoice_id: data.id,
           invoice_code: finalCode,
           action: "CHECKIN",
@@ -446,7 +461,14 @@ export async function POST(request: NextRequest) {
           value: String(finalAmount),
           branch_id,
           created_by: actorStaffId,
-        });
+        };
+        if (typeof checkin_at === "string" && checkin_at.trim()) {
+          const parsed = new Date(checkin_at);
+          if (!isNaN(parsed.getTime())) {
+            checkinInsert.created_at = parsed.toISOString();
+          }
+        }
+        await supabaseAdmin.from("invoice_activities").insert(checkinInsert);
       }
     } catch {
       // Activity logging is best-effort; don't fail the invoice creation.
