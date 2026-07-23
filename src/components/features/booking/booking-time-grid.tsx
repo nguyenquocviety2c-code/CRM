@@ -32,6 +32,10 @@ interface BookingTimeGridProps {
   onBookingClick?: (booking: Booking) => void;
   onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
   onEdit?: (booking: Booking) => void;
+  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+      no staff assigned. Called by the "Xếp nhân viên" button on segment cards
+      + in the hover popover. */
+  onAssignStaff?: (booking: Booking) => void;
   onDelete?: (bookingId: string) => void;
   /**
    * Open the invoice dialog for a booking. Called when a PAID booking card
@@ -122,6 +126,7 @@ export function BookingTimeGrid({
   onBookingClick,
   onStatusChange,
   onEdit,
+  onAssignStaff,
   onDelete,
   onShowInvoice,
   onSlotClick,
@@ -195,6 +200,7 @@ export function BookingTimeGrid({
       onStatusChange={(status) => onStatusChange?.(segment.booking.id, status)}
       onEdit={() => onEdit?.(segment.booking)}
       onDelete={() => onDelete?.(segment.booking.id)}
+      onAssignStaff={() => onAssignStaff?.(segment.booking)}
     />
   );
 
@@ -468,6 +474,28 @@ function TimelineColumn({
   );
 }
 
+/** The "Xếp nhân viên" button shown on segment cards whose service has NO
+ *  staff assigned (staffName === "—"). Renders as a small blue pill below the
+ *  service name. stopPropagation on click so it doesn't trigger the parent
+ *  card's onClick (which would open the edit/invoice dialog); instead it
+ *  calls onAssignStaff to open the booking edit dialog focused on staff
+ *  assignment. (Same component as AssignStaffButton in booking-staff-view.) */
+function AssignStaffButtonTG({ onAssignStaff }: { onAssignStaff?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onAssignStaff?.();
+      }}
+      className="mt-0.5 inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+      title="Xếp nhân viên cho dịch vụ này"
+    >
+      Xếp nhân viên
+    </button>
+  );
+}
+
 /** A single service-segment card. The face shows THIS segment's service +
  *  duration + staff + time range; the hover popover shows the FULL booking
  *  (all services, status, edit/delete) for context. A multi-service booking
@@ -479,6 +507,7 @@ function SegmentCard({
   onStatusChange,
   onEdit,
   onDelete,
+  onAssignStaff,
   fullWidth = false,
 }: {
   segment: ServiceSegment;
@@ -486,6 +515,10 @@ function SegmentCard({
   onStatusChange: (status: BookingStatusType) => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** Open the booking edit dialog to assign a staff to this segment's
+      service(s). Called by the "Xếp nhân viên" button shown ONLY when this
+      segment has no staff assigned (staffName === "—"). */
+  onAssignStaff?: () => void;
   fullWidth?: boolean;
 }) {
   const booking = segment.booking;
@@ -587,10 +620,21 @@ function SegmentCard({
         setHovered(false);
       }}
     >
-      {/* Card (clickable → opens edit or invoice depending on paid status). */}
-      <button
-        type="button"
+      {/* Card (clickable → opens edit or invoice depending on paid status).
+          Rendered as a <div role="button"> instead of <button> so it can
+          contain a nested "Xếp nhân viên" button for unassigned-staff segments
+          (nested <button> is invalid HTML). Keyboard accessibility is
+          preserved via role + tabIndex + onKeyDown. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
         className={`group flex h-full w-full ${fullWidth ? "" : "w-[220px] shrink-0"} cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${cardBg}`}
       >
         {/* Time range for THIS segment's slice + date + multi-service badge.
@@ -638,18 +682,32 @@ function SegmentCard({
                 </div>
               ))}
             </div>
-            <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {segStaffName}</div>
+            {segStaffName === "—" ? (
+              <AssignStaffButtonTG onAssignStaff={onAssignStaff} />
+            ) : (
+              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {segStaffName}</div>
+            )}
           </div>
         ) : (
-          <div className="mt-0.5 min-h-0 flex-1 overflow-hidden flex items-center gap-1 text-xs">
-            <span className="truncate text-gray-700">
-              {segment.services[0]?.service?.name || "Dịch vụ"}
-              {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
-            </span>
-            <span className="shrink-0 font-medium text-sky-600">NV: {segStaffName}</span>
-          </div>
+          segStaffName === "—" ? (
+            <div className="mt-0.5 min-h-0 flex-1 overflow-hidden text-xs">
+              <div className="truncate text-gray-700">
+                {segment.services[0]?.service?.name || "Dịch vụ"}
+                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+              </div>
+              <AssignStaffButtonTG onAssignStaff={onAssignStaff} />
+            </div>
+          ) : (
+            <div className="mt-0.5 min-h-0 flex-1 overflow-hidden flex items-center gap-1 text-xs">
+              <span className="truncate text-gray-700">
+                {segment.services[0]?.service?.name || "Dịch vụ"}
+                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+              </span>
+              <span className="shrink-0 font-medium text-sky-600">NV: {segStaffName}</span>
+            </div>
+          )
         )}
-      </button>
+      </div>
 
       {/* Hover popover — uses the SAME BookingHoverDetails component as the
           View nhân viên (staff-view) so the hover experience is identical
@@ -669,6 +727,7 @@ function SegmentCard({
             onDelete={onDelete}
             canCancelPayment={canCancelPayment}
             onOpenInvoice={onClick}
+            onAssignStaff={onAssignStaff}
           />
         </div>
       )}
@@ -1404,6 +1463,7 @@ function CustomerDayRangeGrid({
                               canViewCustomerPhone={canViewCustomerPhone}
                               onClick={() => handleChipClick(b)}
                               onEdit={onEdit}
+                              onAssignStaff={onAssignStaff}
                               onDelete={onDelete}
                             />
                           </div>
@@ -1452,12 +1512,16 @@ function CustomerGridChip({
   canViewCustomerPhone,
   onClick,
   onEdit,
+  onAssignStaff,
   onDelete,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
   onClick: () => void;
   onEdit?: (booking: Booking) => void;
+  /** Open the dedicated "Xếp nhân viên" dialog (preferred over onEdit for the
+      assign-staff button in the popover). */
+  onAssignStaff?: (booking: Booking) => void;
   onDelete?: (bookingId: string) => void;
 }) {
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
@@ -1554,6 +1618,7 @@ function CustomerGridChip({
           onDelete={() => onDelete?.(booking.id)}
           canCancelPayment={canCancelPayment}
           onOpenInvoice={onClick}
+          onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
         />
       </HoverCardContent>
     </HoverCard>

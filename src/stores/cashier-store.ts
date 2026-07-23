@@ -69,6 +69,13 @@ export interface TabMeta {
   };
   // Real customer id (for "old", or after creating one for "new"/"walkin").
   customerId?: string;
+  // True when customerId points to the SYNTHETIC "Khách vãng lai" guest
+  // customer created automatically by createBookingForTab (not a real customer
+  // the cashier chose). When true, the walk-in tab's inline customer search
+  // stays visible so the cashier can link a REAL customer later (which PATCHes
+  // the booking's customer_id via handleSelectInlineResult). Flipped to false
+  // once a real customer is linked.
+  isGuestCustomer?: boolean;
   // Set to true once a booking has been created for this tab so subsequent
   // service adds don't create another booking.
   bookingCreated?: boolean;

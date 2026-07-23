@@ -48,6 +48,9 @@ interface BookingCustomerViewProps {
   onPageChange: (page: number) => void;
   onStatusChange: (bookingId: string, newStatus: BookingStatusType) => void;
   onEdit: (booking: Booking) => void;
+  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+      no staff assigned. Called by the "Xếp nhân viên" link in the list rows. */
+  onAssignStaff?: (booking: Booking) => void;
   onDelete: (bookingId: string) => void;
   /** Called after an invoice is successfully paid — typically transitions booking to checkout. */
   onInvoicePaid?: (bookingId: string) => void;
@@ -78,6 +81,7 @@ export function BookingCustomerView({
   onPageChange,
   onStatusChange,
   onEdit,
+  onAssignStaff,
   onDelete,
   onInvoicePaid,
   onSwitchToCalendar,
@@ -367,7 +371,28 @@ export function BookingCustomerView({
                                       {isMulti ? `${idx + 1}. ` : ""}{e.category}
                                     </div>
                                   )}
-                                  {e.staff && <div className="text-xs text-yellow-600">NV: {e.staff}</div>}
+                                  {e.staff ? (
+                                    <div className="text-xs text-yellow-600">NV: {e.staff}</div>
+                                  ) : (
+                                    /* When no staff is assigned to this service,
+                                       show a blue "Xếp nhân viên" link so the
+                                       cashier/staff can click it to open the
+                                       booking edit dialog and pick a staff. The
+                                       booking was created with a null staff_id
+                                       (cashier allowed optional staff) and shows
+                                       in the "Chưa xếp nhân viên" column in View
+                                       nhân viên; here in View khách hàng the
+                                       clickable link lets them assign a staff
+                                       directly from the customer list. */
+                                    <button
+                                      type="button"
+                                      onClick={() => (onAssignStaff || onEdit)(booking)}
+                                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                                      title="Xếp nhân viên cho dịch vụ này"
+                                    >
+                                      Xếp nhân viên
+                                    </button>
+                                  )}
                                 </div>
                               ));
                             })()

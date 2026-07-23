@@ -42,6 +42,11 @@ interface BookingStaffViewProps {
   onBookingClick: (booking: Booking) => void;
   onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
   onEdit?: (booking: Booking) => void;
+  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+      no staff assigned. Called by the "Xếp nhân viên" button on segment blocks
+      + in the hover popover. Distinct from onEdit (which opens the full
+      "Chỉnh sửa lịch hẹn" dialog). */
+  onAssignStaff?: (booking: Booking) => void;
   onDelete?: (bookingId: string) => void;
   /**
    * Open the invoice dialog for a booking. Called when a PAID booking block
@@ -120,6 +125,7 @@ export function BookingStaffView({
   onBookingClick,
   onStatusChange,
   onEdit,
+  onAssignStaff,
   onDelete,
   onShowInvoice,
   onSlotClick,
@@ -300,8 +306,14 @@ export function BookingStaffView({
       });
     }
 
+    // The "Chưa xếp nhân viên" (unassigned) column is placed FIRST (before the
+    // real staff columns) so it sits right after the "Giờ" column on the left,
+    // per the user's request. Previously it was appended at the end (rightmost)
+    // which made it easy to miss. Putting it first draws attention to bookings
+    // that still need a staff assignment — the cashier sees them immediately
+    // and can click "Xếp nhân viên" on each block to assign one.
     if (unassigned.length > 0) {
-      columns.push({ staff: null, segments: unassigned });
+      columns.unshift({ staff: null, segments: unassigned });
     }
     // Sort each column's segments by PRIORITY so that overlapping segments
     // stack with UNPAID bookings (pending/new/confirmed/checkin) ON TOP of
@@ -542,6 +554,8 @@ export function BookingStaffView({
           canViewCustomerPhone={canViewCustomerPhone}
           onSlotClick={onSlotClick}
           slotLocked={slotLocked}
+          onEdit={onEdit}
+          onAssignStaff={onAssignStaff}
         />
       )}
 
@@ -777,6 +791,7 @@ export function BookingStaffView({
                       onStatusChange={(status) => onStatusChange?.(seg.booking.id, status)}
                       onEdit={() => onEdit?.(seg.booking)}
                       onDelete={() => onDelete?.(seg.booking.id)}
+                      onAssignStaff={() => onAssignStaff?.(seg.booking)}
                     />
                   ))}
                 </div>
@@ -787,6 +802,28 @@ export function BookingStaffView({
       </div>
       )}
     </div>
+  );
+}
+
+/** The "Xếp nhân viên" button shown on segment blocks whose service has NO
+ *  staff assigned (staffName === "—"). Renders as a small blue pill below the
+ *  service name. stopPropagation on click so it doesn't trigger the parent
+ *  block's onClick (which would open the edit/invoice dialog); instead it
+ *  calls onAssignStaff to open the booking edit dialog focused on staff
+ *  assignment. */
+function AssignStaffButton({ onAssignStaff }: { onAssignStaff?: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onAssignStaff?.();
+      }}
+      className="mt-0.5 inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+      title="Xếp nhân viên cho dịch vụ này"
+    >
+      Xếp nhân viên
+    </button>
   );
 }
 
@@ -802,6 +839,7 @@ function SegmentBlock({
   onStatusChange,
   onEdit,
   onDelete,
+  onAssignStaff,
   pxPerHour = PX_PER_HOUR,
 }: {
   segment: ServiceSegment;
@@ -809,6 +847,12 @@ function SegmentBlock({
   onStatusChange: (status: BookingStatusType) => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** Open the booking edit dialog to assign a staff to this segment's
+      service(s). Called by the "Xếp nhân viên" button shown ONLY when this
+      segment has no staff assigned (staffName === "—"). Mirrors onEdit but is
+      a separate affordance so the user sees a clear "assign staff" CTA
+      directly on unassigned blocks. */
+  onAssignStaff?: () => void;
   /** Hour-band height (single-day resizable timeline). Defaults to PX_PER_HOUR. */
   pxPerHour?: number;
 }) {
@@ -951,11 +995,22 @@ function SegmentBlock({
         setHovered(false);
       }}
     >
-      {/* Block (clickable → opens edit or invoice depending on paid status) */}
-      <button
-        type="button"
+      {/* Block (clickable → opens edit or invoice depending on paid status).
+          Rendered as a <div role="button"> instead of <button> so it can
+          contain a nested "Xếp nhân viên" button for unassigned-staff segments
+          (nested <button> is invalid HTML). Keyboard accessibility is
+          preserved via role + tabIndex + onKeyDown. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onClick}
-        className={`absolute inset-0 overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
       >
         {/* Time range for THIS service's slice + date + multi-service badge */}
         <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
@@ -1040,18 +1095,32 @@ function SegmentBlock({
                 </div>
               ))}
             </div>
-            <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {staffName}</div>
+            {staffName === "—" ? (
+              <AssignStaffButton onAssignStaff={onAssignStaff} />
+            ) : (
+              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {staffName}</div>
+            )}
           </>
         ) : (
-          <div className="mt-0.5 flex items-center gap-1 text-xs">
-            <span className="truncate text-gray-700">
-              {segment.services[0]?.service?.name || "Dịch vụ"}
-              {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
-            </span>
-            <span className="shrink-0 font-medium text-sky-600">NV: {staffName}</span>
-          </div>
+          staffName === "—" ? (
+            <div className="mt-0.5">
+              <div className="truncate text-xs text-gray-700">
+                {segment.services[0]?.service?.name || "Dịch vụ"}
+                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+              </div>
+              <AssignStaffButton onAssignStaff={onAssignStaff} />
+            </div>
+          ) : (
+            <div className="mt-0.5 flex items-center gap-1 text-xs">
+              <span className="truncate text-gray-700">
+                {segment.services[0]?.service?.name || "Dịch vụ"}
+                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+              </span>
+              <span className="shrink-0 font-medium text-sky-600">NV: {staffName}</span>
+            </div>
+          )
         )}
-      </button>
+      </div>
 
       {/* Hover popover — full booking + invoice details (services, products,
           promotion, tip, total) via BookingHoverDetails. Action buttons
@@ -1069,6 +1138,7 @@ function SegmentBlock({
             onDelete={onDelete}
             canCancelPayment={canCancelPayment}
             onOpenInvoice={onClick}
+            onAssignStaff={onAssignStaff}
           />
         </div>
       )}
@@ -1136,6 +1206,11 @@ interface DayRangeGridProps {
   canViewCustomerPhone: boolean;
   onSlotClick?: (slot: { date: string; time: string; staffId: string | null }) => void;
   slotLocked: boolean;
+  /** Open the booking edit dialog (passed down to BookingChip so the "Xếp nhân
+      viên" button in its hover popover can assign a staff). */
+  onEdit?: (b: Booking) => void;
+  /** Open the dedicated "Xếp nhân viên" dialog (passed down to BookingChip). */
+  onAssignStaff?: (b: Booking) => void;
 }
 
 /** Build the list of calendar days (inclusive) between `from` and `to`.
@@ -1199,6 +1274,8 @@ function DayRangeGrid({
   canViewCustomerPhone,
   onSlotClick,
   slotLocked,
+  onEdit,
+  onAssignStaff,
 }: DayRangeGridProps) {
   const days = useMemo(() => buildDaysInRange(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
   const hours = useMemo(() => {
@@ -1430,6 +1507,8 @@ function DayRangeGrid({
                               booking={b}
                               canViewCustomerPhone={canViewCustomerPhone}
                               onClick={() => onBookingClick(b)}
+                              onEdit={onEdit ? () => onEdit(b) : undefined}
+                              onAssignStaff={onAssignStaff ? () => onAssignStaff(b) : undefined}
                             />
                           </div>
                         ))}
@@ -1455,10 +1534,20 @@ function BookingChip({
   booking,
   canViewCustomerPhone,
   onClick,
+  onEdit,
+  onAssignStaff,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
   onClick: () => void;
+  /** Open the booking edit dialog (used by the "Xếp nhân viên" button in the
+      hover popover for services with no staff). Optional — when omitted, the
+      assign-staff button is hidden in the popover. */
+  onEdit?: () => void;
+  /** Open the dedicated "Xếp nhân viên" dialog (preferred over onEdit for the
+      assign-staff button). When provided, the popover's "Xếp nhân viên" button
+      calls this; falls back to onEdit when not provided. */
+  onAssignStaff?: () => void;
 }) {
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1591,7 +1680,19 @@ function BookingChip({
         align="start"
         className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
       >
-        <BookingHoverDetails booking={booking} canViewCustomerPhone={canViewCustomerPhone} />
+        <BookingHoverDetails
+          booking={booking}
+          canViewCustomerPhone={canViewCustomerPhone}
+          statusOptions={[]}
+          onStatusChange={() => {}}
+          selectOpen={false}
+          setSelectOpen={() => {}}
+          onEdit={onEdit || onClick}
+          onDelete={() => {}}
+          canCancelPayment={false}
+          onOpenInvoice={onClick}
+          onAssignStaff={onAssignStaff || onEdit || onClick}
+        />
       </HoverCardContent>
     </HoverCard>
   );
@@ -1618,6 +1719,7 @@ export function BookingHoverDetails({
   onDelete,
   canCancelPayment,
   onOpenInvoice,
+  onAssignStaff,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
@@ -1629,6 +1731,9 @@ export function BookingHoverDetails({
   onDelete: () => void;
   canCancelPayment: boolean;
   onOpenInvoice: () => void;
+  /** Open the booking edit dialog to assign a staff. Called by the "Xếp nhân
+      viên" button shown in the services list when a service has no staff. */
+  onAssignStaff?: () => void;
 }) {
   // Parse date + time using the timezone-safe Vietnam helpers. Supabase
   // stores date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
@@ -1823,7 +1928,11 @@ export function BookingHoverDetails({
 
       {/* Line 3: services — name (duration), staff name below in blue.
           For multi-customer bookings, each service is numbered to match the
-          customer numbering above (1. ↔ customer 1, 2. ↔ customer 2, etc.). */}
+          customer numbering above (1. ↔ customer 1, 2. ↔ customer 2, etc.).
+          When a service has NO staff assigned, a small blue "Xếp nhân viên"
+          button appears below the service name so the user can assign one
+          directly from the hover popover (mirrors the button on the block
+          face). */}
       {displayServices.length > 0 && (
         <div className="space-y-1 border-t pt-1">
           {displayServices.map((s, i) => (
@@ -1833,9 +1942,21 @@ export function BookingHoverDetails({
                 {s.name || "Dịch vụ"}
                 {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
               </div>
-              {s.staffName && (
+              {s.staffName ? (
                 <div className="text-[11px] font-medium text-sky-600">{s.staffName}</div>
-              )}
+              ) : onAssignStaff ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAssignStaff();
+                  }}
+                  className="inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+                  title="Xếp nhân viên cho dịch vụ này"
+                >
+                  Xếp nhân viên
+                </button>
+              ) : null}
             </div>
           ))}
         </div>

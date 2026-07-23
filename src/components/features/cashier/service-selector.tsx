@@ -685,7 +685,13 @@ export function ServiceSelector() {
     // This lets the cashier quickly ring up a walk-in product/service sale
     // without scheduling, while still syncing to Lịch hẹn when a real
     // appointment is booked.
-    const shouldSyncBooking = !!(selectedStaffId && selectedDate && selectedTime);
+    // A Lịch hẹn booking is created whenever date + time are set, EVEN when
+    // no staff is picked. When staff is empty, the booking's service gets a
+    // null staff_id — it shows in the "Chưa xếp nhân viên" column in View
+    // nhân viên and as an "Xếp nhân viên" clickable row in View khách hàng.
+    // Previously staff was required to sync; now it's optional so the cashier
+    // can create an appointment slot first and assign a staff later.
+    const shouldSyncBooking = !!(selectedDate && selectedTime);
 
     const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
     const isNewCustomerCut =
@@ -1185,6 +1191,11 @@ export function ServiceSelector() {
     updateTabMeta(tabId, {
       bookingCreated: true,
       customerId,
+      // Flag that customerId is the SYNTHETIC guest customer (not a real one
+      // the cashier chose) so the walk-in tab keeps showing the inline
+      // customer search — letting the cashier link a real customer later,
+      // which PATCHes this booking's customer_id (handleSelectInlineResult).
+      isGuestCustomer: !meta.customerId,
       bookingId: json.data.id,
       bookingCode: (json.data.code as string) || undefined,
       bookingServices: [
@@ -1488,7 +1499,7 @@ export function ServiceSelector() {
             {canAssignStaff && (
             <div className="space-y-1">
               <Label htmlFor="svc-staff" className="text-[11px] text-gray-600">
-                Nhân viên<span className="ml-0.5 text-red-500">*</span>
+                Nhân viên
               </Label>
               <Select
                 value={selectedStaffId}
@@ -1511,9 +1522,15 @@ export function ServiceSelector() {
                   )}
                 </SelectContent>
               </Select>
-              {!selectedStaffId && (
-                <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
-              )}
+              {/* Staff is OPTIONAL — the cashier can leave it empty to add
+                  the service now and assign a staff later (the booking is
+                  still created in Lịch hẹn with a null staff_id, showing in the
+                  "Chưa xếp nhân viên" column). This soft hint tells the cashier
+                  it's optional so they don't think the field is missing a
+                  required value. */}
+              <p className="text-[11px] text-gray-400">
+                Để trống nếu chưa xếp nhân viên
+              </p>
             </div>
             )}
 
@@ -1578,8 +1595,7 @@ export function ServiceSelector() {
             <Button
               size="sm"
               onClick={handleDialogConfirm}
-              disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}
-              title={canAssignStaff && !selectedStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              disabled={addingFromDialog}
               className="bg-emerald-600 hover:bg-emerald-700"
             >
               {addingFromDialog ? "Đang lưu..." : "OK"}

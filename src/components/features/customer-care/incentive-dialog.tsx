@@ -122,6 +122,8 @@ interface Product {
   code: string | null;
   branch_id: string | null;
   active: boolean;
+  price?: number;
+  product_type?: string | null;
 }
 
 export function IncentiveDialog({
@@ -264,7 +266,18 @@ export function IncentiveDialog({
   }, [servicesData, isAllBranches, effectiveBranches]);
 
   const filteredProducts = useMemo(() => {
-    const prods = (productsData || []).filter((p) => p.active !== false);
+    // Only Sản phẩm kinh doanh (product_type = "trading") with a real price
+    // (> 1000đ) are eligible for promotions. Sản phẩm tiêu thụ
+    // (product_type = "consumption") are internal-use only (e.g. tools,
+    // supplies) and are excluded — they are not sold to customers, so
+    // discounting them makes no sense. Products with price <= 1000đ are
+    // also excluded (cheap/free items, sample sizes, placeholder entries).
+    const prods = (productsData || []).filter(
+      (p) =>
+        p.active !== false &&
+        (p.product_type || "trading") === "trading" &&
+        (p.price || 0) > 1000
+    );
     if (isAllBranches) return prods;
     return prods.filter(
       (p) => p.branch_id && effectiveBranches.includes(p.branch_id)

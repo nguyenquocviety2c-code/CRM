@@ -23,12 +23,12 @@ import {
   Minus,
   Plus,
 } from "lucide-react";
-import { useCashierStore } from "@/stores/cashier-store";
+import { useCashierStore, resolveDiscountAmount } from "@/stores/cashier-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { queryKeys } from "@/lib/query-keys";
-import { isPromotionActive } from "@/lib/promotion-utils";
+import { isPromotionActive, isPromotionForBranch } from "@/lib/promotion-utils";
 import { localDayToUtcRange, toVietnamTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
@@ -74,6 +74,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     setAllInvoiceItemsStaff,
     setDiscountAmount,
     setTipAmount,
+    setVoucherCode,
     getSubtotal,
     getInvoiceTotal,
     getTipAmount,
@@ -114,6 +115,21 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // percentage and the promotion metadata is sent with the checkout so the
   // CSKH promotion's used_count increments.
   const [selectedPromoId, setSelectedPromoId] = useState<string>("");
+  // Voucher state — when the cashier types a code in "Nhập mã Voucher" and
+  // blurs/presses Enter, we look it up against the incentives table
+  // (type=voucher), validate it (active, branch-eligible, within validity,
+  // not fully used), and apply its discount to the eligible items (mirroring
+  // handlePromoSelect). selectedVoucher holds the resolved voucher object;
+  // voucherError holds a human-readable error string when the code is invalid.
+  const [selectedVoucher, setSelectedVoucher] = useState<{
+    id: string;
+    code: string | null;
+    name: string;
+    discountValue: number;
+    discountType: string;
+    serviceIds: string | null;
+  } | null>(null);
+  const [voucherError, setVoucherError] = useState<string>("");
 
   // Photos attached to the active invoice. Stored as base64 data URLs so they
   // can be embedded in the invoice's `note` JSON (alongside items/tip/promotion).
@@ -431,6 +447,12 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       discountValue: number;
       discountType: string;
       serviceIds: string | null;
+      branchIds: string | null;
+      applyScope: string | null;
+      startDate: string | null;
+      endDate: string | null;
+      usageLimit: number;
+      usedCount: number;
     }>;
   }>({
     queryKey: ["cashier-promotions"],
@@ -441,11 +463,12 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     },
   });
   // Only show CURRENTLY USABLE promotions in the selector: filter out expired
-  // (endDate in the past), not-yet-started (startDate in the future), and
-  // fully-used (usedCount >= usageLimit) ones. Mirrors the Booking module's
-  // getActivePromotionsForBooking so both selectors stay consistent.
-  const promotions = (promotionsData?.items || []).filter((p) =>
-    isPromotionActive(p)
+  // (endDate in the past), not-yet-started (startDate in the future), fully-used
+  // (usedCount >= usageLimit), AND promotions that don't apply to the currently
+  // selected branch. Mirrors the Booking module's getActivePromotionsForBooking
+  // so both selectors stay consistent and only branch-eligible promos appear.
+  const promotions = (promotionsData?.items || []).filter(
+    (p) => isPromotionActive(p) && isPromotionForBranch(p, selectedBranchId)
   );
   const selectedPromo = promotions.find((p) => p.id === selectedPromoId) || null;
 
@@ -571,9 +594,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // Whether a given invoice line is eligible for a promotion, mirroring the
   // scope logic from the Booking module: null scope = all items; otherwise
   // match by service id, or by category id for "service_category" promos.
-  // Used by handlePromoSelect to apply the promo per-line to services.
+  // For "product" promos, match against product items by their itemId.
+  // Used by handlePromoSelect to apply the promo per-line to the right items.
   const isItemPromoEligible = (
-    item: { itemId: string },
+    item: { itemId: string; type?: string },
     promo: { discountType: string; serviceIds: string | null }
   ): boolean => {
     const targetIds = getPromoTargetIds(promo);
@@ -596,20 +620,28 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   };
 
   // When a promotion is chosen, apply it as a per-line VND discount on each
-  // ELIGIBLE service/package line (shown read-only in the Giảm giá column).
-  // Products are never touched here — their discount stays manually editable.
+  // ELIGIBLE line. For service/service_category promos, only service + package
+  // items are eligible (products excluded). For "product" promos, only PRODUCT
+  // items are eligible (services excluded) — this previously silently failed
+  // because product items were filtered out entirely.
   // The promo lives per-item so the line "Thành tiền" and footer totals update
-  // live (Task 4); the invoice-level discountAmount is cleared to avoid any
-  // double-counting. Clearing the promo resets every service line to 0.
+  // live; the invoice-level discountAmount is cleared to avoid any
+  // double-counting. Clearing the promo resets every line to 0.
   const handlePromoSelect = (promoId: string) => {
     setSelectedPromoId(promoId);
     if (!activeTabId) return;
     const invoice = invoices[activeTabId];
     if (!invoice) return;
-    const serviceItems = invoice.items.filter((it) => it.type !== "product");
+    const isProductPromo = (p: { discountType: string }) => p.discountType === "product";
+    // For product promos, target PRODUCT items; otherwise target services + packages.
+    const targetItems = invoice.items.filter((it) =>
+      isProductPromo(promotions.find((p) => p.id === promoId) || { discountType: "" })
+        ? it.type === "product"
+        : it.type !== "product"
+    );
     if (promoId === "") {
-      // "Không áp dụng" — clear all service/package per-line discounts.
-      serviceItems.forEach((it) =>
+      // "Không áp dụng" — clear all per-line discounts on the targeted item types.
+      targetItems.forEach((it) =>
         updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
       );
       setDiscountInput("");
@@ -618,22 +650,32 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     }
     const promo = promotions.find((p) => p.id === promoId);
     if (!promo) return;
+    // A promotion and a voucher are mutually exclusive — selecting a promo
+    // clears any applied voucher (and its discount) to avoid double-discount.
+    if (selectedVoucher) {
+      clearVoucherDiscount();
+      setSelectedVoucher(null);
+      setVoucherError("");
+    }
     const pct = Number(promo.discountValue) || 0;
-    const eligible = serviceItems.filter((it) => isItemPromoEligible(it, promo));
+    const eligible = targetItems.filter((it) => isItemPromoEligible(it, promo));
     if (pct <= 0 || eligible.length === 0) {
-      // No eligible service for this promo — don't apply it.
-      alert("Chương trình khuyến mãi không được áp dụng cho dịch vụ hiện tại");
+      // No eligible item for this promo — don't apply it.
+      const msg = isProductPromo(promo)
+        ? "Chương trình khuyến mãi không được áp dụng cho sản phẩm hiện tại"
+        : "Chương trình khuyến mãi không được áp dụng cho dịch vụ hiện tại";
+      alert(msg);
       setSelectedPromoId("");
-      serviceItems.forEach((it) =>
+      targetItems.forEach((it) =>
         updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
       );
       setDiscountInput("");
       setDiscountAmount(activeTabId, 0);
       return;
     }
-    // Apply the promo share to each eligible service line (VND amount so the
-    // Giảm giá column shows a tiền amount); reset non-eligible services to 0.
-    serviceItems.forEach((it) => {
+    // Apply the promo share to each eligible line (VND amount so the Giảm giá
+    // column shows a tiền amount); reset non-eligible targeted items to 0.
+    targetItems.forEach((it) => {
       if (isItemPromoEligible(it, promo)) {
         const share = Math.round((it.price * it.quantity * pct) / 100);
         updateInvoiceItemDiscount(activeTabId, it.id, share, "VND");
@@ -644,6 +686,125 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     // Promo now lives per-item; clear the invoice-level discount + manual input.
     setDiscountInput("");
     setDiscountAmount(activeTabId, 0);
+  };
+
+  // Apply a voucher by its code. Looks up the voucher in the incentives table
+  // (type=voucher), validates it (active, branch-eligible, within validity
+  // window, not fully used), then applies its discount to eligible items —
+  // mirroring handlePromoSelect but for vouchers. On any validation failure,
+  // clears the voucher + shows a human-readable error so the cashier knows why
+  // the code was rejected. A voucher and a promotion are mutually exclusive:
+  // applying a voucher clears any selected promotion (and vice versa) to avoid
+  // double-discounting.
+  const handleVoucherApply = async (code: string) => {
+    setVoucherError("");
+    const trimmed = code.trim();
+    if (!trimmed) {
+      // Empty code → clear any previously-applied voucher discount.
+      if (selectedVoucher && activeTabId) {
+        clearVoucherDiscount();
+      }
+      setSelectedVoucher(null);
+      return;
+    }
+    if (!activeTabId) return;
+    try {
+      // Fetch vouchers matching the code (case-insensitive search via the
+      // API's `search` param, which matches name OR code with ilike).
+      const res = await fetch(
+        `/api/supabase/incentives?type=voucher&search=${encodeURIComponent(trimmed)}&limit=50`
+      );
+      const json = await res.json();
+      const candidates = (json.data?.items || []) as Array<{
+        id: string;
+        code: string | null;
+        name: string;
+        discountValue: number;
+        discountType: string;
+        serviceIds: string | null;
+        branchIds: string | null;
+        startDate: string | null;
+        endDate: string | null;
+        usageLimit: number;
+        usedCount: number;
+      }>;
+      // Find an exact (case-insensitive) code match — the search param is a
+      // fuzzy ilike on name+code, so we must filter client-side for exactness.
+      const voucher = candidates.find(
+        (v) => v.code && v.code.toLowerCase() === trimmed.toLowerCase()
+      );
+      if (!voucher) {
+        setVoucherError("Mã voucher không tồn tại");
+        if (selectedVoucher) clearVoucherDiscount();
+        setSelectedVoucher(null);
+        return;
+      }
+      // Validate: active (date + usage).
+      if (!isPromotionActive(voucher)) {
+        setVoucherError("Voucher đã hết hạn hoặc hết lượt sử dụng");
+        if (selectedVoucher) clearVoucherDiscount();
+        setSelectedVoucher(null);
+        return;
+      }
+      // Validate: branch-eligible.
+      if (!isPromotionForBranch(voucher, selectedBranchId)) {
+        setVoucherError("Voucher không áp dụng cho chi nhánh này");
+        if (selectedVoucher) clearVoucherDiscount();
+        setSelectedVoucher(null);
+        return;
+      }
+      // Valid → apply the discount to eligible items. Mutually exclusive with
+      // a selected promotion: clear any promo first to avoid double-discount.
+      if (selectedPromoId) {
+        handlePromoSelect("");
+      }
+      setSelectedVoucher(voucher);
+      const isProductVoucher = voucher.discountType === "product";
+      const invoice = invoices[activeTabId];
+      const targetItems = invoice.items.filter((it) =>
+        isProductVoucher ? it.type === "product" : it.type !== "product"
+      );
+      const pct = Number(voucher.discountValue) || 0;
+      const eligible = targetItems.filter((it) =>
+        isItemPromoEligible(it, voucher)
+      );
+      if (pct <= 0 || eligible.length === 0) {
+        setVoucherError(
+          isProductVoucher
+            ? "Voucher không được áp dụng cho sản phẩm hiện tại"
+            : "Voucher không được áp dụng cho dịch vụ hiện tại"
+        );
+        return;
+      }
+      targetItems.forEach((it) => {
+        if (isItemPromoEligible(it, voucher)) {
+          const share = Math.round((it.price * it.quantity * pct) / 100);
+          updateInvoiceItemDiscount(activeTabId, it.id, share, "VND");
+        } else {
+          updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND");
+        }
+      });
+      setDiscountInput("");
+      setDiscountAmount(activeTabId, 0);
+    } catch {
+      setVoucherError("Không thể kiểm tra mã voucher");
+    }
+  };
+
+  // Clear all per-line discounts that were applied by the current voucher.
+  // Used when the voucher code is emptied or replaced. Targets the same item
+  // types the voucher applied to (products for product vouchers, services+
+  // packages otherwise) and resets their discount to 0.
+  const clearVoucherDiscount = () => {
+    if (!activeTabId || !selectedVoucher) return;
+    const isProductVoucher = selectedVoucher.discountType === "product";
+    const invoice = invoices[activeTabId];
+    const targetItems = invoice.items.filter((it) =>
+      isProductVoucher ? it.type === "product" : it.type !== "product"
+    );
+    targetItems.forEach((it) =>
+      updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
+    );
   };
 
   const handleTipChange = (value: string) => {
@@ -829,14 +990,46 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       const total = getInvoiceTotal(activeTabId);
       const tip = getTipAmount(activeTabId);
       // Build promotion metadata (matches the booking invoice dialog shape) so
-      // the invoices API increments the promotion's used_count on save.
+      // the invoices API increments the promotion's used_count on save. The
+      // discountAmount is the SUM of the per-line promo discounts applied to
+      // eligible items (computed from each item's discount field via
+      // resolveDiscountAmount) — NOT invoice.discountAmount, which
+      // handlePromoSelect clears to 0. This ensures the saved invoice's
+      // promotion.discountAmount is correct so cashier/invoices, activity, and
+      // customer-history display "PromoName (−<actual>đ)" instead of "(−0đ)".
+      const promoDiscountSum = selectedPromo
+        ? invoice.items
+            .filter((it) => isItemPromoEligible(it, selectedPromo))
+            .reduce((sum, it) => sum + resolveDiscountAmount(it), 0)
+        : 0;
+      // Compute the voucher discount sum (same per-line approach as the
+      // promotion sum) when a voucher is applied instead of a promotion.
+      const voucherDiscountSum = selectedVoucher
+        ? invoice.items
+            .filter((it) => isItemPromoEligible(it, selectedVoucher))
+            .reduce((sum, it) => sum + resolveDiscountAmount(it), 0)
+        : 0;
+      // Build promotion metadata (matches the booking invoice dialog shape) so
+      // the invoices API increments the incentive's used_count on save. When a
+      // voucher is applied (no promotion), send the voucher as the "promotion"
+      // meta — the API only needs the id to increment used_count, and both
+      // promotions and vouchers live in the same `incentives` table. A voucher
+      // and a promotion are mutually exclusive, so only one is ever non-null.
       const promotionMeta = selectedPromo
         ? {
             id: selectedPromo.id,
             code: selectedPromo.code || "",
             name: selectedPromo.name,
             discountValue: selectedPromo.discountValue,
-            discountAmount: invoice.discountAmount,
+            discountAmount: promoDiscountSum,
+          }
+        : selectedVoucher
+        ? {
+            id: selectedVoucher.id,
+            code: selectedVoucher.code || "",
+            name: selectedVoucher.name,
+            discountValue: selectedVoucher.discountValue,
+            discountAmount: voucherDiscountSum,
           }
         : null;
 
@@ -1672,7 +1865,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       >
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="min-w-[20px] text-center text-[13px] font-medium text-gray-700">
+                      <span className="min-w-[20px] text-center text-[12px] font-medium text-gray-700">
                         {item.quantity}
                       </span>
                       <button
@@ -1691,12 +1884,12 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       </button>
                     </div>
                   ) : (
-                    <span className="text-center text-[13px] text-gray-700">
+                    <span className="text-center text-[12px] text-gray-700">
                       {item.quantity}
                     </span>
                   )}
                 </div>
-                <div className="text-center text-[13px] text-gray-600">
+                <div className="flex items-center justify-center text-[12px] text-gray-600">
                   {item.price.toLocaleString("vi-VN")}
                 </div>
                 <div className="flex items-center justify-center gap-1">
@@ -1711,6 +1904,11 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       <input
                         type="number"
                         inputMode="decimal"
+                        // data-slot excludes this input from the global 28px
+                        // min-height rule in globals.css (line 195), allowing
+                        // the compact h-6 (24px) class to take effect so the
+                        // discount input matches the adjacent đ/% select height.
+                        data-slot="discount-amount"
                         min={0}
                         // For PERCENT, cap at 100; for VND, no hard cap (the
                         // store clamps to price*qty anyway).
@@ -1748,7 +1946,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                             return next;
                           });
                         }}
-                        className="h-7 w-16 rounded border border-gray-300 px-1 text-center text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="h-6 w-16 rounded border border-gray-300 px-1 text-center text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                         placeholder="0"
                       />
                       <select
@@ -1764,7 +1962,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                             nextType
                           );
                         }}
-                        className="h-7 rounded border border-gray-300 bg-white px-1 text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        className="h-6 rounded border border-gray-300 bg-white px-1 text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                         title="Đơn vị giảm giá: đ (số tiền) hoặc % (phần trăm)"
                       >
                         <option value="VND">đ</option>
@@ -1772,14 +1970,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       </select>
                     </>
                   ) : (
-                    <span className="text-[13px] text-gray-600">
+                    <span className="text-[12px] text-gray-600">
                       {item.discount.toLocaleString("vi-VN")}
                       {item.discountType === "PERCENT" ? "%" : "đ"}
                     </span>
                   )}
                 </div>
-                <div className="flex items-center justify-end gap-2">
-                  <span className="font-medium text-gray-900 text-[13px]">
+                <div className="flex items-center justify-end gap-3 -mr-2">
+                  <span className="font-medium text-gray-900 text-[12px]">
                     {item.total.toLocaleString("vi-VN")}
                   </span>
                   {editableDisplay && (
@@ -1879,9 +2077,9 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                           }
                         }
                       }}
-                      className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                      className="rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-500"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3 w-3" />
                     </button>
                   )}
                 </div>
@@ -1969,13 +2167,60 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
 
       {/* Footer */}
       <div className="border-t bg-gray-50 p-4">
-        {/* Totals */}
-        <div className="mb-4 space-y-2">
+        {/* Totals — tightened spacing (space-y-1.5 + mb-2) so the gap from
+            "Thành tiền" down to the action buttons is noticeably smaller. */}
+        <div className="mb-2 space-y-1.5">
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">Thành tiền</span>
             <span className="font-medium">
               {displaySubtotal.toLocaleString("vi-VN")}
             </span>
+          </div>
+          {/* Nhập mã Voucher — editable input in draft mode; read-only text for
+              paid/non-editable orders. Sits between "Thành tiền" and
+              "Chương trình khuyến mãi" so the cashier can type a voucher code
+              (if any) before picking a promotion. On blur or Enter, the code is
+              looked up against the incentives table (type=voucher), validated,
+              and its discount auto-applied to eligible items. A voucher and a
+              promotion are mutually exclusive — applying a voucher clears any
+              selected promotion. The code is stored in the invoice's
+              voucherCode field (persisted with the tab) and sent with the
+              checkout so the voucher's used_count increments. */}
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-gray-600">Nhập mã Voucher</span>
+            {editableDisplay ? (
+              <div className="flex flex-col items-end gap-0.5">
+                <Input
+                  type="text"
+                  value={invoice?.voucherCode || ""}
+                  onChange={(e) =>
+                    setVoucherCode(activeTabId!, e.target.value)
+                  }
+                  onBlur={(e) => handleVoucherApply(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  placeholder="Nhập mã (nếu có)"
+                  className="h-7 w-44 text-right"
+                  aria-label="Mã voucher"
+                />
+                {voucherError && (
+                  <span className="text-[11px] text-red-500">{voucherError}</span>
+                )}
+                {selectedVoucher && !voucherError && (
+                  <span className="text-[11px] text-emerald-600">
+                    ✓ {selectedVoucher.name} (−{selectedVoucher.discountValue}%)
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="font-medium text-gray-900">
+                {invoice?.voucherCode || "—"}
+              </span>
+            )}
           </div>
           {/* Chương trình khuyến mãi — editable Select in draft mode (gated by
               invoice_discount); read-only text for paid/non-editable orders. */}

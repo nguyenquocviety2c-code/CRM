@@ -49,13 +49,11 @@ interface ColumnDef {
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
-  { key: "code", label: "Mã" },
-  { key: "name", label: "Tên khuyến mãi" },
+  { key: "name", label: "Tên" },
   { key: "discount", label: "Giảm giá" },
   { key: "applyScope", label: "Áp dụng" },
   { key: "usageLimit", label: "Số lượng" },
   { key: "usedCount", label: "Đã sử dụng" },
-  { key: "unusedCount", label: "Chưa sử dụng" },
   { key: "expiredCount", label: "Hết hạn" },
 ];
 
@@ -64,9 +62,10 @@ interface PromotionListProps {
   onEdit: (promotion: Promotion) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
+  onView: (promotion: Promotion) => void;
 }
 
-export function PromotionList({ promotions, onEdit, onDelete, onCreate }: PromotionListProps) {
+export function PromotionList({ promotions, onEdit, onDelete, onCreate, onView }: PromotionListProps) {
   const [search, setSearch] = useState("");
   // All columns visible by default. Hidden when set to false.
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
@@ -151,14 +150,13 @@ export function PromotionList({ promotions, onEdit, onDelete, onCreate }: Promot
       <div className="rounded-md border bg-white">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            <tr className="border-b bg-gray-50 text-left text-[11px] font-medium text-gray-500 uppercase tracking-wider">
               {visibleCols.map((col) => (
                 <th
                   key={col.key}
                   className={
                     col.key === "usageLimit" ||
                     col.key === "usedCount" ||
-                    col.key === "unusedCount" ||
                     col.key === "expiredCount"
                       ? "px-4 py-3 text-right"
                       : "px-4 py-3"
@@ -195,7 +193,14 @@ export function PromotionList({ promotions, onEdit, onDelete, onCreate }: Promot
                     if (key === "name") {
                       return (
                         <td key="name" className="px-4 py-3 font-medium text-gray-900">
-                          {promotion.name}
+                          <button
+                            type="button"
+                            onClick={() => onView(promotion)}
+                            className="text-blue-600 hover:text-blue-800 hover:underline text-left"
+                            title="Xem chi tiết khuyến mãi"
+                          >
+                            {promotion.name}
+                          </button>
                         </td>
                       );
                     }

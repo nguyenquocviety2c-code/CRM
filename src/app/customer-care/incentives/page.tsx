@@ -8,6 +8,10 @@ import { IncentivesTabs } from "@/components/features/customer-care/incentives-t
 import { PromotionList } from "@/components/features/customer-care/promotion-list";
 import { VoucherList } from "@/components/features/customer-care/voucher-list";
 import { IncentiveDialog } from "@/components/features/customer-care/incentive-dialog";
+import {
+  IncentiveDetailDialog,
+  type IncentiveDetail,
+} from "@/components/features/customer-care/incentive-detail-dialog";
 import { useToast } from "@/hooks/use-toast";
 
 type SubTab = "promotion" | "voucher";
@@ -39,6 +43,12 @@ export default function IncentivesPage() {
   // IncentiveDialog can be pre-filled and the submit handler knows whether
   // to POST (create) or PUT (update).
   const [editingIncentive, setEditingIncentive] = useState<IncentiveItem | null>(null);
+  // Detail (view-only) dialog state — opens when the cashier clicks the blue
+  // program-name link in either the Promotion or Voucher list. Stores the
+  // selected item + which tab it came from (so the dialog title says
+  // "Chi tiết khuyến mãi" vs "Chi tiết voucher").
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [viewingDetail, setViewingDetail] = useState<IncentiveDetail | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { search, page, limit } = useCustomerCareStore();
@@ -184,6 +194,26 @@ export default function IncentivesPage() {
     setDialogOpen(true);
   };
 
+  // Open the DETAIL (view-only) dialog for a promotion. Maps the promotion's
+  // fields to the IncentiveDetail shape and flags type="promotion" so the
+  // dialog title reads "Chi tiết khuyến mãi".
+  const handleViewPromotion = (item: IncentiveItem) => {
+    setViewingDetail({ ...item, type: "promotion" });
+    setDetailOpen(true);
+  };
+
+  // Open the EDIT form dialog (IncentiveDialog) for a voucher — pre-filled
+  // with the voucher's data so staff can view AND edit all fields. This
+  // mirrors the "Tạo mới" dialog but in edit mode, giving full access to the
+  // voucher's settings (code, name, discount, validity, branches, services/
+  // products, usage limit, etc.). The promotion tab keeps its read-only
+  // detail dialog (handleViewPromotion above); the voucher tab uses the edit
+  // form per the user's request.
+  const handleViewVoucher = (item: IncentiveItem) => {
+    setEditingIncentive(item);
+    setDialogOpen(true);
+  };
+
   const handleDelete = (id: string) => {
     if (window.confirm("Bạn có chắc muốn xóa khuyến mãi này?")) {
       deleteMutation.mutate(id);
@@ -203,6 +233,7 @@ export default function IncentivesPage() {
           onEdit={handleEdit}
           onDelete={handleDelete}
           onCreate={handleOpenCreate}
+          onView={handleViewPromotion}
         />
       )}
 
@@ -212,6 +243,7 @@ export default function IncentivesPage() {
           onEdit={handleEdit}
           onDelete={handleDelete}
           onCreate={handleOpenCreate}
+          onView={handleViewVoucher}
         />
       )}
 
@@ -226,6 +258,12 @@ export default function IncentivesPage() {
         onSubmit={handleSubmit}
         initialData={editingIncentive}
         isSubmitting={createMutation.isPending || updateMutation.isPending}
+      />
+
+      <IncentiveDetailDialog
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        detail={viewingDetail}
       />
     </div>
   );

@@ -21,6 +21,7 @@ import { BookingFilter } from "@/components/features/booking/booking-filter";
 import { BookingCustomerView } from "@/components/features/booking/booking-customer-view";
 import { BookingStaffView } from "@/components/features/booking/booking-staff-view";
 import { BookingTimeGrid } from "@/components/features/booking/booking-time-grid";
+import { AssignStaffDialog } from "@/components/features/booking/assign-staff-dialog";
 // Lazy-load InvoiceDialog + PaidInvoiceView — only shown when the user clicks
 // a checkin/checkout booking. Keeps the Booking module's initial bundle small.
 const InvoiceDialog = dynamic(
@@ -44,6 +45,10 @@ export default function BookingPage() {
   // it via the onShowInvoice callback. The list view still owns its own copy
   // for its “Hóa đơn” buttons + pencil icon when no onShowInvoice is passed.
   const [invoiceBooking, setInvoiceBooking] = useState<Booking | null>(null);
+  // The booking whose services are being assigned a staff via the dedicated
+  // "Xếp nhân viên" dialog. Set when the user clicks the "Xếp nhân viên"
+  // button on a no-staff segment/popover/link. Null → dialog closed.
+  const [assignStaffBooking, setAssignStaffBooking] = useState<Booking | null>(null);
   // Pre-filled slot data for the BookingDialog — set when the user clicks an
   // empty time slot in the staff-view or time-grid. Passed to BookingDialog so
   // the first service entry's date/time (and staffId) are pre-filled.
@@ -423,6 +428,7 @@ export default function BookingPage() {
             onPageChange={setPage}
             onStatusChange={handleStatusChange}
             onEdit={openDialog}
+            onAssignStaff={setAssignStaffBooking}
             onDelete={handleDelete}
             onInvoicePaid={(bookingId) => {
               // After invoice payment, auto-transition booking to checkout.
@@ -438,6 +444,7 @@ export default function BookingPage() {
                 onBookingClick={openDialog}
                 onStatusChange={handleStatusChange}
                 onEdit={openDialog}
+                onAssignStaff={setAssignStaffBooking}
                 onDelete={handleDelete}
                 // Time-grid (Khung giờ): open the invoice dialog for checkin/checkout.
                 onShowInvoice={setInvoiceBooking}
@@ -458,6 +465,7 @@ export default function BookingPage() {
           onBookingClick={openDialog}
           onStatusChange={handleStatusChange}
           onEdit={openDialog}
+          onAssignStaff={setAssignStaffBooking}
           onDelete={handleDelete}
           // Staff view (View nhân viên): open the invoice dialog for checkin/checkout.
           onShowInvoice={setInvoiceBooking}
@@ -530,6 +538,17 @@ export default function BookingPage() {
           />
         )
       )}
+
+      {/* Dedicated "Xếp nhân viên" dialog — opened by the "Xếp nhân viên"
+          button on no-staff segments/popovers/links in all 3 views. Lets the
+          user assign a staff to each of the booking's services without
+          opening the full "Chỉnh sửa lịch hẹn" dialog. */}
+      <AssignStaffDialog
+        open={!!assignStaffBooking}
+        onOpenChange={(v) => { if (!v) setAssignStaffBooking(null); }}
+        booking={assignStaffBooking}
+        branchId={selectedBranchId}
+      />
     </div>
   );
 }

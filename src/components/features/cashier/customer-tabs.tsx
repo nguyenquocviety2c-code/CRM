@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { queryKeys } from "@/lib/query-keys";
 import { parseMultiCustomerNote } from "@/lib/multi-customer";
 
 // Fetch a customer's "Khách cũ" status from the API. A customer counts as
@@ -120,6 +121,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   // Paid invoice full-page view state — opened when clicking "Hóa đơn: HDxxx"
   // on a paid booking's info bar.
   const [paidInvoiceView, setPaidInvoiceView] = useState<{
@@ -683,7 +685,14 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // Whether a real customer (old or newly created) has been linked to this
   // walk-in tab. Once linked, the inline search + "Thêm khách mới" button
   // are hidden — the customer is already chosen.
-  const walkinHasCustomer = isWalkinTab && Boolean(activeMeta?.customerId);
+  // A walk-in tab "has a customer" only when a REAL customer is linked — NOT
+  // when the synthetic "Khách vãng lai" guest customer is set (isGuestCustomer).
+  // When the guest customer is set, the inline search stays visible so the
+  // cashier can link a real customer (which PATCHes the booking's customer_id).
+  const walkinHasCustomer =
+    isWalkinTab &&
+    Boolean(activeMeta?.customerId) &&
+    !activeMeta?.isGuestCustomer;
   // Whether the active tab is still an EMPTY order (no items, no pending
   // invoice, no booking services). Applies to BOTH walk-in drafts AND booking
   // tabs (e.g. a booking whose services were all removed, or a freshly-picked
@@ -723,12 +732,14 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     phone: string | null;
   }) => {
     if (!activeTabId) return;
+    const prevMeta = tabMeta[activeTabId];
     updateTabMeta(activeTabId, {
       customerId: c.id,
       customerInfo: {
         name: c.name,
         phone: c.phone || "",
       },
+      isGuestCustomer: false,
     });
     updateCustomerTab(activeTabId, {
       customerName: c.name,
@@ -740,11 +751,50 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
       updateTabMeta(activeTabId, { customerType: ct })
     );
 
+    // SYNC BOOKING CUSTOMER: if this walk-in tab already has a booking
+    // (meta.bookingId — created when the first service was added BEFORE the
+    // customer was linked), the booking's customer_id is still the synthetic
+    // "Khách vãng lai" guest customer. PATCH the booking's customer_id to the
+    // REAL customer's id so the booking (and its customer name/phone) shows
+    // correctly in Lịch hẹn's View khách hàng and View nhân viên. Without this,
+    // the booking would stay linked to the guest customer and the customer
+    // info entered in the cashier would NOT propagate to the booking module.
+    if (prevMeta?.bookingId) {
+      fetch(`/api/supabase/bookings/${encodeURIComponent(prevMeta.bookingId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_id: c.id }),
+      })
+        .then(() => {
+          // Invalidate booking queries so both the cashier sidebar and the
+          // Lịch hẹn module (all 3 views) refresh with the updated customer.
+          queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+        })
+        .catch(() => {
+          // Best-effort sync — the local tab is already updated, so the
+          // cashier UI is correct for this session. The booking will be
+          // re-synced on the next service add / checkout if needed.
+        });
+    }
+
     // AUTO-LINK: find the customer's existing non-terminal booking for the
     // selected day. If one exists, link this walk-in tab to it (mirrors what
     // handlePickBooking does when the user clicks the booking tab directly).
     // This makes the booking code appear in the info bar AND makes subsequent
     // service adds PUT to the existing booking (no duplicate).
+    // SKIP the auto-link when this tab already has its own booking
+    // (prevMeta.bookingId) — that booking was just re-linked to the real
+    // customer above; auto-linking to a DIFFERENT booking would create
+    // confusion (two bookings for one tab).
+    if (prevMeta?.bookingId) {
+      // Tab already has a booking — just toast and finish. The booking's
+      // customer_id was patched above; no auto-link needed.
+      toast({ title: "Đã cập nhật khách hàng", description: c.name });
+      setInlineSearch("");
+      setShowInlineResults(false);
+      return;
+    }
     const existingBooking = (dayBookings || []).find(
       (b) =>
         b.customer?.id === c.id &&
@@ -860,9 +910,11 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         return;
       }
       if (activeTabId && customer) {
+        const prevMeta = tabMeta[activeTabId];
         updateTabMeta(activeTabId, {
           customerId: customer.id,
           customerInfo: { name: customer.name, phone: customer.phone || "" },
+          isGuestCustomer: false,
         });
         updateCustomerTab(activeTabId, {
           customerName: customer.name,
@@ -870,6 +922,28 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         });
         // New customer is never "Khách cũ".
         updateTabMeta(activeTabId, { customerType: "new" });
+        // SYNC BOOKING CUSTOMER: if this walk-in tab already has a booking
+        // (created when the first service was added before the customer was
+        // created), PATCH the booking's customer_id from the synthetic
+        // "Khách vãng lai" guest to the newly-created real customer so the
+        // booking (and its customer name/phone) shows correctly in Lịch hẹn's
+        // View khách hàng and View nhân viên.
+        if (prevMeta?.bookingId) {
+          try {
+            await fetch(
+              `/api/supabase/bookings/${encodeURIComponent(prevMeta.bookingId)}`,
+              {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ customer_id: customer.id }),
+              }
+            );
+            queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+            queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+          } catch {
+            // Best-effort sync — the local tab is already updated.
+          }
+        }
       }
       setShowAddCustomer(false);
       setNewCustomerName("");

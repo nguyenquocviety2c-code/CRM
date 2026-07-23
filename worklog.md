@@ -1565,3 +1565,400 @@ Stage Summary:
 - **Numbering**: both columns number entries (1., 2., ...) for multi-customer bookings, so customer #1 corresponds to service #1, etc. Single-customer bookings show no numbers (unchanged).
 - **Colors**: service name = black (text-gray-900); staff name = yellow (text-yellow-600).
 - 0 lint errors. No runtime errors. PM2 online (9h). Test booking cleaned up.
+
+---
+Task ID: 3-research
+Agent: general-purpose
+Task: Research all places that select/apply promotion/voucher and verify discount logic correctness
+
+Work Log:
+- Read prior worklog at /home/z/my-project/download/CRM/worklog.md (no prior promotion/voucher task — 21 prior tasks are all about booking/cashier workflow, multi-customer, columns, etc.).
+- Read /home/z/my-project/download/CRM/src/lib/promotion-utils.ts — pure helpers: isPromotionActive, isPromotionForBranch, getPromotionServiceIds, calculatePromotionDiscount, getActivePromotionsForBooking. NOTE: `applyScope` (members_only / all_customers / time_range) is declared on IncentiveShape but NO helper checks it.
+- Read /home/z/my-project/download/CRM/src/stores/cashier-store.ts — `voucherCode: string` is on InvoiceData and has setter `setVoucherCode`, but `getInvoiceTotal`/`getSubtotal` never read it; it's pure dead state.
+- Read /home/z/my-project/download/CRM/src/components/features/cashier/invoice-summary.tsx (2893 lines, key sections):
+  * Lines 425-451: promotionsData fetched from /api/supabase/incentives?type=promotion&page=1&limit=100; client filter uses ONLY isPromotionActive (date+usage). NO branch filter, NO applyScope filter. Type declares only {id, code, name, discountValue, discountType, serviceIds} — branchIds/applyScope NOT declared (so even though API returns them, they're ignored).
+  * Lines 544-589: getPromoTargetIds + isItemPromoEligible — matches by service_id (or category_id for service_category). No product-type handling, no package handling.
+  * Lines 605-648: handlePromoSelect — applies pct% of (price*qty) per-line as VND discount to eligible service/package items; clears invoice.discountAmount to 0. Discounts for ineligible service/package items are RESET to 0 (wipes any manual per-line discount). Does NOT check branch, applyScope, voucherCode, or customer membership.
+  * Lines 832-842: promotionMeta built for checkout — `discountAmount: invoice.discountAmount` is ALWAYS 0 when a promo is active (because handlePromoSelect cleared it). BUG: saved invoice's promotion.discountAmount is 0, so the cashier/invoices page and customer-history display "PromoName (−0đ)".
+  * Lines 1992-2010: "Nhập mã Voucher" Input — calls setVoucherCode(activeTabId, e.target.value). The voucher code is NEVER validated against incentives (type=voucher), NEVER auto-applies a discount, and is NOT included in the checkout payload sent to /api/supabase/invoices. Dead feature.
+  * Lines 2011-2055: "Chương trình khuyến mãi" Select — uses selectedPromoId (useState, NOT persisted in store); lists promotions filtered only by isPromotionActive.
+- Read /home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx (1129 lines):
+  * Lines 290-313: fetches /api/supabase/incentives?type=promotion and filters via getActivePromotionsForBooking({branchId}) — RESPECTS branch + date + usage (better than cashier).
+  * Lines 316-334: promoDiscount via calculatePromotionDiscount — service_ids/category_ids match. NO applyScope check. NO voucher code lookup.
+  * Lines 436-534: handleConfirm — sends `discount: promoDiscount` (correct amount) and `promotion.discountAmount: promoDiscount` (correct). Booking module saves the correct discount amount on the invoice.
+  * Lines 657-715: Select UI — computes would-be discount and rejects selection if 0; no applyScope/membership check.
+- Read /home/z/my-project/download/CRM/src/components/features/booking/paid-invoice-view.tsx — display-only (paid invoice shows saved promotion.name + discountValue% + discount amount). Not a selection point.
+- Read /home/z/my-project/download/CRM/src/app/api/supabase/incentives/route.ts (GET list + POST create):
+  * GET returns ALL rows for the type (no server-side date/branch/usage filter — returns expired + fully-used + wrong-branch promos). Client is responsible for filtering. Returns branchIds, applyScope, serviceIds, etc. in camelCase.
+  * POST creates incentive with apply_scope defaulting to "time_range". No validation of applyScope against actual membership rules.
+- Read /home/z/my-project/download/CRM/src/app/api/supabase/incentives/[id]/route.ts (PUT) — same shape; no server-side validation of discount logic.
+- Read /home/z/my-project/download/CRM/src/app/api/supabase/invoices/route.ts (POST) — accepts `promotion` object as-is; does NOT validate discountValue/discountAmount against the incentives table; increments used_count by id lookup AFTER insert (race condition possible). used_count check is NOT enforced server-side.
+- Read /home/z/my-project/download/CRM/src/app/api/supabase/invoices/[id]/route.ts (PUT/DELETE) — on PUT, when promotion id changes, decrements old promo used_count + increments new (best-effort). On DELETE, decrements used_count. Same race-condition caveat.
+- Read /home/z/my-project/download/CRM/src/app/cashier/invoices/page.tsx (lines 925-968) and /home/z/my-project/download/CRM/src/app/cashier/activity/page.tsx (lines 705-754) and /home/z/my-project/download/CRM/src/components/features/customers/customer-history-dialog.tsx (lines 590-614) — all three are READ-ONLY displays of saved invoices' promotion info; not selection points but they reveal the BUG that the cashier's saved promotion.discountAmount = 0 (they render "PromoName (−0đ)").
+- Read /home/z/my-project/download/CRM/src/components/features/customer-care/incentive-dialog.tsx (lines 60-189) — confirms the create/edit dialog DOES capture applyScope ("time_range" | "all_customers" | "members_only"), branchIds, serviceIds (per discountType), discountValue, usageLimit, startDate, endDate. The settings ARE stored; the bug is they're not ENFORCED at apply time.
+- Grep for `applyScope`/`members_only` across src (excluding generated prisma) — references only in: promotion-utils.ts (declaration), constants.ts (labels), incentives route.ts (read/write), incentive-dialog.tsx (form), promotion-list.tsx + voucher-list.tsx (display), incentive-detail-dialog.tsx (display). ZERO references in any apply/selection logic.
+- Grep for `voucherCode` — references only in cashier-store.ts (state declaration + setter) and invoice-summary.tsx (Input + display). NOT in any checkout payload, NOT in any server route.
+- Grep for `isMember`/`membership`/`customer_rank_id` — no membership field on customer record. Only CustomerRank model exists (loyalty rank with minSpending/discountRate). The customer_type ("old"/"new") is the closest concept.
+- Grep for `auto_apply_target`/`autoApplyTarget` — declared on IncentiveShape and stored, but NO auto-apply logic anywhere in src. Dead field.
+
+Stage Summary:
+
+## Selection/Application Points Found
+
+1. **Cashier module — "Chương trình khuyến mãi" Select dropdown**
+   File: `src/components/features/cashier/invoice-summary.tsx:2017-2035` (Select), handler `handlePromoSelect` at `:605-648`. Fetches promotions at `:437-443`. Filter at `:448-450` (only isPromotionActive).
+
+2. **Cashier module — "Nhập mã Voucher" text Input**
+   File: `src/components/features/cashier/invoice-summary.tsx:1992-2010`. Calls `setVoucherCode(activeTabId, e.target.value)` only.
+
+3. **Booking module — "Chương trình khuyến mãi" Select dropdown (invoice-dialog)**
+   File: `src/components/features/booking/invoice-dialog.tsx:673-712` (Select), promoDiscount computed at `:319-334`, handleConfirm saves at `:436-534`. Fetch + filter at `:295-313` via getActivePromotionsForBooking.
+
+4. **Invoice checkout (server-side) — used_count increment**
+   File: `src/app/api/supabase/invoices/route.ts:524-546` (POST) and `src/app/api/supabase/invoices/[id]/route.ts:236-278` (PUT, when promo id changes) and `:443-488` (DELETE, decrement). Best-effort, AFTER insert/update — no atomic check against usageLimit.
+
+5. **Read-only displays of saved promotion** (NOT selection points, included for context):
+   - `src/components/features/booking/paid-invoice-view.tsx:169-180`
+   - `src/app/cashier/invoices/page.tsx:946-954`
+   - `src/app/cashier/activity/page.tsx:722-732`
+   - `src/components/features/customers/customer-history-dialog.tsx:599-614`
+   - `src/components/features/cashier/invoice-summary.tsx:2046-2054` (paid/cancelled tab)
+   - `src/components/features/report/revenue-invoice-view.tsx:80-120` (report display)
+
+## Discount Logic Analysis
+
+### Point 1: Cashier "Chương trình khuyến mãi" Select (`invoice-summary.tsx:2017`)
+- File: `src/components/features/cashier/invoice-summary.tsx`
+- How discount is calculated: `handlePromoSelect` (line 605) takes the picked promo's `discountValue` (pct), filters `invoice.items` excluding type==="product" (i.e. services + packages), then for each eligible line computes `share = Math.round((price * quantity * pct) / 100)` and writes it as a per-line VND discount via `updateInvoiceItemDiscount(activeTabId, it.id, share, "VND")`. Ineligible service/package lines are reset to 0 discount. `invoice.discountAmount` is cleared to 0. The store's `getInvoiceTotal` then subtracts each per-line discount via `item.total = price*qty - resolveDiscountAmount(item)`.
+- Respects discountType? **PARTIAL.** service / service_category / SERVICE_DISCOUNT / PRODUCT_DISCOUNT / product are all treated as a flat percent in `isItemPromoEligible` (line 576). For `service` and `service_category` the matching is correct (by service_id or category_id). For `product` type, `targetIds` are product ids but `item.itemId` is a service id → never matches → eligible is empty → user sees alert "Chương trình khuyến mãi không được áp dụng cho dịch vụ hiện tại" and the promo is rejected. So `discountType: "product"` promotions NEVER work in the cashier. Packages (type="package") are included in `serviceItems` but never match (their itemId is a package id, not a service id, and they have no category_id lookup) → never discounted.
+- Respects serviceIds? **YES for service / service_category.** `isItemPromoEligible` filters by `targetIds.includes(item.itemId)` (or category_id for service_category). null/empty serviceIds = apply to all services.
+- Respects branchIds? **NO.** The promotions list filter at line 448 only calls `isPromotionActive(p)`. It does NOT call `isPromotionForBranch`. The TS type for `promotionsData` doesn't even declare `branchIds`. So promotions scoped to branch A appear in branch B's cashier.
+- Respects validity window? **YES.** `isPromotionActive` checks startDate/endDate.
+- Respects applyScope (members_only)? **NO.** No membership check anywhere. A `members_only` promotion is offered to walk-in, new, and old customers alike.
+- Respects usageLimit? **PARTIAL.** `isPromotionActive` filters out `usedCount >= usageLimit` at SELECT time (client-side). No server-side atomic check. Two cashiers selecting the same single-use promo simultaneously could both check out.
+- BUGS/DISCREPANCIES:
+  1. **`discountAmount: invoice.discountAmount` is sent as the saved promotion's discountAmount** (line 840), but `handlePromoSelect` cleared `invoice.discountAmount` to 0 (line 647). So saved invoices always have `promotion.discountAmount = 0`. Display in `cashier/invoices/page.tsx:951`, `cashier/activity/page.tsx:727`, `customer-history-dialog.tsx:599-614`, `revenue-invoice-view.tsx:105` shows "PromoName (−0đ)". The actual discount IS applied per-line and is correctly reflected in `final_amount`, but the promotion metadata is wrong.
+  2. **No branch filter** on the dropdown — promotions for other branches are selectable.
+  3. **`discountType: "product"` promotions never apply** — `isItemPromoEligible` matches item.itemId (service id) against product targetIds → always empty.
+  4. **Package items never discounted** — included in serviceItems filter but never match by id/category.
+  5. **`applyScope: "members_only"` not enforced** — no membership check.
+  6. **Selecting a promo WIPES manual per-line discounts** on ineligible service/package items (line 642: `updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")`).
+  7. **`selectedPromoId` is component state (useState, line 117), NOT persisted in the store.** Switching tabs and coming back loses the dropdown selection (the per-line discounts remain applied, so the UI shows discounts in the column but the Select shows "Không áp dụng" — inconsistent).
+  8. **No server-side validation** of the promo's discountValue/discountAmount against the incentives table. Client sends arbitrary `promotion` object; server stores it as-is.
+
+### Point 2: Cashier "Nhập mã Voucher" Input (`invoice-summary.tsx:1995`)
+- File: `src/components/features/cashier/invoice-summary.tsx`
+- How discount is calculated: **NOT calculated.** The input value is written to `invoice.voucherCode` via `setVoucherCode` (cashier-store.ts:469). `voucherCode` is never read by `getInvoiceTotal`, `getSubtotal`, `handlePromoSelect`, or the checkout mutation. It is not included in the POST/PUT `/api/supabase/invoices` payload. It is purely cosmetic state.
+- Respects discountType? **N/A** (no lookup performed).
+- Respects serviceIds? **N/A**.
+- Respects branchIds? **N/A**.
+- Respects validity window? **N/A**.
+- Respects applyScope? **N/A**.
+- Respects usageLimit? **N/A**.
+- BUGS/DISCREPANCIES:
+  1. **The voucher code input is non-functional.** It does NOT look up the voucher in the `incentives` table (type=voucher), does NOT validate the code, does NOT apply any discount, and is NOT sent to the server. The customer could type any string and nothing happens. The voucher tab in CSKH creates voucher rows (with codes), but there is no consumer of those codes in the cashier or booking module.
+
+### Point 3: Booking "Chương trình khuyến mãi" Select (`invoice-dialog.tsx:673`)
+- File: `src/components/features/booking/invoice-dialog.tsx`
+- How discount is calculated: `promoDiscount` (line 319) calls `calculatePromotionDiscount(selectedPromo, services, serviceIdsMatch)` from promotion-utils. That helper filters `services` by `service_id` (or `category_id` for service_category), sums `eligible.reduce(price)`, multiplies by `pct/100`, rounds. `grandTotal = Math.max(0, servicesTotal + productsTotal - promoDiscount) + tip` (line 338). On confirm (line 436), sends `discount: promoDiscount` and `promotion.discountAmount: promoDiscount` to the invoices API.
+- Respects discountType? **PARTIAL.** Same issue as cashier: `calculatePromotionDiscount` accepts discountType "product" in its DISCOUNT_TYPES set, but then matches by `service_id` against targetIds (which are product ids for "product" promos) → eligible is empty → discount = 0 → the booking dialog blocks selection with the same alert. So `discountType: "product"` promotions never work here either. Packages are not part of `booking.services` (the services list comes from the booking), so package discounts are not considered at all.
+- Respects serviceIds? **YES for service / service_category.** `getPromotionServiceIds` parses JSON; null/empty = all.
+- Respects branchIds? **YES.** `getActivePromotionsForBooking` calls `isPromotionForBranch(p, branchId)` (line 300). Branch comes from `booking.branchId` or `booking.branch.id`.
+- Respects validity window? **YES.** `isPromotionActive` is called inside `getActivePromotionsForBooking`.
+- Respects applyScope (members_only)? **NO.** No membership check. `getActivePromotionsForBooking` doesn't take a membership parameter.
+- Respects usageLimit? **PARTIAL.** `isPromotionActive` filters `usedCount >= usageLimit` at SELECT time. No server-side atomic check. The invoice POST/PUT increments used_count AFTER the insert — concurrent bookings can exceed the limit.
+- BUGS/DISCREPANCIES:
+  1. **`discountType: "product"` promotions never apply** — same root cause as cashier (calculatePromotionDiscount matches by service_id even for product promos).
+  2. **`applyScope: "members_only"` not enforced** — no membership check.
+  3. **No server-side atomic usageLimit check** — race condition.
+  4. The promo discount is subtracted from `(servicesTotal + productsTotal)` even though it's calculated from services only — this is mathematically correct (the discount amount is the same), but it means a "10% off services" promo reduces the customer's payable by 10% of services, NOT 10% of the combined total. Confirm this is the intended behavior.
+  5. **No voucher code lookup** — the booking invoice dialog has no voucher input at all, even though the CSKH module lets staff create vouchers (type=voucher) with codes.
+
+### Point 4: Server-side checkout (`/api/supabase/invoices` POST + PUT)
+- File: `src/app/api/supabase/invoices/route.ts` (POST, lines 288-578) and `src/app/api/supabase/invoices/[id]/route.ts` (PUT, lines 169-441).
+- How discount is calculated: **Server does NOT recalculate the discount.** It trusts the client-supplied `discount`, `tip`, `final_amount`, and `promotion` fields. The only promotion-related server action is incrementing/decrementing `incentives.used_count` by looking up `promotion.id` (POST line 524-546; PUT line 236-278; DELETE line 443-488). The increment is best-effort and runs AFTER the invoice insert/update — not atomic.
+- Respects discountType? **NO** — server doesn't know about discountType.
+- Respects serviceIds? **NO** — server doesn't validate which items the promo applies to.
+- Respects branchIds? **NO** — server doesn't check the promo's branchIds against the invoice's branch_id.
+- Respects validity window? **NO** — server doesn't check startDate/endDate at checkout time. A promo that expired between SELECT and CHECKOUT would still be applied.
+- Respects applyScope? **NO** — server doesn't know about applyScope.
+- Respects usageLimit? **NO atomic check.** Server increments used_count after the fact; never rejects an invoice because used_count >= usage_limit. Concurrent checkouts can exceed the limit.
+- BUGS/DISCREPANCIES:
+  1. **No server-side validation** of any promotion field. A buggy/malicious client can send arbitrary `discount`, `promotion.discountAmount`, etc. The displayed/saved values are taken at face value.
+  2. **No atomic usageLimit enforcement.** The used_count check happens client-side only (at SELECT time). Race condition: two cashiers selecting the last slot of a single-use promo simultaneously both succeed.
+  3. **No server-side date check.** A promo that expires between the cashier selecting it and clicking "Hoàn tất" is still applied (the saved invoice will reference an expired promo). The display logic in `revenue-invoice-view.tsx:80-120` will still show the promo name with its percent, even though it's expired.
+  4. **used_count increment is best-effort** — wrapped in try/catch and silently fails on error. A network blip leaves used_count stale.
+
+## Recommendations
+
+### Critical bugs to fix
+
+1. **`src/components/features/cashier/invoice-summary.tsx:840`** — `discountAmount: invoice.discountAmount` is always 0 when a promo is active. Fix: compute the actual per-line promo discount sum:
+   ```ts
+   const promoDiscountSum = invoice.items
+     .filter((it) => it.type !== "product" && isItemPromoEligible(it, selectedPromo))
+     .reduce((s, it) => s + resolveDiscountAmount(it), 0);
+   // use promoDiscountSum in promotionMeta.discountAmount
+   ```
+   Or refactor to use `calculatePromotionDiscount` from promotion-utils (like the booking dialog does) for consistency.
+
+2. **Voucher code lookup** — `src/components/features/cashier/invoice-summary.tsx:1995-2010`. Implement: when the cashier types a voucher code, debounce-fetch `/api/supabase/incentives?type=voucher&search=<code>` (or add a new `/api/supabase/incentives/lookup?code=<code>&type=voucher` endpoint), validate the code exists + is active + branch-eligible + customer-eligible, then auto-apply the discount (mirroring handlePromoSelect). If invalid, show an error and clear the code. Also send the voucher metadata in the checkout payload so used_count increments for vouchers too.
+
+3. **Branch filter in cashier** — `src/components/features/cashier/invoice-summary.tsx:448-450`. Replace `isPromotionActive(p)` with `getActivePromotionsForBooking(promotionsData?.items || [], { branchId: selectedBranchId })` (the helper already exists in promotion-utils and is used by the booking dialog). Add `branchIds` to the TS type at line 427-435.
+
+4. **`discountType: "product"` handling** — `src/lib/promotion-utils.ts:109-148` and `src/components/features/cashier/invoice-summary.tsx:576-589`. Either (a) make `calculatePromotionDiscount` and `isItemPromoEligible` branch on discountType==="product" to match against product items (and pass product items into the function), or (b) if "product" promos are not yet supported in the cashier/booking flow, filter them out of the selector list with a note. Currently they silently fail with a confusing alert.
+
+5. **`applyScope: "members_only"` enforcement** — Add a helper `isPromotionForCustomer(promo, { customerType, customerGroup })` in promotion-utils. Call it in both `invoice-summary.tsx:448` and `invoice-dialog.tsx:300`. Map "members_only" to (customerType === "old") OR (customer.group.name contains "Khách cũ"/"Thành viên") — confirm the business rule with the product team since the customer model has no explicit `is_member` field (only `customer_type` derived from completed invoices + `customer_groups` membership).
+
+### Consistency / state bugs to fix
+
+6. **`selectedPromoId` not persisted** — `src/components/features/cashier/invoice-summary.tsx:117`. Move to the cashier store's `InvoiceData` (next to `voucherCode`/`discountAmount`) so switching tabs and back preserves the selection. Add a `useEffect` that re-syncs `selectedPromoId` from the store on tab switch.
+
+7. **Don't wipe manual per-line discounts when promo doesn't apply** — `src/components/features/cashier/invoice-summary.tsx:642`. When a promo is selected, only OVERWRITE the discount on ELIGIBLE lines; leave ineligible lines' existing discounts untouched. (Or document this as intended behavior.)
+
+8. **Server-side validation (defense in depth)** — `src/app/api/supabase/invoices/route.ts` POST + PUT. Before accepting the `promotion` field, fetch the incentive by `promotion.id`, verify it exists, is `type=promotion`, is `isPromotionActive` at `now()`, is `isPromotionForBranch(branch_id)`, and re-compute the expected discount from the invoice's items + the promo's discountValue/discountType/serviceIds. Reject (or clamp) if the client-supplied discount doesn't match. Do the same for vouchers when voucher lookup is implemented.
+
+9. **Atomic usageLimit check** — `src/app/api/supabase/invoices/route.ts` POST. Wrap the used_count check + increment in a transaction or use a conditional UPDATE: `UPDATE incentives SET used_count = used_count + 1 WHERE id = $1 AND (usage_limit = 0 OR used_count < usage_limit) RETURNING used_count;`. If 0 rows returned, the promo is fully used — reject the invoice (or save without the promo and warn).
+
+### Lower-priority / display
+
+10. **Filter out expired promotions in the API** — `src/app/api/supabase/incentives/route.ts` GET. Add optional `?active=true` filter that excludes `end_date < now()` and `used_count >= usage_limit`. Reduces client-side filtering and prevents expired promos from appearing in selectors when the client forgets to filter.
+
+11. **Filter `discountType: "product"` promos from the service-only selectors** until product-discount support is added — prevents the confusing "không được áp dụng cho dịch vụ hiện tại" alert.
+
+12. **`auto_apply_target` field is unused** — either implement auto-apply on invoice creation (when set, auto-select the promo for eligible invoices) or remove the field from the create dialog at `src/components/features/customer-care/incentive-dialog.tsx:699`.
+
+---
+Task ID: research-cashier-staff
+Agent: general-purpose
+Task: Research the cashier "Thêm dịch vụ" dialog staff requirement to make staff optional
+
+Work Log:
+- Read prior worklog at /home/z/my-project/download/CRM/worklog.md (last sections: Task 3-research about promotion/voucher discount logic; earlier tasks about booking/cashier workflow, multi-customer, columns).
+- IMPORTANT DISCOVERY: the "Thêm dịch vụ" dialog with the staff picker is NOT in `src/components/features/cashier/invoice-summary.tsx` (as the task description said) — it is in `src/components/features/cashier/service-selector.tsx`. Grepped the entire `src/components/features/cashier/` directory for "Thêm dịch vụ": only one match at `service-selector.tsx:1474`. The state vars `changeStaffPickStaffId`/`changeStaffItemId`/`changeStaffError` that the task mentioned ARE in `invoice-summary.tsx`, but they belong to a DIFFERENT dialog — the per-item "Xếp nhân viên" (Assign Staff) dialog that opens AFTER a service is already added. Both are documented below.
+- Read `src/components/features/cashier/service-selector.tsx` (1802 lines):
+  * Line 164: `canAssignStaff = hasPermission("assign_staff")` — gate that decides whether the staff Select is shown at all (hidden when the logged-in staff lacks the permission).
+  * Line 178: `const [selectedStaffId, setSelectedStaffId] = useState<string>("")` — state var tracking the picked staff in the "Thêm dịch vụ" dialog.
+  * Lines 1466-1589: the "Thêm dịch vụ" dialog itself (Dialog open={serviceDialogOpen}); DialogTitle "Thêm dịch vụ" at line 1474.
+  * Lines 1488-1518: staff Select block, gated by `canAssignStaff`. Label has a red asterisk: "Nhân viên*". Placeholder "Chọn nhân viên".
+  * Lines 1514-1516: error text — `{!selectedStaffId && (<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>)}`.
+  * Line 1581: OK button disabled expression — `disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}`.
+  * Line 1582: title tooltip — `title={canAssignStaff && !selectedStaffId ? "Vui lòng chọn nhân viên" : undefined}`.
+  * Lines 647-665: `handleSimpleStaffDialogConfirm` — the OK handler for the package/product dialog (a SEPARATE simpler dialog). Packages require staff when canAssignStaff (line 655: `if (isPackage && canAssignStaff && !staff) return;`); products never require staff.
+  * Lines 1775-1796: the simpler dialog's OK button — `disabled={activeTab === "package" && canAssignStaff && !simpleStaffPickStaffId}` (line 1781). Only blocks OK for packages with assign_staff permission. Products are always enabled.
+- Read `handleDialogConfirm` (the OK handler for the "Thêm dịch vụ" dialog) at `service-selector.tsx:674-1047`:
+  * Line 678: `const staff = selectedStaffId ? staffList.find((s) => s.id === selectedStaffId) : null` — staff is `null` if no staffId.
+  * Line 679: `const staffName = staff?.name` — undefined when no staff picked.
+  * Line 688: `const shouldSyncBooking = !!(selectedStaffId && selectedDate && selectedTime)` — booking in Lịch hẹn is created ONLY when staff + date + time are ALL set. If staff is empty → no booking sync.
+  * Lines 802-819: the `!shouldSyncBooking` branch — adds the line item via `handleAddItem(selectedService, { staffName, date, time })` and returns. `staffName` may be `undefined` here. This branch ALREADY handles "no staff" gracefully — it just adds the invoice line without creating a booking. So the dialog does NOT functionally require staff; the requirement is purely a UI gate at line 1581.
+  * Lines 822-1047: the `shouldSyncBooking` branch — runs the client-side staff conflict check (lines 850-930), adds the line item, and creates/updates the booking in Lịch hẹn via POST/PUT /api/supabase/bookings. The staff_id is passed to `createBookingForTab` at line 964. Inside `createBookingForTab` (line 1056), the payload includes `services: [{ service_id, service_category_id, staff_id: staffId }]` (line 1156-1162) — staff_id can be an empty string and the API accepts it (stored as null).
+- Read `src/components/features/cashier/invoice-summary.tsx` (3107 lines) for the "Xếp nhân viên" dialogs (different from "Thêm dịch vụ"):
+  * Lines 519-523: state vars for the per-item "Xếp nhân viên" dialog:
+    - `changeStaffItemId` (line 521) — the invoice item being edited.
+    - `changeStaffPickStaffId` (line 522) — the picked staff.
+    - `changeStaffError` (line 523) — conflict error message.
+  * Lines 2508-2733: the per-item "Xếp nhân viên" dialog (opens when the cashier clicks the small square "Xếp nhân viên" button next to a line item's staff name). DialogTitle "Xếp nhân viên" at line 2527.
+  * Lines 2557-2558: error text — `{!changeStaffPickStaffId && (<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>)}`.
+  * Line 2580: OK disabled expression — `disabled={!changeStaffPickStaffId || !activeTabId || !changeStaffItemId || changeStaffChecking}`.
+  * Lines 2582-2727: OK click handler — runs a staff conflict check (lines 2599-2719) ONLY for items with date+time+itemId (services/packages linked to a booking); products skip the check. On no conflict (or no date/time), calls `setInvoiceItemStaff(activeTabId, changeStaffItemId, newStaffName)` (line 2723). This handler ALWAYS requires a staff (early-return at line 2589 if `!newStaffName`) — functionally requires staff because the whole point of this dialog is to ASSIGN a staff.
+  * Lines 533-534: state vars for the bulk "Xếp nhân viên" dialog — `assignAllStaffOpen`, `assignAllStaffPickStaffId`.
+  * Lines 2735-2827: the bulk "Xếp nhân viên cho toàn bộ đơn" dialog. DialogTitle at line 2755.
+  * Lines 2783-2784: error text — `{!assignAllStaffPickStaffId && (<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>)}`.
+  * Line 2807: OK disabled expression — `disabled={!assignAllStaffPickStaffId || !activeTabId || !invoice || invoice.items.length === 0}`.
+  * Lines 2809-2820: OK click handler — calls `setAllInvoiceItemsStaff(activeTabId, staffName)` (line 2817). Also functionally requires staff (early-return at line 2815 if `!staffName`).
+- Read `src/stores/cashier-store.ts` (568 lines):
+  * Line 19: `staffName?: string` on `InvoiceItem` — OPTIONAL.
+  * Lines 272-318: `addInvoiceItem(customerId, item)` — accepts items with undefined `staffName`. Identity uses `(itemId, staffName||"")` so two items with no staff merge into one (quantity+1) — relevant if staff becomes optional.
+  * Lines 421-441: `setInvoiceItemStaff(customerId, itemId, staffName)` — writes `staffName: staffName || undefined`. Already handles empty string → undefined.
+  * Lines 443-467: `setAllInvoiceItemsStaff(customerId, staffName)` — same `staffName || undefined` pattern.
+- Read `src/app/api/supabase/bookings/route.ts` (649 lines) — POST handler:
+  * Lines 293-316: required-field validation — only `date_time`, `customer_id`, and `services.length > 0` are required. NO validation of `staff_id` per service.
+  * Lines 355-531: server-side staff conflict check. CRITICAL: it iterates `services` and at line 378-386 builds `newSlots` via `.map(...).filter(x !== null)` where the `.map` returns `null` when `!s.staff_id || !s.service_id` (line 380). So services with empty/null staff_id are simply SKIPPED in the conflict check — they do NOT trigger a 400 error. They are still inserted.
+  * Lines 585-605: booking_services insert — `.map` builds rows with `staff_id: s.staff_id ?? null` (line 598). Empty string OR null → stored as null. No rejection.
+  * Conclusion: POST allows empty/null staff_id in services.
+- Read `src/app/api/supabase/bookings/[id]/route.ts` (663 lines) — PUT handler:
+  * Lines 81-98: `replaceBookingServices` — builds rows with `staff_id: s.staff_id ?? null` (line 93). Same as POST — accepts null. No validation.
+  * Lines 226-253: server-side staff conflict check on PUT — same pattern as POST; `.map` returns null when `!s.staff_id || !s.service_id` (line 247), filtered out. Services without staff are skipped, not rejected.
+  * Conclusion: PUT also allows empty/null staff_id.
+- Read `src/app/dat-lich/page.tsx` (1214 lines) — the public booking kiosk form:
+  * Line 49: `staff_id: string | null` declared in the Staff interface (a booking_services row type).
+  * Line 77: `staffId: string` on a service row.
+  * Line 83: default `staffId: ""`.
+  * Lines 488-491: `completeRows = serviceRows.filter((r) => r.categoryId && r.serviceId && r.staffId)` — a row is "complete" only when ALL THREE (category + service + staff) are set.
+  * Lines 503-509: `canSubmit = part1Complete && completeRows.length >= 1 && !duplicateStaff && !!bookingTime && !!selectedBranchId && !submitting` — staff IS required to submit.
+  * Lines 982-1003: the staff Select UI. Placeholder "Chọn nhân viên". When list is empty: "Không có nhân viên ở cửa hàng này".
+  * Lines 638-642: submit payload — `services: completeRows.map(row => ({ service_id, service_category_id, staff_id: row.staffId }))`. Since `completeRows` already filters out rows without staffId, only staff-bearing services are sent.
+  * Conclusion: dat-lich REQUIRES staff. Staff is NOT optional in the public booking form. (If we want cashier to allow optional staff, dat-lich is a separate question — its requirement is independent.)
+- Confirmed: `src/lib/auth/permissions.ts:16` documents `assign_staff` as a permission key. Default staff (cashier role) typically has it; the kiosk (no staff logged in) does not, which is why the dat-lich form still shows the staff Select (it's not gated by canAssignStaff there — that gate is only in the cashier's service-selector.tsx).
+
+Stage Summary:
+
+## Dialog Location
+There are THREE staff-related dialogs in the cashier module. The one the task description names ("Thêm dịch vụ") is in `service-selector.tsx`, not `invoice-summary.tsx`:
+
+1. **"Thêm dịch vụ" dialog (the one the task asked about)**
+   - File: `src/components/features/cashier/service-selector.tsx:1466-1589`
+   - DialogTitle at line 1474.
+   - Triggered by clicking a service in the service tab → `handleServiceClick` (line 547) opens it via `setServiceDialogOpen(true)`.
+
+2. **Per-item "Xếp nhân viên" dialog** (referenced by the state vars in the task description — different dialog, opens AFTER a service is added, to change its staff)
+   - File: `src/components/features/cashier/invoice-summary.tsx:2508-2733`
+   - DialogTitle "Xếp nhân viên" at line 2527.
+   - Triggered by clicking the small square "Xếp nhân viên" button next to each line item.
+
+3. **Bulk "Xếp nhân viên cho toàn bộ đơn" dialog** (assigns ONE staff to every line item)
+   - File: `src/components/features/cashier/invoice-summary.tsx:2735-2827`
+   - DialogTitle at line 2755.
+   - Triggered by the "Xếp nhân viên" button in the action bar.
+
+(There's also a 4th, simpler "Thêm sản phẩm / Thêm gói dịch vụ" dialog at `service-selector.tsx:1670-1799` — opens for product/package clicks; staff is required ONLY for packages, never for products.)
+
+## OK Button Disabled Condition
+
+### Dialog 1 — "Thêm dịch vụ" (`service-selector.tsx`)
+- Line 1581: `disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}`
+- Title tooltip at line 1582: `title={canAssignStaff && !selectedStaffId ? "Vui lòng chọn nhân viên" : undefined}`
+- The condition that blocks OK without staff: `canAssignStaff && !selectedStaffId` — i.e. the logged-in staff has the `assign_staff` permission AND no staff has been picked. (When `canAssignStaff` is false, the Select is hidden and OK is always enabled — services are added without staff.)
+
+### Dialog 2 — per-item "Xếp nhân viên" (`invoice-summary.tsx`)
+- Line 2580: `disabled={!changeStaffPickStaffId || !activeTabId || !changeStaffItemId || changeStaffChecking}`
+- Title tooltip at line 2581: `title={!changeStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}`
+- The condition that blocks OK without staff: `!changeStaffPickStaffId`. The whole purpose of this dialog is to ASSIGN a staff to an existing line item, so staff is functionally required here.
+
+### Dialog 3 — bulk "Xếp nhân viên cho toàn bộ đơn" (`invoice-summary.tsx`)
+- Line 2807: `disabled={!assignAllStaffPickStaffId || !activeTabId || !invoice || invoice.items.length === 0}`
+- Title tooltip at line 2808: `title={!assignAllStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}`
+- The condition that blocks OK without staff: `!assignAllStaffPickStaffId`. Bulk-assign is meaningless without a picked staff.
+
+## Staff State + Validation
+
+### Dialog 1 — "Thêm dịch vụ"
+- State var: `selectedStaffId` declared at `service-selector.tsx:178` (`useState<string>("")`). Reset to "" on dialog open (line 549) and on dialog close (line 816).
+- Error message shown at line 1514-1516: `<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>`, conditional on `{!selectedStaffId &&}`. Only rendered when `canAssignStaff` is true (the surrounding block at line 1488 is `{canAssignStaff && (...)}`).
+- Triggered when: the cashier opens the dialog and the staff Select value is still "".
+
+### Dialog 2 — per-item "Xếp nhân viên"
+- State vars: `changeStaffItemId` (line 521), `changeStaffPickStaffId` (line 522), `changeStaffError` (line 523).
+- Error message shown at line 2557-2558: `<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>`, conditional on `{!changeStaffPickStaffId &&}`.
+- Triggered when: the dialog is open and no staff has been picked.
+- `changeStaffError` (the red box at lines 2560-2563) holds the staff-conflict error message — set inside the OK click handler when the conflict check finds the picked staff is already booked (line 2696-2707).
+
+### Dialog 3 — bulk "Xếp nhân viên"
+- State vars: `assignAllStaffOpen` (line 533), `assignAllStaffPickStaffId` (line 534).
+- Error message shown at line 2783-2784: `<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>`, conditional on `{!assignAllStaffPickStaffId &&}`.
+
+## OK Click Handler
+
+### Dialog 1 — "Thêm dịch vụ"
+- Function: `handleDialogConfirm` at `service-selector.tsx:674` (async).
+- Flow:
+  1. Line 675: `if (!activeTabId || !selectedService) return;` — guards.
+  2. Line 678: `const staff = selectedStaffId ? staffList.find(s => s.id === selectedStaffId) : null` — null when no staff.
+  3. Line 679: `const staffName = staff?.name` — undefined when no staff.
+  4. Line 688: `const shouldSyncBooking = !!(selectedStaffId && selectedDate && selectedTime)` — booking sync requires staff AND time AND date.
+  5. Lines 700-768: one-time-offer check + existing-bookings confirmation prompt — ONLY run when `shouldSyncBooking` is true. Skipped when no staff.
+  6. Lines 802-819 (the `!shouldSyncBooking` branch): adds the invoice line via `handleAddItem(selectedService, { staffName, date, time })` and returns. **No booking created.** Already handles no-staff gracefully — `staffName` is undefined and that's fine.
+  7. Lines 822-1047 (the `shouldSyncBooking` branch): runs the client-side staff conflict check, adds the invoice line, then calls `createBookingForTab({ staffId: selectedStaffId, ... })` (line 960) or PUTs the existing booking with the new service entry (line 990-993).
+- **Does it require staff_id?** NO, functionally. The `!shouldSyncBooking` branch (lines 806-819) is the no-staff path and it works. The UI gate at line 1581 is what forces staff — remove that and the handler will happily add the line without staff (and without creating a booking). The server-side booking API also accepts null staff_id (see below).
+
+### Dialog 2 — per-item "Xếp nhân viên"
+- Inline async arrow at `invoice-summary.tsx:2582-2727`.
+- Flow:
+  1. Lines 2583-2589: guards; early-return if `!activeTabId || !changeStaffItemId`; resolves `newStaffName` from the staff list. Early-return at line 2589 if `!newStaffName` — so the handler HARD-requires a staff.
+  2. Lines 2599-2719: optional staff conflict check — only for items with date+time+itemId (services/packages linked to a booking). Products skip the check.
+  3. Line 2723: `setInvoiceItemStaff(activeTabId, changeStaffItemId, newStaffName)` — updates ONLY the staffName on the line item.
+  4. Lines 2724-2726: reset dialog state + close.
+- **Does it require staff_id?** YES, functionally. The whole point is to assign a staff — without one, nothing happens (early return). Also note: this dialog ONLY updates the invoice line's `staffName`; it does NOT update the underlying booking's `booking_services.staff_id`. (Existing bookings keep the old staff in Supabase; only the invoice preview is changed. This is a pre-existing inconsistency, not introduced by this research.)
+
+### Dialog 3 — bulk "Xếp nhân viên"
+- Inline arrow at `invoice-summary.tsx:2809-2820`.
+- Flow:
+  1. Lines 2810-2815: guards; resolves `staffName`; early-return if `!staffName`.
+  2. Line 2817: `setAllInvoiceItemsStaff(activeTabId, staffName)` — applies the same staffName to every line item.
+  3. Lines 2818-2819: close + reset.
+- **Does it require staff_id?** YES, functionally. Bulk-assign is meaningless without a picked staff. (Also same caveat: only updates the invoice preview, not the underlying bookings in Supabase.)
+
+## Booking API - staff_id requirement
+
+### POST /api/supabase/bookings
+- File: `src/app/api/supabase/bookings/route.ts`, POST handler starts at line 275.
+- Validation (lines 293-316): only `date_time`, `customer_id`, and `services.length > 0` are required. NO check on `staff_id` per service.
+- Conflict check (lines 355-531): the `newSlots` builder (lines 378-386) FILTERS OUT services with `!s.staff_id || !s.service_id` (line 380) — they are simply not considered for conflict. They do NOT cause a 400.
+- booking_services INSERT (lines 585-605): builds rows with `staff_id: s.staff_id ?? null` (line 598). Empty string OR null → stored as null. No rejection.
+- **Conclusion: POST allows empty/null staff_id in services.** YES.
+
+### PUT /api/supabase/bookings/[id]
+- File: `src/app/api/supabase/bookings/[id]/route.ts`.
+- `replaceBookingServices` helper (lines 81-98): builds rows with `staff_id: s.staff_id ?? null` (line 93). No validation.
+- Conflict check (lines 226-282): same pattern as POST — `.map` returns null when `!s.staff_id || !s.service_id` (line 247), filtered out. No rejection.
+- **Conclusion: PUT also allows empty/null staff_id in services.** YES.
+
+### Exact line refs
+- POST required-field check: `route.ts:293-316` (no staff_id check).
+- POST conflict check filter (skips empty staff_id): `route.ts:380`.
+- POST booking_services insert (accepts null): `route.ts:598`.
+- PUT replaceBookingServices insert (accepts null): `[id]/route.ts:93`.
+- PUT conflict check filter (skips empty staff_id): `[id]/route.ts:247`.
+
+## dat-lich (booking form) staff handling
+- File: `src/app/dat-lich/page.tsx`.
+- **Staff IS REQUIRED in the dat-lich form.** Not optional.
+- Line 488-489: `completeRows = serviceRows.filter(r => r.categoryId && r.serviceId && r.staffId)` — a row counts only when staff is picked.
+- Line 503-509: `canSubmit = part1Complete && completeRows.length >= 1 && !duplicateStaff && !!bookingTime && !!selectedBranchId && !submitting` — submit is blocked until at least one complete row exists.
+- Lines 982-1003: staff Select UI. Placeholder "Chọn nhân viên". Empty-state message "Không có nhân viên ở cửa hàng này".
+- Lines 638-642: submit payload sends `staff_id: row.staffId` for each complete row. Since incomplete rows are filtered out, only staff-bearing services are sent.
+- The dat-lich form does NOT have a `canAssignStaff` gate (it's a public kiosk form, no logged-in staff permission check). The staff Select is always shown and always required. This is INDEPENDENT of the cashier's "Thêm dịch vụ" dialog — making staff optional in the cashier dialog would NOT affect dat-lich.
+- Note: the underlying booking API (POST /api/supabase/bookings) accepts null staff_id, so technically dat-lich COULD allow optional staff too — but the dat-lich UI enforces it client-side. Changing dat-lich is OUT OF SCOPE for "make cashier staff optional".
+
+## Recommendation
+
+To make staff OPTIONAL in the cashier "Thêm dịch vụ" dialog (Dialog 1 in `service-selector.tsx`):
+
+1. **Remove the UI gate on the OK button** — `service-selector.tsx:1581`:
+   - Change `disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}` → `disabled={addingFromDialog}`.
+   - Also remove the title tooltip at line 1582 (or leave it — it's cosmetic).
+
+2. **Remove the inline "Vui lòng chọn nhân viên" error** — `service-selector.tsx:1514-1516`:
+   - Delete the `{!selectedStaffId && (<p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>)}` block, OR change to a softer hint like "Để trống nếu không xếp nhân viên" (recommended so the cashier knows it's optional).
+   - Also remove the red asterisk on the Label at line 1491: `<span className="ml-0.5 text-red-500">*</span>`.
+
+3. **(Optional) Add a "Không chọn" / "Bỏ trống" option to the staff Select** — `service-selector.tsx:1500-1512`:
+   - Insert a `<SelectItem value="">— Không chọn —</SelectItem>` at the top of the SelectContent so the cashier can explicitly clear the staff after picking one. (Without this, once a staff is picked the cashier can't un-pick it because shadcn Select doesn't allow empty by default.)
+
+4. **No change needed in `handleDialogConfirm`** — `service-selector.tsx:674`. The handler ALREADY handles `selectedStaffId === ""` correctly:
+   - `shouldSyncBooking` (line 688) becomes false → no booking is created/updated, the service is added as a plain invoice line (lines 806-819).
+   - `staffName` (line 679) becomes undefined → `addInvoiceItem` stores it as undefined on the InvoiceItem (cashier-store.ts:19 already declares `staffName?: string`).
+
+5. **No change needed in `cashier-store.ts`**. `addInvoiceItem` (line 272) already accepts items with `staffName: undefined`. `setInvoiceItemStaff` (line 421) already converts empty string to undefined.
+
+6. **No change needed in the booking API**. POST `/api/supabase/bookings` (route.ts:275) and PUT `[id]/route.ts` both accept null/empty staff_id per service (lines 598 and 93 respectively). The conflict check filters out empty-staff slots (route.ts:380 and [id]/route.ts:247) — they don't cause 400s.
+
+7. **Consider the side effect**: when staff is left empty in the cashier dialog, NO booking is created in Lịch hẹn (the `!shouldSyncBooking` branch). The service becomes a "walk-in product-like sale" — no appointment slot in the calendar. This is likely the DESIRED behavior (cashier wants to ring up a sale without scheduling), but confirm with the product team. If they want a booking to be created even without staff, the booking API can handle it (staff_id stored as null), but `handleDialogConfirm` currently uses `shouldSyncBooking` to gate the booking creation — that gate would need to be relaxed to `!!(selectedDate && selectedTime)` instead of `!!(selectedStaffId && selectedDate && selectedTime)`.
+
+8. **Do NOT touch the "Xếp nhân viên" dialogs** (`invoice-summary.tsx:2508-2733` and `2735-2827`). These dialogs' entire purpose is to ASSIGN a staff — making staff optional there is nonsensical. If the goal is "allow a line item to have NO staff", the cashier can simply NOT open the per-item "Xếp nhân viên" dialog (the item is added without staff via the new optional-staff flow in Dialog 1). If they want to CLEAR an existing staff from a line item, add a "Bỏ phân thợ" / "Clear" button to the per-item dialog (out of scope for this change).
+
+9. **dat-lich is independent** — staff remains required there. No change.
+
+10. **Edge case to verify**: when a service is added without staff via Dialog 1, the tab's `tabMeta` is NOT updated with `bookingId`/`bookingCreated` (because `shouldSyncBooking` was false). If the cashier later opens Dialog 1 again for a second service AND picks a staff this time, `handleDialogConfirm` will treat it as the FIRST service on a draft tab (line 958: `if (meta && !meta.bookingCreated)`) and create a NEW booking with only the SECOND service — the FIRST service (no staff) is NOT retroactively linked to that booking. This may or may not matter to the product team. If it matters, the fix is to relax `shouldSyncBooking` to `!!(selectedDate && selectedTime)` (i.e. always sync when date+time are set) and let the booking API store null staff_id — see point 7.
+
+
+---
+Task ID: cashier-optional-staff-booking-sync
+Agent: main (Z.ai Code)
+Task: Make staff optional in cashier "Thêm dịch vụ" dialog + booking views "Chưa xếp nhân viên" + walk-in customer sync
+
+Work Log:
+- Read research-cashier-staff findings (worklog line 1731+): "Thêm dịch vụ" dialog is in service-selector.tsx:1466-1589; OK disabled at line 1581 `disabled={addingFromDialog || (canAssignStaff && !selectedStaffId)}`; handler already handles no-staff gracefully via `!shouldSyncBooking` branch.
+- Read booking-staff-view.tsx: "Chưa xếp nhân viên" column ALREADY EXISTS (line 590 `{col.staff ? col.staff.name : "Chưa xếp nhân viên"}`); unassigned segments pushed at line 304. Column renders when bookings have null staff.
+- Read booking-customer-view.tsx: line 370 `{e.staff && <div>NV: {e.staff}</div>}` — no-staff shows nothing. Changed to show "Xếp nhân viên" blue clickable (calls onEdit(booking)).
+- service-selector.tsx: removed staff requirement (OK gate line 1581, error text 1514-1516, red asterisk 1491) + relaxed shouldSyncBooking (line 688) from `!!(selectedStaffId && selectedDate && selectedTime)` to `!!(selectedDate && selectedTime)` so booking IS created with null staff_id.
+- customer-tabs.tsx: added booking customer_id sync in handleSelectInlineResult + handleAddNewCustomer (PUT /api/supabase/bookings/[id] with customer_id when prevMeta.bookingId exists).
+- cashier-store.ts: added `isGuestCustomer?: boolean` to TabMeta.
+- service-selector.tsx createBookingForTab: set `isGuestCustomer: !meta.customerId` in updateTabMeta so the walk-in tab keeps showing inline search after guest customer creation.
+- customer-tabs.tsx: changed `walkinHasCustomer` to `isWalkinTab && Boolean(customerId) && !isGuestCustomer` so search stays visible for guest customers. Set `isGuestCustomer: false` in handleSelectInlineResult + handleAddNewCustomer when real customer linked.
+
+Stage Summary:
+- Part 1 (staff optional): verified OK button enabled (disabled:false), no error, soft hint "Để trống nếu chưa xếp nhân viên", no red asterisk. Booking created without staff (bookingId: a34d8c2f, staffId: "").
+- Part 2a (Chưa xếp column): verified "Chưa xếp nhân viên" column appears with "1 lịch hẹn" in View nhân viên after booking created without staff.
+- Part 2b (View khách hàng Xếp nhân viên): verified blue "Xếp nhân viên" clickable link (count:1) for no-staff booking. VLM confirmed.
+- Part 3 (walk-in sync): verified full flow — walk-in tab → add service (isGuestCustomer:true, search visible) → link "Trung Kiên" (isGuestCustomer:false, customerId:d9f26eff) → booking API confirms customer_id synced from guest to d9f26eff (Trung Kiên), staffId still "". Booking shows "Trung Kiên" + "LH000088" in /booking page.
