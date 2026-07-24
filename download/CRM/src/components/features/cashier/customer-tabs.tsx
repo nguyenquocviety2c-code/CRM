@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCashierStore, type InvoiceItem, type TabMeta } from "@/stores/cashier-store";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
+import { useBookingStore } from "@/stores/booking-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { localDayToUtcRange, toVietnamDay, toVietnamTime } from "@/lib/utils";
 import {
@@ -120,6 +121,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   const { selectedBranchId } = useBranchStore();
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
+  const { setViewMode: setBookingViewMode, setDateNav: setBookingDateNav, setHighlightBookingId } = useBookingStore();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   // Paid invoice full-page view state — opened when clicking "Hóa đơn: HDxxx"
@@ -1250,8 +1252,10 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                 </>
               )}
 
-              {/* Booking/invoice code badge: shows "Lịch hẹn: LHxxx" when unpaid,
-                  "Hóa đơn: HDxxx" (clickable → opens full invoice view) when paid. */}
+              {/* Booking/invoice code badge: shows "Xem lịch hẹn: LHxxx"
+                  (clickable → navigates to Booking > View nhân viên with flash)
+                  when unpaid, "Hóa đơn: HDxxx" (clickable → opens full invoice
+                  view) when paid. */}
               {activeMeta?.bookingCode && (
                 <div className="flex items-center gap-2 text-emerald-700">
                   {activeBooking?.status === "checkout" ? (
@@ -1272,9 +1276,21 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                       Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
                     </button>
                   ) : (
-                    <span className="text-xs font-medium">
-                      Lịch hẹn: {activeMeta.bookingCode}
-                    </span>
+                    <button
+                      onClick={() => {
+                        // Navigate to Booking module → View nhân viên with the
+                        // booking highlighted (flash 3×). Set the store state
+                        // BEFORE pushing the route so the booking page renders
+                        // with the correct view + highlight from the start.
+                        setBookingViewMode("staff");
+                        setBookingDateNav("today");
+                        setHighlightBookingId(activeBooking?.id || null);
+                        router.push("/booking");
+                      }}
+                      className="text-xs font-medium hover:underline cursor-pointer"
+                    >
+                      Xem lịch hẹn: {activeMeta.bookingCode}
+                    </button>
                   )}
                 </div>
               )}

@@ -82,6 +82,12 @@ interface BookingStore {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 
+  /** ID of a booking to highlight (flash 3×) after cross-module navigation
+   *  (e.g. from Thu ngân → Lịch hẹn). Set before navigating; cleared after
+   *  the flash animation completes. */
+  highlightBookingId: string | null;
+  setHighlightBookingId: (id: string | null) => void;
+
   // Actions
   openDialog: (booking?: Booking) => void;
   closeDialog: () => void;
@@ -122,6 +128,7 @@ export const useBookingStore = create<BookingStore>((set) => ({
   branchFilter: null,
   statusFilter: null,
   searchQuery: "",
+  highlightBookingId: null,
 
   openDialog: (booking?: Booking) =>
     set({ dialogOpen: true, selectedBooking: booking || null }),
@@ -135,4 +142,5 @@ export const useBookingStore = create<BookingStore>((set) => ({
   setBranchFilter: (id) => set({ branchFilter: id }),
   setStatusFilter: (status) => set({ statusFilter: status }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setHighlightBookingId: (id) => set({ highlightBookingId: id }),
 }));

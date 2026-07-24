@@ -1,0 +1,2002 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+     4→     4→import { useQuery } from "@tanstack/react-query";
+     5→     5→import { Booking, BookingServiceRow } from "@/stores/booking-store";
+     6→     6→import {
+     7→     7→  BookingStatusLabel,
+     8→     8→  BookingStatusBadgeColors,
+     9→     9→  BookingStatusType,
+    10→    10→} from "@/lib/constants";
+    11→    11→import { useAuthStore } from "@/stores/auth-store";
+    12→    12→import { useIsReviewing } from "@/stores/payment-review-store";
+    13→    13→import { maskPhone } from "@/lib/phone-mask";
+    14→    14→import { toVietnamTime, toVietnamDay } from "@/lib/utils";
+    15→    15→import { getAllSlotCustomers } from "@/lib/multi-customer";
+    16→    16→import {
+    17→    17→  Select,
+    18→    18→  SelectContent,
+    19→    19→  SelectItem,
+    20→    20→  SelectTrigger,
+    21→    21→  SelectValue,
+    22→    22→} from "@/components/ui/select";
+    23→    23→import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
+    24→    24→import { Pencil, Trash2, LogIn } from "lucide-react";
+    25→    25→
+    26→    26→interface Staff {
+    27→    27→  id: string;
+    28→    28→  name: string;
+    29→    29→  groupName?: string | null;
+    30→    30→}
+    31→    31→
+    32→    32→interface BookingStaffViewProps {
+    33→    33→  bookings: Booking[];
+    34→    34→  /** The single day shown in the legacy single-day layout. Kept for backwards
+    35→    35→   *  compatibility — when `dateRange` is provided it takes precedence. */
+    36→    36→  currentDate?: Date;
+    37→    37→  /** Inclusive { from, to } date range. When provided, the view renders one
+    38→    38→   *  COLUMN PER DAY (3/7, 4/7, 5/7 …) so bookings from different days no
+    39→    39→   *  longer overlap inside the same staff×time slot. */
+    40→    40→  dateRange?: { from: Date; to: Date };
+    41→    41→  daysToShow: number;
+    42→    42→  onBookingClick: (booking: Booking) => void;
+    43→    43→  onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
+    44→    44→  onEdit?: (booking: Booking) => void;
+    45→    45→  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+    46→    46→      no staff assigned. Called by the "Xếp nhân viên" button on segment blocks
+    47→    47→      + in the hover popover. Distinct from onEdit (which opens the full
+    48→    48→      "Chỉnh sửa lịch hẹn" dialog). */
+    49→    49→  onAssignStaff?: (booking: Booking) => void;
+    50→    50→  onDelete?: (bookingId: string) => void;
+    51→    51→  /**
+    52→    52→   * Open the invoice dialog for a booking. Called when a PAID booking block
+    53→    53→   * (checkout status = has a completed invoice) is clicked. Unpaid bookings
+    54→    54→   * (confirmed / new / checkin / cancelled / no_show) fall back to the
+    55→    55→   * regular onBookingClick (edit dialog).
+    56→    56→   */
+    57→    57→  onShowInvoice?: (booking: Booking) => void;
+    58→    58→  /**
+    59→    59→   * Called when the user clicks an EMPTY area of a staff column's timeline
+    60→    60→   * (not on an existing booking block). Opens the "Create new booking" dialog
+    61→    61→   * with the slot's time + staff pre-filled.
+    62→    62→   * Slot shape: { date: "DD/MM/YYYY", time: "HH:mm", staffId: string | null }
+    63→    63→   */
+    64→    64→  onSlotClick?: (slot: { date: string; time: string; staffId: string | null }) => void;
+    65→    65→  /** Branch id (used to fetch the full staff list so ALL staff columns show). */
+    66→    66→  branchId?: string | null;
+    67→    67→}
+    68→    68→
+    69→    69→interface StaffColumn {
+    70→    70→  staff: Staff | null;
+    71→    71→  segments: ServiceSegment[];
+    72→    72→}
+    73→    73→
+    74→    74→/** A service-segment of a booking, assigned to one staff's timeline. A
+    75→    75→ *  segment = one or more CONSECUTIVE services performed by the SAME staff,
+    76→    76→ *  merged into a single slot. Services run back-to-back (cursor advances by
+    77→    77→ *  each service's duration), so consecutive in sort_order = adjacent in time.
+    78→    78→ *  A run of same-staff services becomes one merged slot whose height ∝ the
+    79→    79→ *  sum of their durations; different-staff services stay in separate slots
+    80→    80→ *  (each in its own staff's column). Matches the server-side conflict check in
+    81→    81→ *  /api/supabase/bookings/route.ts. */
+    82→    82→interface ServiceSegment {
+    83→    83→  booking: Booking;
+    84→    84→  /** One or more consecutive same-staff services merged into this slot. */
+    85→    85→  services: BookingServiceRow[];
+    86→    86→  staffId: string;
+    87→    87→  staffName: string;
+    88→    88→  /** 0-based index of this segment (group) within the booking's segment list. */
+    89→    89→  segmentIndex: number;
+    90→    90→  /** Total number of segments (groups) in the booking (for the "1/2" badge). */
+    91→    91→  totalSegments: number;
+    92→    92→  /** Minutes from the timeline's START_HOUR (08:00) to this segment's start.
+    93→    93→   *  May be negative when the booking starts before 08:00 — callers clamp
+    94→    94→   *  into the visible window. */
+    95→    95→  startMin: number;
+    96→    96→  /** This segment's total duration = Σ of its services' durations (minutes). */
+    97→    97→  duration: number;
+    98→    98→}
+    99→    99→
+   100→   100→/** Pixels per hour on the vertical timeline. Slot height is proportional to
+   101→   101→ *  duration. 1.5× the previous value (60 → 90) so each hour band is taller and
+   102→   102→ *  multi-service segment blocks have more room to show their content. */
+   103→   103→const PX_PER_HOUR = 90;
+   104→   104→/** Timeline starts at 08:00 and ends at 21:00 (13 hours). */
+   105→   105→const START_HOUR = 8;
+   106→   106→const END_HOUR = 21;
+   107→   107→/** Width of each staff column. The timeline scrolls horizontally when there
+   108→   108→ *  are more staff than fit on screen. */
+   109→   109→const STAFF_COL_WIDTH = 180;
+   110→   110→/** Width of the fixed "Giờ" column on the left. */
+   111→   111→const TIME_COL_WIDTH = 64;
+   112→   112→/** Minimum column width when dragging (prevents columns from vanishing). */
+   113→   113→const MIN_COL_WIDTH = 50;
+   114→   114→/** Width of the drag handle on each header cell's right edge. */
+   115→   115→const RESIZER_WIDTH = 8;
+   116→   116→
+   117→   117→// Hairdresser groups — same filter as the booking dialog. Only these groups
+   118→   118→// are shown as staff columns (mirrors BookingDialog's staff fetch).
+   119→   119→const HAIRDRESSER_GROUPS = ["Artist", "Creative Director", "Master", "Junior"];
+   120→   120→
+   121→   121→export function BookingStaffView({
+   122→   122→  bookings,
+   123→   123→  currentDate,
+   124→   124→  dateRange,
+   125→   125→  onBookingClick,
+   126→   126→  onStatusChange,
+   127→   127→  onEdit,
+   128→   128→  onAssignStaff,
+   129→   129→  onDelete,
+   130→   130→  onShowInvoice,
+   131→   131→  onSlotClick,
+   132→   132→  branchId,
+   133→   133→}: BookingStaffViewProps) {
+   134→   134→  const { hasPermission } = useAuthStore();
+   135→   135→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   136→   136→  const canBookPastDate = hasPermission("book_past_date");
+   137→   137→  // Whether the viewed date is in the past (slot creation blocked when
+   138→   138→  // !canBookPastDate).
+   139→   139→  const isPastDate = (() => {
+   140→   140→    if (!currentDate) return false;
+   141→   141→    const today = new Date();
+   142→   142→    today.setHours(0, 0, 0, 0);
+   143→   143→    const d = new Date(currentDate);
+   144→   144→    d.setHours(0, 0, 0, 0);
+   145→   145→    return d < today;
+   146→   146→  })();
+   147→   147→  const slotLocked = isPastDate && !canBookPastDate;
+   148→   148→
+   149→   149→  // Hour-band resize (single-day timeline only). The user drags a horizontal
+   150→   150→  // handle on the "Giờ" axis to grow/shrink every hour band. Persisted.
+   151→   151→  const MIN_PX_PER_HOUR = 40;
+   152→   152→  const MAX_PX_PER_HOUR = 200;
+   153→   153→  const [pxPerHour, setPxPerHour] = useState<number>(() => {
+   154→   154→    try {
+   155→   155→      const raw = localStorage.getItem("crm-staff-timegrid-pxph");
+   156→   156→      const n = raw ? parseInt(raw, 10) : NaN;
+   157→   157→      if (!isNaN(n) && n >= MIN_PX_PER_HOUR && n <= MAX_PX_PER_HOUR) return n;
+   158→   158→    } catch { /* ignore */ }
+   159→   159→    return PX_PER_HOUR;
+   160→   160→  });
+   161→   161→  const setPxPerHourPersisted = (n: number) => {
+   162→   162→    const clamped = Math.max(MIN_PX_PER_HOUR, Math.min(MAX_PX_PER_HOUR, n));
+   163→   163→    setPxPerHour(clamped);
+   164→   164→    try { localStorage.setItem("crm-staff-timegrid-pxph", String(clamped)); } catch { /* ignore */ }
+   165→   165→  };
+   166→   166→
+   167→   167→  // Tracks which (column, hour) slot the mouse is hovering over in the
+   168→   168→  // single-day staff-column layout. Used to highlight ONLY that slot (not
+   169→   169→  // the entire column) with an orange overlay on hover.
+   170→   170→  const [hoveredSlot, setHoveredSlot] = useState<{ col: number; hour: number } | null>(null);
+   171→   171→
+   172→   172→  // Number of days in the selected range. When 1 day → use the legacy
+   173→   173→  // per-staff column layout (one column per staff). When 2+ days → use the
+   174→   174→  // DayRangeGrid (one column per day). Capped at 5 visible days; 6+ scroll.
+   175→   175→  const rangeDayCount = useMemo(() => {
+   176→   176→    if (!dateRange) return 0;
+   177→   177→    const from = new Date(dateRange.from);
+   178→   178→    from.setHours(0, 0, 0, 0);
+   179→   179→    const to = new Date(dateRange.to);
+   180→   180→    to.setHours(0, 0, 0, 0);
+   181→   181→    if (to < from) return 1;
+   182→   182→    return Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+   183→   183→  }, [dateRange]);
+   184→   184→  const useMultiDayLayout = rangeDayCount >= 2;
+   185→   185→
+   186→   186→  // Hour labels for the left axis (08:00 → 21:00).
+   187→   187→  const hours = useMemo(() => {
+   188→   188→    const h: number[] = [];
+   189→   189→    for (let i = START_HOUR; i <= END_HOUR; i++) h.push(i);
+   190→   190→    return h;
+   191→   191→  }, []);
+   192→   192→
+   193→   193→  // Fetch ALL active staff for the selected branch (so every staff has a column,
+   194→   194→  // not just those with bookings today). Mirrors the BookingDialog's staff query.
+   195→   195→  const [allStaff, setAllStaff] = useState<Staff[]>([]);
+   196→   196→  useEffect(() => {
+   197→   197→    let cancelled = false;
+   198→   198→    async function fetchStaff() {
+   199→   199→      if (!branchId) {
+   200→   200→        setAllStaff([]);
+   201→   201→        return;
+   202→   202→      }
+   203→   203→      try {
+   204→   204→        const res = await fetch(
+   205→   205→          `/api/supabase/staff?branch_id=${encodeURIComponent(branchId)}&active=true&limit=200`
+   206→   206→        );
+   207→   207→        const json = await res.json();
+   208→   208→        if (cancelled) return;
+   209→   209→        if (!json.ok) {
+   210→   210→          setAllStaff([]);
+   211→   211→          return;
+   212→   212→        }
+   213→   213→        // Only show hairdresser groups (same filter as BookingDialog).
+   214→   214→        const list = ((json.data as Array<Record<string, unknown>>) || [])
+   215→   215→          .filter((s) => {
+   216→   216→            const groupName = (s.group as { name?: string } | null)?.name;
+   217→   217→            return groupName && HAIRDRESSER_GROUPS.includes(groupName);
+   218→   218→          })
+   219→   219→          .map((s) => ({
+   220→   220→            id: s.id as string,
+   221→   221→            name: s.name as string,
+   222→   222→            groupName: (s.group as { name?: string } | null)?.name,
+   223→   223→          }));
+   224→   224→        setAllStaff(list);
+   225→   225→      } catch {
+   226→   226→        if (!cancelled) setAllStaff([]);
+   227→   227→      }
+   228→   228→    }
+   229→   229→    fetchStaff();
+   230→   230→    return () => { cancelled = true; };
+   231→   231→  }, [branchId]);
+   232→   232→
+   233→   233→  // Build staff columns from the FULL staff list. Each booking is split into
+   234→   234→  // SEGMENTS where each segment = a run of same-staff services merged into one
+   235→   235→  // slot. PARALLEL model: every service in the booking starts at the SAME
+   236→   236→  // booking-level start time (each runs on a different staff, simultaneously),
+   237→   237→  // so every segment's startMin = the booking's startMin (NO cursor advance).
+   238→   238→  // A run of same-staff services still merges into one taller block (duration
+   239→   239→  // = sum of their durations). Each segment lands in the column of the staff
+   240→   240→  // who performs it. Segments whose services have no staff go to a
+   241→   241→  // "Chưa xếp nhân viên" column at the end.
+   242→   242→  const staffColumns = useMemo<StaffColumn[]>(() => {
+   243→   243→    const columns: StaffColumn[] = allStaff.map((staff) => ({
+   244→   244→      staff,
+   245→   245→      segments: [],
+   246→   246→    }));
+   247→   247→    const byStaffId = new Map<string, StaffColumn>();
+   248→   248→    for (const col of columns) {
+   249→   249→      if (col.staff) byStaffId.set(col.staff.id, col);
+   250→   250→    }
+   251→   251→
+   252→   252→    const unassigned: ServiceSegment[] = [];
+   253→   253→    for (const booking of bookings) {
+   254→   254→      // Services ordered by sort_order for stable segment ordering.
+   255→   255→      const services = getAllServices(booking)
+   256→   256→        .slice()
+   257→   257→        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+   258→   258→      // Group CONSECUTIVE services performed by the SAME staff into one
+   259→   259→      // segment (a run of same-staff services merges into one slot).
+   260→   260→      const groups: BookingServiceRow[][] = [];
+   261→   261→      for (const s of services) {
+   262→   262→        const last = groups.length > 0 ? groups[groups.length - 1] : null;
+   263→   263→        const lastStaffId = last && last.length > 0 ? last[last.length - 1].staff_id : null;
+   264→   264→        if (last && lastStaffId && lastStaffId === s.staff_id) {
+   265→   265→          last.push(s);
+   266→   266→        } else {
+   267→   267→          groups.push([s]);
+   268→   268→        }
+   269→   269→      }
+   270→   270→      const totalSegments = groups.length;
+   271→   271→      const startMin = getBookingStartMinutes(booking);
+   272→   272→      // PARALLEL: every segment starts at the booking's startMin. Previously a
+   273→   273→      // cursor advanced by each segment's duration (consecutive model), making
+   274→   274→      // the 2nd service of a multi-staff booking appear at startMin + 1st
+   275→   275→      // service's duration (e.g. 11:00 instead of 09:30). Fixed to parallel.
+   276→   276→      groups.forEach((group, i) => {
+   277→   277→        const duration = group.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+   278→   278→        const staffId = group[0].staff_id || "";
+   279→   279→        const seg: ServiceSegment = {
+   280→   280→          booking,
+   281→   281→          services: group,
+   282→   282→          staffId,
+   283→   283→          staffName: group[0].staff?.name || "—",
+   284→   284→          segmentIndex: i,
+   285→   285→          totalSegments,
+   286→   286→          startMin: startMin ?? 0,
+   287→   287→          duration,
+   288→   288→        };
+   289→   289→        if (!staffId) {
+   290→   290→          unassigned.push(seg);
+   291→   291→          return;
+   292→   292→        }
+   293→   293→        const col = byStaffId.get(staffId);
+   294→   294→        if (col) {
+   295→   295→          col.segments.push(seg);
+   296→   296→        } else {
+   297→   297→          // Staff on the booking but not in allStaff (different branch / group).
+   298→   298→          // Add an extra column so the segment is still visible.
+   299→   299→          const newCol: StaffColumn = {
+   300→   300→            staff: { id: staffId, name: seg.staffName },
+   301→   301→            segments: [seg],
+   302→   302→          };
+   303→   303→          columns.push(newCol);
+   304→   304→          byStaffId.set(staffId, newCol);
+   305→   305→        }
+   306→   306→      });
+   307→   307→    }
+   308→   308→
+   309→   309→    // The "Chưa xếp nhân viên" (unassigned) column is placed FIRST (before the
+   310→   310→    // real staff columns) so it sits right after the "Giờ" column on the left,
+   311→   311→    // per the user's request. Previously it was appended at the end (rightmost)
+   312→   312→    // which made it easy to miss. Putting it first draws attention to bookings
+   313→   313→    // that still need a staff assignment — the cashier sees them immediately
+   314→   314→    // and can click "Xếp nhân viên" on each block to assign one.
+   315→   315→    if (unassigned.length > 0) {
+   316→   316→      columns.unshift({ staff: null, segments: unassigned });
+   317→   317→    }
+   318→   318→    // Sort each column's segments by PRIORITY so that overlapping segments
+   319→   319→    // stack with UNPAID bookings (pending/new/confirmed/checkin) ON TOP of
+   320→   320→    // cancelled/no_show ones. In the single-day staff view, segments are
+   321→   321→    // absolutely positioned and later-in-DOM renders on top — so we sort
+   322→   322→    // cancelled FIRST (bottom) and unpaid LAST (top). This implements the
+   323→   323→    // user's requirement: "lịch chưa thanh toán hiển thị đè lên lịch đã hủy"
+   324→   324→    // (a cancelled booking at 10:30-12:00 should NOT cover an unpaid booking
+   325→   325→    // at 10:00-11:30; the unpaid one must be fully visible).
+   326→   326→    const SEG_PRIORITY: Record<string, number> = {
+   327→   327→      // cancelled / no-show → priority 0 (rendered FIRST → at the BOTTOM)
+   328→   328→      cancelled: 0,
+   329→   329→      no_show: 0,
+   330→   330→      // paid → priority 1
+   331→   331→      checkout: 1,
+   332→   332→      // unpaid / active → priority 2 (rendered LAST → ON TOP)
+   333→   333→      pending: 2,
+   334→   334→      new: 2,
+   335→   335→      confirmed: 2,
+   336→   336→      checkin: 2,
+   337→   337→    };
+   338→   338→    for (const col of columns) {
+   339→   339→      col.segments.sort((a, b) => {
+   340→   340→        const pa = SEG_PRIORITY[a.booking.status] ?? 1;
+   341→   341→        const pb = SEG_PRIORITY[b.booking.status] ?? 1;
+   342→   342→        if (pa !== pb) return pa - pb; // lower priority first (rendered below)
+   343→   343→        // Same priority → keep chronological order (earlier start first).
+   344→   344→        return a.startMin - b.startMin;
+   345→   345→      });
+   346→   346→    }
+   347→   347→    return columns;
+   348→   348→  }, [allStaff, bookings]);
+   349→   349→
+   350→   350→  // Total timeline height in pixels. Uses the resizable pxPerHour (single-day)
+   351→   351→  // or the constant (multi-day DayRangeGrid uses its own DAYGRID_ROW_HEIGHT).
+   352→   352→  const timelineHeight = (END_HOUR - START_HOUR) * pxPerHour;
+   353→   353→
+   354→   354→  // ---- Column resizing (with persistence) ----
+   355→   355→  // columnWidths[0] = "Giờ" column width; columnWidths[1..N] = staff columns.
+   356→   356→  // State-driven so the user can drag column edges to resize (same UX as the
+   357→   357→  // global TableResizer, but adapted for this CSS-grid layout which isn't a
+   358→   358→  // <table> and therefore isn't handled by TableResizer).
+   359→   359→  //
+   360→   360→  // Persistence: widths are saved to localStorage keyed by branch + column
+   361→   361→  // count, so the user's column customizations survive page switches and
+   362→   362→  // browser refreshes. When the column count changes (e.g. branch switch
+   363→   363→  // loads a different number of staff), the saved widths for that exact
+   364→   364→  // column count are restored; if none match, defaults are used.
+   365→   365→  const STORAGE_PREFIX = "crm-staff-grid-widths:";
+   366→   366→
+   367→   367→  /** Build the localStorage key for the current branch + column count. */
+   368→   368→  const storageKey = `${STORAGE_PREFIX}${branchId || "all"}::n${staffColumns.length}`;
+   369→   369→
+   370→   370→  /** Read saved widths from localStorage. Returns null if none/invalid. */
+   371→   371→  function readSavedWidths(key: string): number[] | null {
+   372→   372→    try {
+   373→   373→      const raw = localStorage.getItem(key);
+   374→   374→      if (!raw) return null;
+   375→   375→      const parsed = JSON.parse(raw);
+   376→   376→      if (!Array.isArray(parsed) || parsed.length === 0) return null;
+   377→   377→      if (!parsed.every((n: unknown) => typeof n === "number" && n > 0)) return null;
+   378→   378→      return parsed as number[];
+   379→   379→    } catch {
+   380→   380→      return null;
+   381→   381→    }
+   382→   382→  }
+   383→   383→
+   384→   384→  /** Save widths to localStorage (best-effort). */
+   385→   385→  function writeSavedWidths(key: string, widths: number[]) {
+   386→   386→    try {
+   387→   387→      localStorage.setItem(key, JSON.stringify(widths));
+   388→   388→    } catch {
+   389→   389→      // best-effort — localStorage may be full or disabled
+   390→   390→    }
+   391→   391→  }
+   392→   392→
+   393→   393→  // Compute the initial widths: try saved widths for this branch+count, fall
+   394→   394→  // back to defaults.
+   395→   395→  const [columnWidths, setColumnWidths] = useState<number[]>(() => {
+   396→   396→    const saved = readSavedWidths(storageKey);
+   397→   397→    if (saved && saved.length === staffColumns.length + 1) return saved;
+   398→   398→    return [TIME_COL_WIDTH, ...Array(staffColumns.length).fill(STAFF_COL_WIDTH)];
+   399→   399→  });
+   400→   400→
+   401→   401→  // Reset widths whenever the column count changes (e.g. staff data finishes
+   402→   402→  // loading, or the branch changes). Uses the "adjust state during render"
+   403→   403→  // pattern (React docs) instead of an effect so the lint rule
+   404→   404→  // `react-hooks/set-state-in-effect` is satisfied. Restores saved widths
+   405→   405→  // for the new column count if available.
+   406→   406→  const [prevStorageKey, setPrevStorageKey] = useState(storageKey);
+   407→   407→  if (storageKey !== prevStorageKey) {
+   408→   408→    setPrevStorageKey(storageKey);
+   409→   409→    const saved = readSavedWidths(storageKey);
+   410→   410→    if (saved && saved.length === staffColumns.length + 1) {
+   411→   411→      setColumnWidths(saved);
+   412→   412→    } else {
+   413→   413→      setColumnWidths([
+   414→   414→        TIME_COL_WIDTH,
+   415→   415→        ...Array(staffColumns.length).fill(STAFF_COL_WIDTH),
+   416→   416→      ]);
+   417→   417→    }
+   418→   418→  }
+   419→   419→
+   420→   420→  // Permission gate: only staff whose group has "resize_table" can drag the
+   421→   421→  // column edges to resize. When the permission is OFF, the grid uses `1fr`
+   422→   422→  // for all staff columns (equal width, fills container, NOT resizable). When
+   423→   423→  // the permission is ON, the grid uses persisted pixel widths (resizable via
+   424→   424→  // the drag handles on each column's right edge; dragging one staff column
+   425→   425→  // resizes ALL staff columns synchronously so they stay uniform).
+   426→   426→  const canResizeTable = hasPermission("resize_table");
+   427→   427→
+   428→   428→  // Build the CSS grid-template-columns string.
+   429→   429→  // - canResizeTable = true: "Giờ" col (px) + staff cols (px, from
+   430→   430→  //   columnWidths). Dragging a staff column's edge resizes all staff columns
+   431→   431→  //   together (sync mode). The total may exceed the container → horizontal
+   432→   432→  //   scroll.
+   433→   433→  // - canResizeTable = false: "Giờ" col (px) + staff cols (1fr each). Always
+   434→   434→  //   equal width, fills the container, not draggable.
+   435→   435→  const gridTemplate = canResizeTable
+   436→   436→    ? columnWidths.map((w) => `${w}px`).join(" ")
+   437→   437→    : `${columnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
+   438→   438→  // Total scrollable width. Only meaningful when canResizeTable = true (the
+   439→   439→  // px-based grid may exceed the container). When 1fr, the container is 100%.
+   440→   440→  const totalWidth = columnWidths.reduce((s, w) => s + w, 0);
+   441→   441→
+   442→   442→  // Start dragging a column's right edge. `idx` is the column index in
+   443→   443→  // columnWidths (0 = "Giờ", 1..N = staff columns).
+   444→   444→  //
+   445→   445→  // SYNC MODE: dragging ANY staff column's edge resizes ALL staff columns
+   446→   446→  // together (the delta is applied to every staff column uniformly). This
+   447→   447→  // keeps the grid visually uniform — all staff columns always have the same
+   448→   448→  // width. The "Giờ" column (idx 0) is excluded from the sync: dragging its
+   449→   449→  // edge still resizes only it (since the time column has a different purpose
+   450→   450→  // and width). The user's request was specifically about staff columns, so
+   451→   451→  // we sync those.
+   452→   452→  const startColumnResize = useCallback(
+   453→   453→    (e: React.MouseEvent, idx: number) => {
+   454→   454→      e.preventDefault();
+   455→   455→      e.stopPropagation();
+   456→   456→      const startX = e.clientX;
+   457→   457→      const startWidth = columnWidths[idx] || STAFF_COL_WIDTH;
+   458→   458→      // For staff columns, capture every staff column's start width so we can
+   459→   459→      // apply the same delta to all of them synchronously.
+   460→   460→      const staffStartWidths = columnWidths.slice(1);
+   461→   461→      document.body.style.cursor = "col-resize";
+   462→   462→      document.body.style.userSelect = "none";
+   463→   463→      // Capture the current key so the save after drag uses the right one
+   464→   464→      // (in case the branch changes mid-drag — extremely unlikely but safe).
+   465→   465→      const dragKey = storageKey;
+   466→   466→      let saveTimer: ReturnType<typeof setTimeout> | null = null;
+   467→   467→      const onMove = (ev: MouseEvent) => {
+   468→   468→        const delta = ev.clientX - startX;
+   469→   469→        if (idx === 0) {
+   470→   470→          // Dragging the "Giờ" column's edge → resize only that column.
+   471→   471→          const newWidth = Math.max(MIN_COL_WIDTH, startWidth + delta);
+   472→   472→          setColumnWidths((prev) => {
+   473→   473→            const next = [...prev];
+   474→   474→            next[0] = newWidth;
+   475→   475→            return next;
+   476→   476→          });
+   477→   477→        } else {
+   478→   478→          // Dragging a STAFF column's edge → apply the delta to ALL staff
+   479→   479→          // columns synchronously so they stay uniform. Each staff column's
+   480→   480→          // new width is clamped to MIN_COL_WIDTH independently (in practice
+   481→   481→          // they all clamp together since they share the same start width +
+   482→   482→          // delta).
+   483→   483→          setColumnWidths((prev) => {
+   484→   484→            const next = [...prev];
+   485→   485→            for (let i = 1; i < next.length; i++) {
+   486→   486→              const base = staffStartWidths[i - 1] ?? STAFF_COL_WIDTH;
+   487→   487→              next[i] = Math.max(MIN_COL_WIDTH, base + delta);
+   488→   488→            }
+   489→   489→            return next;
+   490→   490→          });
+   491→   491→        }
+   492→   492→      };
+   493→   493→      const onUp = () => {
+   494→   494→        document.body.style.cursor = "";
+   495→   495→        document.body.style.userSelect = "";
+   496→   496→        document.removeEventListener("mousemove", onMove);
+   497→   497→        document.removeEventListener("mouseup", onUp);
+   498→   498→        // Persist the new widths (debounced so we read the latest state).
+   499→   499→        if (saveTimer) clearTimeout(saveTimer);
+   500→   500→        saveTimer = setTimeout(() => {
+   501→   501→          setColumnWidths((current) => {
+   502→   502→            writeSavedWidths(dragKey, current);
+   503→   503→            return current; // no change — just reading
+   504→   504→          });
+   505→   505→        }, 300);
+   506→   506→      };
+   507→   507→      document.addEventListener("mousemove", onMove);
+   508→   508→      document.addEventListener("mouseup", onUp);
+   509→   509→    },
+   510→   510→    [columnWidths, storageKey]
+   511→   511→  );
+   512→   512→
+   513→   513→  return (
+   514→   514→    <div className="flex flex-col gap-4">
+   515→   515→      <style>{`
+   516→   516→        /* Visual hint: a subtle line on the right edge of each header cell. */
+   517→   517→        .staff-grid-header-cell { position: relative; }
+   518→   518→        .staff-grid-header-cell::after {
+   519→   519→          content: "";
+   520→   520→          position: absolute;
+   521→   521→          top: 20%;
+   522→   522→          right: 0;
+   523→   523→          width: 2px;
+   524→   524→          height: 60%;
+   525→   525→          background-color: rgba(15, 23, 42, 0.08);
+   526→   526→          pointer-events: none;
+   527→   527→        }
+   528→   528→        .staff-grid-resizer:hover { background-color: rgba(16, 185, 129, 0.35); }
+   529→   529→      `}</style>
+   530→   530→
+   531→   531→      {/* =========================================================================
+   532→   532→          MULTI-DAY TABLE LAYOUT (used when the selected range is 2+ days)
+   533→   533→          - Rows = time slots (08:00 → 21:00)
+   534→   534→          - Columns = one per day in the range (3/7, 4/7, 5/7 …)
+   535→   535→          - 1–5 days: columns fill the full table width
+   536→   536→          - 6+ days: exactly 5 columns visible, rest scroll horizontally
+   537→   537→          - Within each (day × hour) cell, ALL bookings that start in that
+   538→   538→            hour are shown as compact, non-overlapping chips (vertical stack).
+   539→   539→          - Time slot placement uses `toVietnamDay` + `toVietnamTime` so a
+   540→   540→            09:30 VN booking lands in the 09:00 row, NOT in 16:00 (avoids the
+   541→   541→            UTC→local TZ shift that previously mis-bucketed bookings; also
+   542→   542→            accounts for the post-migration storage where the raw "THH:MM"
+   543→   543→            segment of `date_time` is the UTC time, not the VN time).
+   544→   544→          ========================================================================= */}
+   545→   545→      {dateRange && useMultiDayLayout && (
+   546→   546→        <DayRangeGrid
+   547→   547→          dateRange={dateRange}
+   548→   548→          bookings={bookings}
+   549→   549→          onBookingClick={(b) => {
+   550→   550→            const isPaid = b.status === "checkout";
+   551→   551→            if (isPaid && onShowInvoice) onShowInvoice(b);
+   552→   552→            else onBookingClick(b);
+   553→   553→          }}
+   554→   554→          canViewCustomerPhone={canViewCustomerPhone}
+   555→   555→          onSlotClick={onSlotClick}
+   556→   556→          slotLocked={slotLocked}
+   557→   557→          onEdit={onEdit}
+   558→   558→          onAssignStaff={onAssignStaff}
+   559→   559→        />
+   560→   560→      )}
+   561→   561→
+   562→   562→      {/* =========================================================================
+   563→   563→          SINGLE-DAY STAFF-COLUMN LAYOUT.
+   564→   564→          Used when: (a) no dateRange is supplied, OR (b) the range is exactly
+   565→   565→          1 day. One column per staff, bookings absolutely positioned along a
+   566→   566→          vertical timeline.
+   567→   567→          ========================================================================= */}
+   568→   568→      {(!dateRange || !useMultiDayLayout) && (
+   569→   569→      <div className="border bg-white">
+   570→   570→        {/* Horizontal-scroll container — the time column is sticky-left so it
+   571→   571→            stays visible while the user scrolls through the staff columns.
+   572→   572→            When canResizeTable is true, the grid uses pixel widths that may
+   573→   573→            exceed the container → horizontal scroll. When false, the grid
+   574→   574→            uses 1fr (fills 100%, no scroll). */}
+   575→   575→        <div className="overflow-x-auto">
+   576→   576→          <div style={canResizeTable ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%", minWidth: "100%" }}>
+   577→   577→            {/* Header row: "Giờ" + staff names. The "Giờ" cell is sticky-left. */}
+   578→   578→            <div
+   579→   579→              className="grid border-b-2 border-gray-400 bg-gray-50"
+   580→   580→              style={{ gridTemplateColumns: gridTemplate }}
+   581→   581→            >
+   582→   582→              <div
+   583→   583→                className="staff-grid-header-cell sticky left-0 z-20 border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
+   584→   584→              >
+   585→   585→                Giờ
+   586→   586→                {/* Drag handle on the right edge of the "Giờ" header — only
+   587→   587→                    rendered when the staff has the "resize_table" permission.
+   588→   588→                    Without the permission, the column is not draggable (the
+   589→   589→                    grid uses 1fr and fills the container evenly). */}
+   590→   590→                {canResizeTable && (
+   591→   591→                  <div
+   592→   592→                    className="staff-grid-resizer absolute top-0 right-0 z-30"
+   593→   593→                    style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
+   594→   594→                    onMouseDown={(e) => startColumnResize(e, 0)}
+   595→   595→                  />
+   596→   596→                )}
+   597→   597→              </div>
+   598→   598→              {staffColumns.map((col, idx) => (
+   599→   599→                <div
+   600→   600→                  key={idx}
+   601→   601→                  className="staff-grid-header-cell border-r border-gray-300 p-3 text-center"
+   602→   602→                >
+   603→   603→                  <div className="truncate text-sm font-semibold text-gray-800">
+   604→   604→                    {col.staff ? col.staff.name : "Chưa xếp nhân viên"}
+   605→   605→                  </div>
+   606→   606→                  {col.staff?.groupName && (
+   607→   607→                    <div className="truncate text-[10px] text-gray-400">
+   608→   608→                      {col.staff.groupName}
+   609→   609→                    </div>
+   610→   610→                  )}
+   611→   611→                  <div className="mt-0.5 text-[11px] text-gray-500">
+   612→   612→                    {col.segments.length > 0
+   613→   613→                      ? (() => {
+   614→   614→                          const n = new Set(col.segments.map((s) => s.booking.id)).size;
+   615→   615→                          return `${n} lịch hẹn`;
+   616→   616→                        })()
+   617→   617→                      : "Trống"}
+   618→   618→                  </div>
+   619→   619→                  {/* Drag handle on the right edge of this staff header cell —
+   620→   620→                      only when canResizeTable. Dragging resizes ALL staff
+   621→   621→                      columns synchronously (sync mode in startColumnResize). */}
+   622→   622→                  {canResizeTable && (
+   623→   623→                    <div
+   624→   624→                      className="staff-grid-resizer absolute top-0 right-0 z-30"
+   625→   625→                      style={{ width: `${RESIZER_WIDTH}px`, height: "100%", cursor: "col-resize", marginRight: `-${RESIZER_WIDTH / 2}px` }}
+   626→   626→                      onMouseDown={(e) => startColumnResize(e, idx + 1)}
+   627→   627→                    />
+   628→   628→                  )}
+   629→   629→                </div>
+   630→   630→              ))}
+   631→   631→            </div>
+   632→   632→
+   633→   633→            {/* Timeline body. The left "Giờ" axis is sticky-left. */}
+   634→   634→            <div
+   635→   635→              className="grid relative"
+   636→   636→              style={{ gridTemplateColumns: gridTemplate }}
+   637→   637→            >
+   638→   638→              {/* Left axis: hour labels (sticky-left so it stays while scrolling). */}
+   639→   639→              <div
+   640→   640→                className="sticky left-0 z-10 border-r border-gray-300 bg-white relative"
+   641→   641→                style={{ height: `${timelineHeight}px` }}
+   642→   642→              >
+   643→   643→                {hours.map((h) => (
+   644→   644→                  <div
+   645→   645→                    key={h}
+   646→   646→                    className="absolute left-0 right-0 border-t px-2 text-[10px] text-gray-400"
+   647→   647→                    style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
+   648→   648→                  >
+   649→   649→                    <span className="block pt-0.5">{h.toString().padStart(2, "0")}:00</span>
+   650→   650→                  </div>
+   651→   651→                ))}
+   652→   652→                {/* Hour-band drag handles — one at each gridline. The user grabs
+   653→   653→                    any handle and drags up/down to grow/shrink EVERY hour band.
+   654→   654→                    Rendered above the labels so the handle receives mousedown. */}
+   655→   655→                {hours.slice(0, -1).map((h) => (
+   656→   656→                  <div
+   657→   657→                    key={`handle-${h}`}
+   658→   658→                    data-hour-resizer
+   659→   659→                    className="absolute left-0 right-0 z-30 cursor-row-resize hover:bg-emerald-200/50"
+   660→   660→                    style={{ top: `${(h + 1 - START_HOUR) * pxPerHour - 4}px`, height: "8px" }}
+   661→   661→                    onMouseDown={(e) => {
+   662→   662→                      e.preventDefault();
+   663→   663→                      e.stopPropagation();
+   664→   664→                      const startY = e.clientY;
+   665→   665→                      const startPph = pxPerHour;
+   666→   666→                      document.body.style.cursor = "row-resize";
+   667→   667→                      document.body.style.userSelect = "none";
+   668→   668→                      const onMove = (ev: MouseEvent) => {
+   669→   669→                        const delta = ev.clientY - startY;
+   670→   670→                        setPxPerHourPersisted(startPph + delta);
+   671→   671→                      };
+   672→   672→                      const onUp = () => {
+   673→   673→                        document.body.style.cursor = "";
+   674→   674→                        document.body.style.userSelect = "";
+   675→   675→                        document.removeEventListener("mousemove", onMove);
+   676→   676→                        document.removeEventListener("mouseup", onUp);
+   677→   677→                      };
+   678→   678→                      document.addEventListener("mousemove", onMove);
+   679→   679→                      document.addEventListener("mouseup", onUp);
+   680→   680→                    }}
+   681→   681→                  />
+   682→   682→                ))}
+   683→   683→              </div>
+   684→   684→
+   685→   685→              {/* Staff columns */}
+   686→   686→              {staffColumns.map((col, colIdx) => (
+   687→   687→                <div
+   688→   688→                  key={colIdx}
+   689→   689→                  className={`border-r border-gray-300 relative ${slotLocked ? "bg-gray-50/60" : "cursor-pointer"}`}
+   690→   690→                  style={{ height: `${timelineHeight}px` }}
+   691→   691→                  onMouseMove={(e) => {
+   692→   692→                    if (slotLocked) return;
+   693→   693→                    const rect = e.currentTarget.getBoundingClientRect();
+   694→   694→                    const y = e.clientY - rect.top;
+   695→   695→                    const clampedY = Math.max(0, Math.min(y, timelineHeight - 1));
+   696→   696→                    const totalMinutes = (clampedY / pxPerHour) * 60;
+   697→   697→                    let hour = START_HOUR + Math.floor(totalMinutes / 60);
+   698→   698→                    if (hour >= END_HOUR) hour = END_HOUR - 1;
+   699→   699→                    setHoveredSlot((prev) =>
+   700→   700→                      prev && prev.col === colIdx && prev.hour === hour
+   701→   701→                        ? prev
+   702→   702→                        : { col: colIdx, hour }
+   703→   703→                    );
+   704→   704→                  }}
+   705→   705→                  onMouseLeave={() => {
+   706→   706→                    setHoveredSlot((prev) => (prev && prev.col === colIdx ? null : prev));
+   707→   707→                  }}
+   708→   708→                  onClick={(e) => {
+   709→   709→                    // Only fire when clicking the EMPTY area of the column (not
+   710→   710→                    // on a booking block — those have their own onClick).
+   711→   711→                    if (!onSlotClick || slotLocked) return;
+   712→   712→                    if (e.target !== e.currentTarget) return;
+   713→   713→                    const rect = e.currentTarget.getBoundingClientRect();
+   714→   714→                    const y = e.clientY - rect.top;
+   715→   715→                    // Clamp to timeline bounds.
+   716→   716→                    const clampedY = Math.max(0, Math.min(y, timelineHeight - 1));
+   717→   717→                    const totalMinutes = (clampedY / pxPerHour) * 60;
+   718→   718→                    let hour = START_HOUR + Math.floor(totalMinutes / 60);
+   719→   719→                    let minute = Math.floor(totalMinutes % 60);
+   720→   720→                    // Snap to 30-minute intervals (00 or 30) — matches the
+   721→   721→                    // booking dialog's TimePicker minuteStep=30 so the prefilled
+   722→   722→                    // slot time is always selectable.
+   723→   723→                    minute = Math.round(minute / 30) * 30;
+   724→   724→                    if (minute >= 60) { hour += 1; minute = 0; }
+   725→   725→                    if (hour >= END_HOUR) { hour = END_HOUR - 1; minute = 0; }
+   726→   726→                    const hh = String(hour).padStart(2, "0");
+   727→   727→                    const mm = String(minute).padStart(2, "0");
+   728→   728→                    const dd = String(currentDate.getDate()).padStart(2, "0");
+   729→   729→                    const mo = String(currentDate.getMonth() + 1).padStart(2, "0");
+   730→   730→                    const yyyy = currentDate.getFullYear();
+   731→   731→                    onSlotClick({
+   732→   732→                      date: `${dd}/${mo}/${yyyy}`,
+   733→   733→                      time: `${hh}:${mm}`,
+   734→   734→                      staffId: col.staff?.id || null,
+   735→   735→                    });
+   736→   736→                  }}
+   737→   737→                >
+   738→   738→                  {/* Hour grid lines (background) */}
+   739→   739→                  {hours.map((h) => (
+   740→   740→                    <div
+   741→   741→                      key={h}
+   742→   742→                      className="absolute left-0 right-0 border-t border-gray-300 pointer-events-none"
+   743→   743→                      style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
+   744→   744→                    />
+   745→   745→                  ))}
+   746→   746→
+   747→   747→                  {/* Hover highlight — only the hovered hour slot (orange),
+   748→   748→                      NOT the entire column. pointer-events-none so it doesn't
+   749→   749→                      block clicks on the column (which computes time from Y). */}
+   750→   750→                  {!slotLocked && hoveredSlot && hoveredSlot.col === colIdx && (
+   751→   751→                    <div
+   752→   752→                      className="absolute left-0 right-0 bg-orange-100 pointer-events-none"
+   753→   753→                      style={{
+   754→   754→                        top: `${(hoveredSlot.hour - START_HOUR) * pxPerHour}px`,
+   755→   755→                        height: `${pxPerHour}px`,
+   756→   756→                      }}
+   757→   757→                    />
+   758→   758→                  )}
+   759→   759→
+   760→   760→                  {/* Service-segment blocks. Each segment = one service of one
+   761→   761→                      booking, positioned at [start, start+duration) on THIS
+   762→   762→                      staff's timeline. A multi-service / multi-staff booking
+   763→   763→                      therefore appears as separate blocks in each staff's
+   764→   764→                      column, each occupying its own time slice. */}
+   765→   765→                  {col.segments.map((seg) => (
+   766→   766→                    <SegmentBlock
+   767→   767→                      key={`${seg.booking.id}-${seg.segmentIndex}`}
+   768→   768→                      segment={seg}
+   769→   769→                      pxPerHour={pxPerHour}
+   770→   770→                      // Click logic:
+   771→   771→                      // - checkout (paid) → open the full paid invoice view (giao diện hóa
+   772→   772→                      //   đơn hoàn tất) so the cashier can review/print the receipt.
+   773→   773→                      // - checkin (customer is being served) → open the invoice/payment
+   774→   774→                      //   dialog so the cashier can review items, add products, and proceed
+   775→   775→                      //   to payment. This dialog ALSO opens when the invoice is already
+   776→   776→                      //   "pending" (staff clicked Thanh toán but hasn't completed the
+   777→   777→                      //   checkout) — it resumes the payment flow.
+   778→   778→                      // - confirmed / new / cancelled / no_show → open the edit booking
+   779→   779→                      //   dialog (Chỉnh sửa lịch hẹn) so staff can edit details or proceed
+   780→   780→                      //   to checkin.
+   781→   781→                      onClick={() => {
+   782→   782→                        const status = seg.booking.status;
+   783→   783→                        const isPaid = status === "checkout";
+   784→   784→                        const isCheckin = status === "checkin";
+   785→   785→                        if ((isPaid || isCheckin) && onShowInvoice) {
+   786→   786→                          onShowInvoice(seg.booking);
+   787→   787→                        } else {
+   788→   788→                          onBookingClick(seg.booking);
+   789→   789→                        }
+   790→   790→                      }}
+   791→   791→                      onStatusChange={(status) => onStatusChange?.(seg.booking.id, status)}
+   792→   792→                      onEdit={() => onEdit?.(seg.booking)}
+   793→   793→                      onDelete={() => onDelete?.(seg.booking.id)}
+   794→   794→                      onAssignStaff={() => onAssignStaff?.(seg.booking)}
+   795→   795→                    />
+   796→   796→                  ))}
+   797→   797→                </div>
+   798→   798→              ))}
+   799→   799→            </div>
+   800→   800→          </div>
+   801→   801→        </div>
+   802→   802→      </div>
+   803→   803→      )}
+   804→   804→    </div>
+   805→   805→  );
+   806→   806→}
+   807→   807→
+   808→   808→/** The "Xếp nhân viên" button shown on segment blocks whose service has NO
+   809→   809→ *  staff assigned (staffName === "—"). Renders as a small blue pill below the
+   810→   810→ *  service name. stopPropagation on click so it doesn't trigger the parent
+   811→   811→ *  block's onClick (which would open the edit/invoice dialog); instead it
+   812→   812→ *  calls onAssignStaff to open the booking edit dialog focused on staff
+   813→   813→ *  assignment. */
+   814→   814→function AssignStaffButton({ onAssignStaff }: { onAssignStaff?: () => void }) {
+   815→   815→  return (
+   816→   816→    <button
+   817→   817→      type="button"
+   818→   818→      onClick={(e) => {
+   819→   819→        e.stopPropagation();
+   820→   820→        onAssignStaff?.();
+   821→   821→      }}
+   822→   822→      className="mt-0.5 inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+   823→   823→      title="Xếp nhân viên cho dịch vụ này"
+   824→   824→    >
+   825→   825→      Xếp nhân viên
+   826→   826→    </button>
+   827→   827→  );
+   828→   828→}
+   829→   829→
+   830→   830→/** A single service-segment block on a staff's timeline. The block occupies
+   831→   831→ *  [segment.startMin, segment.startMin + segment.duration) — the time slice
+   832→   832→ *  THIS service runs for, on THIS staff's column. A multi-service / multi-staff
+   833→   833→ *  booking therefore appears as separate blocks in each staff's column, each
+   834→   834→ *  occupying its own time slice (services run back-to-back). Hover opens the
+   835→   835→ *  full booking popover (all services, invoice, actions). */
+   836→   836→function SegmentBlock({
+   837→   837→  segment,
+   838→   838→  onClick,
+   839→   839→  onStatusChange,
+   840→   840→  onEdit,
+   841→   841→  onDelete,
+   842→   842→  onAssignStaff,
+   843→   843→  pxPerHour = PX_PER_HOUR,
+   844→   844→}: {
+   845→   845→  segment: ServiceSegment;
+   846→   846→  onClick: () => void;
+   847→   847→  onStatusChange: (status: BookingStatusType) => void;
+   848→   848→  onEdit: () => void;
+   849→   849→  onDelete: () => void;
+   850→   850→  /** Open the booking edit dialog to assign a staff to this segment's
+   851→   851→      service(s). Called by the "Xếp nhân viên" button shown ONLY when this
+   852→   852→      segment has no staff assigned (staffName === "—"). Mirrors onEdit but is
+   853→   853→      a separate affordance so the user sees a clear "assign staff" CTA
+   854→   854→      directly on unassigned blocks. */
+   855→   855→  onAssignStaff?: () => void;
+   856→   856→  /** Hour-band height (single-day resizable timeline). Defaults to PX_PER_HOUR. */
+   857→   857→  pxPerHour?: number;
+   858→   858→}) {
+   859→   859→  const booking = segment.booking;
+   860→   860→  const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
+   861→   861→  const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
+   862→   862→  // Payment-review flag — must be called BEFORE any early return (rules of
+   863→   863→  // hooks). Shared across Booking + Cashier via sessionStorage; true when the
+   864→   864→  // cashier has pressed "Thanh toán" (review mode), cleared on Hủy/Hoàn tất.
+   865→   865→  const isReviewing = useIsReviewing(booking.id);
+   866→   866→  const [hovered, setHovered] = useState(false);
+   867→   867→  const [selectOpen, setSelectOpen] = useState(false);
+   868→   868→
+   869→   869→  // Clamp the segment into the visible [08:00, 21:00] window.
+   870→   870→  const trackMinutes = (END_HOUR - START_HOUR) * 60;
+   871→   871→  // Skip only segments that start AFTER the visible window ends.
+   872→   872→  // Segments that end BEFORE the visible window (e.g. a booking at 03:30 AM
+   873→   873→  // ending at 05:30 — before 08:00) are NOT skipped: they're clamped to the
+   874→   874→  // top of the grid so the user can SEE them and click to fix the time.
+   875→   875→  // Without this, a booking at 03:30 VN (e.g. from a timezone bug) would be
+   876→   876→  // invisible in View nhân viên — the user would see 5 bookings in the list
+   877→   877→  // but only 4 in the staff view.
+   878→   878→  if (segment.startMin >= trackMinutes) return null;
+   879→   879→  const clampedStart = Math.max(segment.startMin, 0);
+   880→   880→  // If the entire segment is before the visible window, give it a minimum
+   881→   881→  // visible height (30 min) at the top of the grid.
+   882→   882→  const rawEnd = segment.startMin + segment.duration;
+   883→   883→  const clampedEnd = rawEnd <= 0
+   884→   884→    ? Math.max(clampedStart + 30, Math.min(rawEnd, trackMinutes))
+   885→   885→    : Math.min(rawEnd, trackMinutes);
+   886→   886→  const topPx = (clampedStart / 60) * pxPerHour;
+   887→   887→  const heightPx = Math.max(24, ((clampedEnd - clampedStart) / 60) * pxPerHour);
+   888→   888→
+   889→   889→  // Time-range label "HH:MM - HH:MM" for THIS service's slice.
+   890→   890→  const startTotalMin = START_HOUR * 60 + segment.startMin;
+   891→   891→  const endTotalMin = startTotalMin + segment.duration;
+   892→   892→  const fmtTime = (totalMin: number) => {
+   893→   893→    const h = Math.floor(totalMin / 60);
+   894→   894→    const m = totalMin % 60;
+   895→   895→    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+   896→   896→  };
+   897→   897→  const timeRange = `${fmtTime(startTotalMin)} - ${fmtTime(endTotalMin)}`;
+   898→   898→
+   899→   899→  const dt = booking.date_time;
+   900→   900→  const d = dt ? new Date(dt) : null;
+   901→   901→  const dateLabel = d && !isNaN(d.getTime())
+   902→   902→    ? `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`
+   903→   903→    : "";
+   904→   904→
+   905→   905→  const staffName = segment.staffName;
+   906→   906→  const isMultiSegment = segment.totalSegments > 1;
+   907→   907→  const isMergedSlot = segment.services.length > 1;
+   908→   908→
+   909→   909→  // Block background color — groups the booking by payment/cancellation state
+   910→   910→  // so the cashier can tell at a glance which slots need attention:
+   911→   911→  // - Paid (checkout) → emerald tint (matches the status badge)
+   912→   912→  // - Unpaid active (new / confirmed / checkin) → sky tint (in-progress)
+   913→   913→  // - Cancelled / no-show → red tint (dead slots)
+   914→   914→  // We use the SAME color tokens as the status badge (BookingStatusBadgeColors)
+   915→   915→  // so the block and its popover badge stay visually consistent.
+   916→   916→  // Card background color — SAME scheme as View khách hàng > Khung giờ
+   917→   917→  // (user's color spec):
+   918→   918→  // - confirmed / new → XANH DƯƠNG (blue)
+   919→   919→  // - checkin, chưa bấm Thanh toán → XANH (green)
+   920→   920→  // - checkin + đang review (đã bấm Thanh toán, chưa Hoàn tất) → TÍM ĐẬM (darker purple)
+   921→   921→  // - no_show → yellow
+   922→   922→  // - cancelled → red
+   923→   923→  // - checkout (đã Hoàn tất) → TRẮNG (white)
+   924→   924→  //
+   925→   925→  // "đã bấm Thanh toán" is the shared payment-review flag (useIsReviewing),
+   926→   926→  // NOT the invoice's pending status — every checkin booking auto-creates a
+   927→   927→  // pending invoice, so pending-status can't tell the two states apart.
+   928→   928→  const isPaid = booking.status === "checkout";
+   929→   929→  const isCancelled = booking.status === "cancelled";
+   930→   930→  const isNoShow = booking.status === "no_show";
+   931→   931→  const isCheckin = booking.status === "checkin";
+   932→   932→
+   933→   933→  let blockBg: string;
+   934→   934→  let timeText: string;
+   935→   935→  if (isPaid) {
+   936→   936→    blockBg = "bg-white border-gray-300";
+   937→   937→    timeText = "text-gray-700";
+   938→   938→  } else if (isCancelled) {
+   939→   939→    blockBg = "bg-red-50 border-red-200";
+   940→   940→    timeText = "text-red-700";
+   941→   941→  } else if (isNoShow) {
+   942→   942→    blockBg = "bg-amber-50 border-amber-300";
+   943→   943→    timeText = "text-amber-700";
+   944→   944→  } else if (isCheckin && isReviewing) {
+   945→   945→    blockBg = "bg-purple-300 border-purple-600";
+   946→   946→    timeText = "text-purple-900";
+   947→   947→  } else if (isCheckin) {
+   948→   948→    blockBg = "bg-green-200 border-green-500";
+   949→   949→    timeText = "text-green-900";
+   950→   950→  } else {
+   951→   951→    blockBg = "bg-blue-100 border-blue-500";
+   952→   952→    timeText = "text-blue-800";
+   953→   953→  }
+   954→   954→
+   955→   955→  // Status options — the user wants the status Select to only offer the
+   956→   956→  // "dead-end" transitions (Không đến / Hủy), NOT "checkin". Checkin is now a
+   957→   957→  // dedicated button next to "Đơn hàng" (see Line 4 below). Both "Không đến"
+   958→   958→  // (no_show) and "Hủy" (cancelled) make the order unpayable.
+   959→   959→  // - confirmed / new → ["no_show", "cancelled"] (checkin moved to the button)
+   960→   960→  // - checkin → ["cancelled"] only (no "Không đến" — the customer already
+   961→   961→  //   showed up, so "no_show" doesn't make sense; only "Hủy" to cancel)
+   962→   962→  // - checkout / cancelled / no_show → [] (terminal, no manual transitions)
+   963→   963→  let statusOptions: BookingStatusType[] = [];
+   964→   964→  if (booking.status === "confirmed" || booking.status === "new") {
+   965→   965→    statusOptions = ["no_show", "cancelled"];
+   966→   966→  } else if (booking.status === "checkin") {
+   967→   967→    statusOptions = ["cancelled"];
+   968→   968→  }
+   969→   969→
+   970→   970→  // z-index by booking-status priority so UNPAID bookings always stack ON TOP
+   971→   971→  // of cancelled/no_show ones when their segments overlap (mirrors the segment
+   972→   972→  // sort in the column builder). Without this, a cancelled booking's block
+   973→   973→  // could cover an unpaid booking's block, hiding its content. Hovering bumps
+   974→   974→  // the z-index further so the hovered block's popover is always on top.
+   975→   975→  const SEG_Z: Record<string, number> = {
+   976→   976→    cancelled: 10,
+   977→   977→    no_show: 10,
+   978→   978→    checkout: 20,
+   979→   979→    pending: 30,
+   980→   980→    new: 30,
+   981→   981→    confirmed: 30,
+   982→   982→    checkin: 30,
+   983→   983→  };
+   984→   984→  const baseZ = SEG_Z[booking.status] ?? 20;
+   985→   985→  const zIndex = hovered ? 50 : baseZ;
+   986→   986→
+   987→   987→  return (
+   988→   988→    <div
+   989→   989→      className="absolute left-1 right-1"
+   990→   990→      style={{ top: `${topPx}px`, height: `${heightPx}px`, zIndex }}
+   991→   991→      onMouseEnter={() => setHovered(true)}
+   992→   992→      onMouseLeave={() => {
+   993→   993→        // Keep popover open while the status select dropdown is open (it portals outside).
+   994→   994→        if (selectOpen) return;
+   995→   995→        setHovered(false);
+   996→   996→      }}
+   997→   997→    >
+   998→   998→      {/* Block (clickable → opens edit or invoice depending on paid status).
+   999→   999→          Rendered as a <div role="button"> instead of <button> so it can
+  1000→  1000→          contain a nested "Xếp nhân viên" button for unassigned-staff segments
+  1001→  1001→          (nested <button> is invalid HTML). Keyboard accessibility is
+  1002→  1002→          preserved via role + tabIndex + onKeyDown. */}
+  1003→  1003→      <div
+  1004→  1004→        role="button"
+  1005→  1005→        tabIndex={0}
+  1006→  1006→        onClick={onClick}
+  1007→  1007→        onKeyDown={(e) => {
+  1008→  1008→          if (e.key === "Enter" || e.key === " ") {
+  1009→  1009→            e.preventDefault();
+  1010→  1010→            onClick();
+  1011→  1011→          }
+  1012→  1012→        }}
+  1013→  1013→        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
+  1014→  1014→      >
+  1015→  1015→        {/* Time range for THIS service's slice + date + multi-service badge */}
+  1016→  1016→        <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
+  1017→  1017→          <span>
+  1018→  1018→            {timeRange}
+  1019→  1019→            {dateLabel && <span className="ml-1 text-xs font-normal text-gray-500">{dateLabel}</span>}
+  1020→  1020→          </span>
+  1021→  1021→          {isMultiSegment && (
+  1022→  1022→            <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+  1023→  1023→              {segment.segmentIndex + 1}/{segment.totalSegments}
+  1024→  1024→            </span>
+  1025→  1025→          )}
+  1026→  1026→        </div>
+  1027→  1027→        {/* Customer */}
+  1028→  1028→        {/* Multi-customer "Cùng lịch" bookings: list every slot's customer
+  1029→  1029→            (those with info → name+phone; empty slots → "Khách vãng lai").
+  1030→  1030→            Single-customer / "Khác lịch" bookings: show the booking's one
+  1031→  1031→            customer as before. */}
+  1032→  1032→        {(() => {
+  1033→  1033→          const slotCustomers = getAllSlotCustomers(booking.note);
+  1034→  1034→          if (slotCustomers && slotCustomers.length > 0) {
+  1035→  1035→            // For multi-customer "Cùng lịch" bookings, each staff's slot
+  1036→  1036→            // should show ONLY the customer(s) assigned to this segment's
+  1037→  1037→            // service(s). Map the segment's services back to their indices
+  1038→  1038→            // in the full sorted services array, then look up the
+  1039→  1039→            // corresponding slot customers (slots[i] ↔ services[i]).
+  1040→  1040→            const allServices = getAllServices(booking)
+  1041→  1041→              .slice()
+  1042→  1042→              .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  1043→  1043→            const segServiceIds = new Set(segment.services.map((s) => s.id));
+  1044→  1044→            const segSlotIndices: number[] = [];
+  1045→  1045→            allServices.forEach((s, i) => {
+  1046→  1046→              if (segServiceIds.has(s.id)) segSlotIndices.push(i);
+  1047→  1047→            });
+  1048→  1048→            const segCustomers = segSlotIndices
+  1049→  1049→              .map((i) => slotCustomers[i])
+  1050→  1050→              .filter(Boolean);
+  1051→  1051→            return (
+  1052→  1052→              <div className="mt-0.5 space-y-0.5">
+  1053→  1053→                {segCustomers.map((sc, i) => (
+  1054→  1054→                  <div key={i} className="truncate text-sm font-medium text-gray-900">
+  1055→  1055→                    {sc.walkin ? (
+  1056→  1056→                      <span className="text-gray-500">Khách vãng lai</span>
+  1057→  1057→                    ) : (
+  1058→  1058→                      <>
+  1059→  1059→                        {sc.name || "Khách"}
+  1060→  1060→                        {sc.phone && (
+  1061→  1061→                          <span className="ml-1 text-xs font-normal text-gray-500">
+  1062→  1062→                            {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+  1063→  1063→                          </span>
+  1064→  1064→                        )}
+  1065→  1065→                      </>
+  1066→  1066→                    )}
+  1067→  1067→                  </div>
+  1068→  1068→                ))}
+  1069→  1069→              </div>
+  1070→  1070→            );
+  1071→  1071→          }
+  1072→  1072→          return (
+  1073→  1073→            <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+  1074→  1074→              {booking.customer?.name || "Khách"}
+  1075→  1075→              {booking.customer?.phone && (
+  1076→  1076→                <span className="ml-1 text-xs font-normal text-gray-500">
+  1077→  1077→                  {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
+  1078→  1078→                </span>
+  1079→  1079→              )}
+  1080→  1080→            </div>
+  1081→  1081→          );
+  1082→  1082→        })()}
+  1083→  1083→        {/* Services — list ALL services in this merged slot, each with its
+  1084→  1084→            duration. When multiple same-staff services are merged into one
+  1085→  1085→            slot, list each on its own line and show the staff name once below.
+  1086→  1086→            When the slot has a single service, pack service+duration with the
+  1087→  1087→            staff name on one line (matches the single-service layout). */}
+  1088→  1088→        {isMergedSlot ? (
+  1089→  1089→          <>
+  1090→  1090→            <div className="mt-0.5 space-y-0.5">
+  1091→  1091→              {segment.services.map((s, i) => (
+  1092→  1092→                <div key={i} className="truncate text-xs text-gray-700">
+  1093→  1093→                  {s.service?.name || "Dịch vụ"}
+  1094→  1094→                  {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
+  1095→  1095→                </div>
+  1096→  1096→              ))}
+  1097→  1097→            </div>
+  1098→  1098→            {staffName === "—" ? (
+  1099→  1099→              <AssignStaffButton onAssignStaff={onAssignStaff} />
+  1100→  1100→            ) : (
+  1101→  1101→              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {staffName}</div>
+  1102→  1102→            )}
+  1103→  1103→          </>
+  1104→  1104→        ) : (
+  1105→  1105→          staffName === "—" ? (
+  1106→  1106→            <div className="mt-0.5">
+  1107→  1107→              <div className="truncate text-xs text-gray-700">
+  1108→  1108→                {segment.services[0]?.service?.name || "Dịch vụ"}
+  1109→  1109→                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+  1110→  1110→              </div>
+  1111→  1111→              <AssignStaffButton onAssignStaff={onAssignStaff} />
+  1112→  1112→            </div>
+  1113→  1113→          ) : (
+  1114→  1114→            <div className="mt-0.5 flex items-center gap-1 text-xs">
+  1115→  1115→              <span className="truncate text-gray-700">
+  1116→  1116→                {segment.services[0]?.service?.name || "Dịch vụ"}
+  1117→  1117→                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+  1118→  1118→              </span>
+  1119→  1119→              <span className="shrink-0 font-medium text-sky-600">NV: {staffName}</span>
+  1120→  1120→            </div>
+  1121→  1121→          )
+  1122→  1122→        )}
+  1123→  1123→      </div>
+  1124→  1124→
+  1125→  1125→      {/* Hover popover — full booking + invoice details (services, products,
+  1126→  1126→          promotion, tip, total) via BookingHoverDetails. Action buttons
+  1127→  1127→          (edit / delete) stay at the bottom. */}
+  1128→  1128→      {hovered && (
+  1129→  1129→        <div className="absolute left-0 top-full z-50 mt-1 w-[255px] border bg-white shadow-xl">
+  1130→  1130→          <BookingHoverDetails
+  1131→  1131→            booking={booking}
+  1132→  1132→            canViewCustomerPhone={canViewCustomerPhone}
+  1133→  1133→            statusOptions={statusOptions}
+  1134→  1134→            onStatusChange={onStatusChange}
+  1135→  1135→            selectOpen={selectOpen}
+  1136→  1136→            setSelectOpen={setSelectOpen}
+  1137→  1137→            onEdit={onEdit}
+  1138→  1138→            onDelete={onDelete}
+  1139→  1139→            canCancelPayment={canCancelPayment}
+  1140→  1140→            onOpenInvoice={onClick}
+  1141→  1141→            onAssignStaff={onAssignStaff}
+  1142→  1142→          />
+  1143→  1143→        </div>
+  1144→  1144→      )}
+  1145→  1145→    </div>
+  1146→  1146→  );
+  1147→  1147→}
+  1148→  1148→
+  1149→  1149→// ---- Helpers ----
+  1150→  1150→
+  1151→  1151→/** Minutes from the timeline's START_HOUR (08:00) to the booking's start time.
+  1152→  1152→ *  May be negative (booking starts before 08:00) — callers clamp into the
+  1153→  1153→ *  visible window. Returns null when date_time is missing or unparseable. */
+  1154→  1154→function getBookingStartMinutes(booking: Booking): number | null {
+  1155→  1155→  const dt = booking.date_time;
+  1156→  1156→  if (!dt) return null;
+  1157→  1157→  // Use the timezone-safe Vietnam time helper. Supabase normalizes stored
+  1158→  1158→  // date_time offsets to +00:00 (UTC), so the "THH:MM" segment is the UTC
+  1159→  1159→  // time — NOT the Vietnam time the user entered. Parsing the segment directly
+  1160→  1160→  // made bookings display at the wrong hour (and outside the visible window).
+  1161→  1161→  const hhmm = toVietnamTime(dt);
+  1162→  1162→  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
+  1163→  1163→  if (!m) return null;
+  1164→  1164→  const hour = parseInt(m[1], 10);
+  1165→  1165→  const minute = parseInt(m[2], 10);
+  1166→  1166→  if (isNaN(hour) || isNaN(minute)) return null;
+  1167→  1167→  return (hour - START_HOUR) * 60 + minute;
+  1168→  1168→}
+  1169→  1169→
+  1170→  1170→/** All service rows on the booking that carry a service or staff reference. */
+  1171→  1171→function getAllServices(booking: Booking): BookingServiceRow[] {
+  1172→  1172→  const services = booking.services as BookingServiceRow[];
+  1173→  1173→  if (!Array.isArray(services)) return [];
+  1174→  1174→  return services.filter((s) => s && (s.service || s.staff));
+  1175→  1175→}
+  1176→  1176→
+  1177→  1177→// =============================================================================
+  1178→  1178→// MULTI-DAY TABLE LAYOUT — DayRangeGrid
+  1179→  1179→// =============================================================================
+  1180→  1180→// Renders one column per day in the selected date range. Rows are hourly time
+  1181→  1181→// slots. Each (day × hour) cell shows ALL bookings that start in that hour as
+  1182→  1182→// compact, non-overlapping chips (stacked vertically). Bookings from different
+  1183→  1183→// days no longer collide because each day has its OWN column.
+  1184→  1184→//
+  1185→  1185→// Within a single (day × hour) cell, multiple bookings (from different staff)
+  1186→  1186→// are stacked top-to-bottom as small chips — they never overlap because each
+  1187→  1187→// chip occupies its own row in the cell's vertical flex layout.
+  1188→  1188→// =============================================================================
+  1189→  1189→
+  1190→  1190→/** Width of the left "Giờ" column in the multi-day table. */
+  1191→  1191→const DAYGRID_TIME_COL_WIDTH = 64;
+  1192→  1192→/** Minimum width of each day column (scrolls horizontally when more days). */
+  1193→  1193→const DAYGRID_DAY_COL_MIN_WIDTH = 160;
+  1194→  1194→/** Height of each hour row. Increased 1.5× (60 → 90) so multi-booking cells
+  1195→  1195→ *  have room to show their chips without internal scrolling. */
+  1196→  1196→const DAYGRID_ROW_HEIGHT = 90;
+  1197→  1197→/** The "minimum" layout baseline is 4 days — when 4 days are selected, the
+  1198→  1198→ *  columns fill the table. 5+ days keep the SAME per-column width as 4 days
+  1199→  1199→ *  would have had (so cells stay readable) and scroll horizontally. */
+  1200→  1200→const DAYGRID_BASELINE_DAYS = 4;
+  1201→  1201→
+  1202→  1202→interface DayRangeGridProps {
+  1203→  1203→  dateRange: { from: Date; to: Date };
+  1204→  1204→  bookings: Booking[];
+  1205→  1205→  onBookingClick: (b: Booking) => void;
+  1206→  1206→  canViewCustomerPhone: boolean;
+  1207→  1207→  onSlotClick?: (slot: { date: string; time: string; staffId: string | null }) => void;
+  1208→  1208→  slotLocked: boolean;
+  1209→  1209→  /** Open the booking edit dialog (passed down to BookingChip so the "Xếp nhân
+  1210→  1210→      viên" button in its hover popover can assign a staff). */
+  1211→  1211→  onEdit?: (b: Booking) => void;
+  1212→  1212→  /** Open the dedicated "Xếp nhân viên" dialog (passed down to BookingChip). */
+  1213→  1213→  onAssignStaff?: (b: Booking) => void;
+  1214→  1214→}
+  1215→  1215→
+  1216→  1216→/** Build the list of calendar days (inclusive) between `from` and `to`.
+  1217→  1217→ *  Each Date is normalized to local midnight so day-of-month arithmetic is
+  1218→  1218→ *  stable regardless of the host timezone. */
+  1219→  1219→function buildDaysInRange(from: Date, to: Date): Date[] {
+  1220→  1220→  const days: Date[] = [];
+  1221→  1221→  const start = new Date(from);
+  1222→  1222→  start.setHours(0, 0, 0, 0);
+  1223→  1223→  const end = new Date(to);
+  1224→  1224→  end.setHours(0, 0, 0, 0);
+  1225→  1225→  if (end < start) return [start];
+  1226→  1226→  const cur = new Date(start);
+  1227→  1227→  while (cur <= end) {
+  1228→  1228→    days.push(new Date(cur));
+  1229→  1229→    cur.setDate(cur.getDate() + 1);
+  1230→  1230→  }
+  1231→  1231→  return days;
+  1232→  1232→}
+  1233→  1233→
+  1234→  1234→/** Build a `YYYY-MM-DD` dayKey from a local Date object (no UTC shift). */
+  1235→  1235→function dateToLocalDayKey(d: Date): string {
+  1236→  1236→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  1237→  1237→}
+  1238→  1238→
+  1239→  1239→/** Extract { dayKey, hour, minute } from the booking's `date_time` as VIETNAM
+  1240→  1240→ *  wall-clock values. Post-migration (Task 6), `date_time` is stored as a UTC
+  1241→  1241→ *  ISO string (e.g. "2026-07-14T03:30:00+00:00" represents 10:30 VN), so the
+  1242→  1242→ *  raw "THH:MM" segment is the UTC time, NOT the VN time the user entered.
+  1243→  1243→ *  Using `toVietnamDay` + `toVietnamTime` ensures the booking lands in the
+  1244→  1244→ *  correct row+column of the multi-day staff grid (a 10:30 VN booking lands in
+  1245→  1245→ *  the "10:00" row of column "2026-07-14", not the skipped "03:00" row). */
+  1246→  1246→function getBookingDayHour(booking: Booking): { dayKey: string; hour: number; minute: number } | null {
+  1247→  1247→  const dt = booking.date_time;
+  1248→  1248→  if (!dt || typeof dt !== "string") return null;
+  1249→  1249→  const dayKey = toVietnamDay(dt);
+  1250→  1250→  const hhmm = toVietnamTime(dt);
+  1251→  1251→  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
+  1252→  1252→  if (!m) return null;
+  1253→  1253→  const hour = parseInt(m[1], 10);
+  1254→  1254→  const minute = parseInt(m[2], 10);
+  1255→  1255→  if (isNaN(hour) || isNaN(minute)) return null;
+  1256→  1256→  return { dayKey, hour, minute };
+  1257→  1257→}
+  1258→  1258→
+  1259→  1259→/** "dd/MM" label for a day. */
+  1260→  1260→function dayLabel(d: Date): string {
+  1261→  1261→  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+  1262→  1262→}
+  1263→  1263→
+  1264→  1264→/** Short weekday name (T2, T3, … T7, CN). */
+  1265→  1265→function weekdayLabel(d: Date): string {
+  1266→  1266→  const vi = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  1267→  1267→  return vi[d.getDay()];
+  1268→  1268→}
+  1269→  1269→
+  1270→  1270→function DayRangeGrid({
+  1271→  1271→  dateRange,
+  1272→  1272→  bookings,
+  1273→  1273→  onBookingClick,
+  1274→  1274→  canViewCustomerPhone,
+  1275→  1275→  onSlotClick,
+  1276→  1276→  slotLocked,
+  1277→  1277→  onEdit,
+  1278→  1278→  onAssignStaff,
+  1279→  1279→}: DayRangeGridProps) {
+  1280→  1280→  const days = useMemo(() => buildDaysInRange(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
+  1281→  1281→  const hours = useMemo(() => {
+  1282→  1282→    const h: number[] = [];
+  1283→  1283→    for (let i = START_HOUR; i <= END_HOUR; i++) h.push(i);
+  1284→  1284→    return h;
+  1285→  1285→  }, []);
+  1286→  1286→
+  1287→  1287→  // Measure the container width so we can compute the per-day column width
+  1288→  1288→  // when 5+ days are selected. The "minimum readable" layout is defined as
+  1289→  1289→  // 4 days filling the table; 5+ days keep the SAME column width as 4 days
+  1290→  1290→  // would have had, and scroll horizontally. Without measuring we'd have to
+  1291→  1291→  // hard-code a width that may not match the actual table width.
+  1292→  1292→  const containerRef = useRef<HTMLDivElement>(null);
+  1293→  1293→  const [containerWidth, setContainerWidth] = useState(0);
+  1294→  1294→  useEffect(() => {
+  1295→  1295→    const el = containerRef.current;
+  1296→  1296→    if (!el) return;
+  1297→  1297→    const update = () => setContainerWidth(el.getBoundingClientRect().width);
+  1298→  1298→    update();
+  1299→  1299→    const ro = new ResizeObserver(update);
+  1300→  1300→    ro.observe(el);
+  1301→  1301→    return () => ro.disconnect();
+  1302→  1302→  }, []);
+  1303→  1303→
+  1304→  1304→  // Index bookings by `${dayKey}|${hour}` for O(1) cell lookup.
+  1305→  1305→  const cellMap = useMemo(() => {
+  1306→  1306→    const m = new Map<string, Booking[]>();
+  1307→  1307→    for (const b of bookings) {
+  1308→  1308→      const info = getBookingDayHour(b);
+  1309→  1309→      if (!info) continue;
+  1310→  1310→      // Skip bookings outside the visible hour range.
+  1311→  1311→      if (info.hour < START_HOUR || info.hour > END_HOUR) continue;
+  1312→  1312→      const key = `${info.dayKey}|${info.hour}`;
+  1313→  1313→      const arr = m.get(key);
+  1314→  1314→      if (arr) arr.push(b);
+  1315→  1315→      else m.set(key, [b]);
+  1316→  1316→    }
+  1317→  1317→    // Sort each cell's bookings:
+  1318→  1318→    // 1. UNPAID bookings (pending/new/confirmed/checkin) take priority and
+  1319→  1319→    //    render ON TOP of cancelled/no_show ones. When a cancelled booking
+  1320→  1320→    //    would occupy the same slot as an unpaid booking (same start minute),
+  1321→  1321→    //    the unpaid one wins the visible position. This implements the user's
+  1322→  1322→    //    requirement: "lịch chưa thanh toán hiển thị đè lên lịch đã hủy".
+  1323→  1323→    // 2. Within the same priority, sort by start minute (earlier → top) so
+  1324→  1324→    //    the cell still reads top-to-bottom chronologically.
+  1325→  1325→    const PRIORITY: Record<string, number> = {
+  1326→  1326→      // unpaid / active → priority 0 (top)
+  1327→  1327→      pending: 0,
+  1328→  1328→      new: 0,
+  1329→  1329→      confirmed: 0,
+  1330→  1330→      checkin: 0,
+  1331→  1331→      // paid → priority 1
+  1332→  1332→      checkout: 1,
+  1333→  1333→      // cancelled / no-show → priority 2 (bottom, "hidden under" unpaid)
+  1334→  1334→      cancelled: 2,
+  1335→  1335→      no_show: 2,
+  1336→  1336→    };
+  1337→  1337→    for (const arr of m.values()) {
+  1338→  1338→      arr.sort((a, b) => {
+  1339→  1339→        const pa = PRIORITY[a.status] ?? 1;
+  1340→  1340→        const pb = PRIORITY[b.status] ?? 1;
+  1341→  1341→        if (pa !== pb) return pa - pb;
+  1342→  1342→        const ai = getBookingDayHour(a);
+  1343→  1343→        const bi = getBookingDayHour(b);
+  1344→  1344→        return (ai?.minute ?? 0) - (bi?.minute ?? 0);
+  1345→  1345→      });
+  1346→  1346→      // When an UNPAID booking and a CANCELLED booking share the EXACT same
+  1347→  1347→      // start minute (a true slot collision — e.g. a cancelled booking at
+  1348→  1348→      // 10:30 and a new confirmed booking at 10:30 for the same staff), hide
+  1349→  1349→      // the cancelled one entirely so the unpaid booking's chip is fully
+  1350→  1350→      // visible (not stacked under/over the cancelled chip). Bookings with
+  1351→  1351→      // different start minutes stay (they're different time slots within
+  1352→  1352→      // the same hour cell).
+  1353→  1353→      const hasUnpaid = arr.some(
+  1354→  1354→        (b) => (PRIORITY[b.status] ?? 1) === 0
+  1355→  1355→      );
+  1356→  1356→      if (hasUnpaid) {
+  1357→  1357→        // Build a set of start-minutes that have an unpaid booking.
+  1358→  1358→        const unpaidMinutes = new Set<number>();
+  1359→  1359→        for (const b of arr) {
+  1360→  1360→          if ((PRIORITY[b.status] ?? 1) === 0) {
+  1361→  1361→            const info = getBookingDayHour(b);
+  1362→  1362→            if (info) unpaidMinutes.add(info.minute);
+  1363→  1363→          }
+  1364→  1364→        }
+  1365→  1365→        // Remove cancelled/no_show bookings whose start minute collides with
+  1366→  1366→        // an unpaid booking's start minute. Keep non-colliding cancelled ones
+  1367→  1367→        // (different slot within the same hour) so the staff still sees them.
+  1368→  1368→        for (let i = arr.length - 1; i >= 0; i--) {
+  1369→  1369→          const b = arr[i];
+  1370→  1370→          const isCancelled = b.status === "cancelled" || b.status === "no_show";
+  1371→  1371→          if (!isCancelled) continue;
+  1372→  1372→          const info = getBookingDayHour(b);
+  1373→  1373→          if (info && unpaidMinutes.has(info.minute)) {
+  1374→  1374→            arr.splice(i, 1);
+  1375→  1375→          }
+  1376→  1376→        }
+  1377→  1377→      }
+  1378→  1378→    }
+  1379→  1379→    return m;
+  1380→  1380→  }, [bookings]);
+  1381→  1381→
+  1382→  1382→  // Layout decision:
+  1383→  1383→  //   - 1–4 days → columns fill the full table width (1fr each), no scroll.
+  1384→  1384→  //   - 5+ days → each column keeps the SAME width it would have had when 4
+  1385→  1385→  //     days filled the table ((containerWidth - timeCol) / 4), and the table
+  1386→  1386→  //     scrolls horizontally. This guarantees cells never shrink below the
+  1387→  1387→  //     4-day baseline width, no matter how many days are selected.
+  1388→  1388→  const dayCount = days.length;
+  1389→  1389→  const needsScroll = dayCount > DAYGRID_BASELINE_DAYS;
+  1390→  1390→  // Per-column width when scrolling. Derived from the measured container
+  1391→  1391→  // width so 5+ days look exactly like 4 days did (just with more columns
+  1392→  1392→  // off-screen to the right). Fall back to a sane default before the
+  1393→  1393→  // ResizeObserver fires (containerWidth === 0 on first render).
+  1394→  1394→  const scrollColWidth = containerWidth > 0
+  1395→  1395→    ? Math.max(DAYGRID_DAY_COL_MIN_WIDTH, (containerWidth - DAYGRID_TIME_COL_WIDTH) / DAYGRID_BASELINE_DAYS)
+  1396→  1396→    : 240;
+  1397→  1397→  const totalWidth = needsScroll
+  1398→  1398→    ? DAYGRID_TIME_COL_WIDTH + dayCount * scrollColWidth
+  1399→  1399→    : undefined; // undefined → 100% width (fills the table)
+  1400→  1400→
+  1401→  1401→  const handleCellClick = (day: Date, hour: number, e: React.MouseEvent<HTMLDivElement>) => {
+  1402→  1402→    if (!onSlotClick || slotLocked) return;
+  1403→  1403→    if (e.target !== e.currentTarget) return; // only empty area
+  1404→  1404→    const dd = String(day.getDate()).padStart(2, "0");
+  1405→  1405→    const mo = String(day.getMonth() + 1).padStart(2, "0");
+  1406→  1406→    const yyyy = day.getFullYear();
+  1407→  1407→    onSlotClick({
+  1408→  1408→      date: `${dd}/${mo}/${yyyy}`,
+  1409→  1409→      time: `${String(hour).padStart(2, "0")}:00`,
+  1410→  1410→      staffId: null,
+  1411→  1411→    });
+  1412→  1412→  };
+  1413→  1413→
+  1414→  1414→  return (
+  1415→  1415→    <div className="border bg-white flex flex-col" ref={containerRef} style={{ maxHeight: "calc(100vh - 200px)" }}>
+  1416→  1416→      <div className="flex-1 min-h-0 overflow-auto" data-grid-resizable>
+  1417→  1417→        <div
+  1418→  1418→          style={
+  1419→  1419→            needsScroll
+  1420→  1420→              ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` }
+  1421→  1421→              : { width: "100%" }
+  1422→  1422→          }
+  1423→  1423→        >
+  1424→  1424→          {/* Header: "Giờ" + day columns — sticky at top so it stays during vertical scroll */}
+  1425→  1425→          <div
+  1426→  1426→            data-grid-header
+  1427→  1427→            className="grid border-b bg-gray-50 sticky top-0 z-10"
+  1428→  1428→            style={{
+  1429→  1429→              gridTemplateColumns: needsScroll
+  1430→  1430→                ? `${DAYGRID_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`
+  1431→  1431→                : `${DAYGRID_TIME_COL_WIDTH}px repeat(${dayCount}, minmax(0, 1fr))`,
+  1432→  1432→            }}
+  1433→  1433→          >
+  1434→  1434→            <div className="border-r p-2 text-center text-xs font-semibold text-gray-600">
+  1435→  1435→              Giờ
+  1436→  1436→            </div>
+  1437→  1437→            {days.map((day, idx) => {
+  1438→  1438→              const isToday = (() => {
+  1439→  1439→                const t = new Date();
+  1440→  1440→                t.setHours(0, 0, 0, 0);
+  1441→  1441→                const d = new Date(day);
+  1442→  1442→                d.setHours(0, 0, 0, 0);
+  1443→  1443→                return t.getTime() === d.getTime();
+  1444→  1444→              })();
+  1445→  1445→              return (
+  1446→  1446→                <div
+  1447→  1447→                  key={idx}
+  1448→  1448→                  className={`border-r p-2 text-center ${isToday ? "bg-emerald-50" : ""}`}
+  1449→  1449→                >
+  1450→  1450→                  <div className="text-[11px] font-medium text-gray-500">
+  1451→  1451→                    {weekdayLabel(day)}
+  1452→  1452→                  </div>
+  1453→  1453→                  <div className={`text-sm font-semibold ${isToday ? "text-emerald-700" : "text-gray-800"}`}>
+  1454→  1454→                    {dayLabel(day)}
+  1455→  1455→                  </div>
+  1456→  1456→                </div>
+  1457→  1457→              );
+  1458→  1458→            })}
+  1459→  1459→          </div>
+  1460→  1460→
+  1461→  1461→          {/* Body: one row per hour. Uses minHeight (not height) so rows expand
+  1462→  1462→              downward when a cell has many bookings — no internal cell scroll. */}
+  1463→  1463→          <div data-grid-body>
+  1464→  1464→            {hours.map((hour) => (
+  1465→  1465→              <div
+  1466→  1466→                key={hour}
+  1467→  1467→                className="grid border-b last:border-b-0"
+  1468→  1468→                style={{
+  1469→  1469→                  gridTemplateColumns: needsScroll
+  1470→  1470→                    ? `${DAYGRID_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`
+  1471→  1471→                    : `${DAYGRID_TIME_COL_WIDTH}px repeat(${dayCount}, minmax(0, 1fr))`,
+  1472→  1472→                  minHeight: `${DAYGRID_ROW_HEIGHT}px`,
+  1473→  1473→                }}
+  1474→  1474→              >
+  1475→  1475→                {/* Time label */}
+  1476→  1476→                <div className="border-r bg-gray-50/60 px-2 py-1 text-[11px] text-gray-500">
+  1477→  1477→                  {String(hour).padStart(2, "0")}:00
+  1478→  1478→                </div>
+  1479→  1479→                {/* Day cells */}
+  1480→  1480→                {days.map((day, dayIdx) => {
+  1481→  1481→                  const dayKey = dateToLocalDayKey(day);
+  1482→  1482→                  const cellBookings = cellMap.get(`${dayKey}|${hour}`) || [];
+  1483→  1483→                  const isToday = (() => {
+  1484→  1484→                    const t = new Date();
+  1485→  1485→                    t.setHours(0, 0, 0, 0);
+  1486→  1486→                    const d = new Date(day);
+  1487→  1487→                    d.setHours(0, 0, 0, 0);
+  1488→  1488→                    return t.getTime() === d.getTime();
+  1489→  1489→                  })();
+  1490→  1490→                  return (
+  1491→  1491→                    <div
+  1492→  1492→                      key={dayIdx}
+  1493→  1493→                      onClick={(e) => handleCellClick(day, hour, e)}
+  1494→  1494→                      className={`border-r p-1 ${slotLocked ? "bg-gray-50/40" : "cursor-pointer hover:bg-orange-100"} ${isToday ? "bg-emerald-50/20" : ""}`}
+  1495→  1495→                    >
+  1496→  1496→                      <div className="grid grid-cols-2 gap-1">
+  1497→  1497→                        {cellBookings.map((b, i) => (
+  1498→  1498→                          <div
+  1499→  1499→                            key={b.id}
+  1500→  1500→                            className={
+  1501→  1501→                              i === cellBookings.length - 1 && cellBookings.length % 2 === 1
+  1502→  1502→                                ? "col-span-2"
+  1503→  1503→                                : ""
+  1504→  1504→                            }
+  1505→  1505→                          >
+  1506→  1506→                            <BookingChip
+  1507→  1507→                              booking={b}
+  1508→  1508→                              canViewCustomerPhone={canViewCustomerPhone}
+  1509→  1509→                              onClick={() => onBookingClick(b)}
+  1510→  1510→                              onEdit={onEdit ? () => onEdit(b) : undefined}
+  1511→  1511→                              onAssignStaff={onAssignStaff ? () => onAssignStaff(b) : undefined}
+  1512→  1512→                            />
+  1513→  1513→                          </div>
+  1514→  1514→                        ))}
+  1515→  1515→                      </div>
+  1516→  1516→                    </div>
+  1517→  1517→                  );
+  1518→  1518→                })}
+  1519→  1519→              </div>
+  1520→  1520→            ))}
+  1521→  1521→          </div>
+  1522→  1522→        </div>
+  1523→  1523→      </div>
+  1524→  1524→    </div>
+  1525→  1525→  );
+  1526→  1526→}
+  1527→  1527→
+  1528→  1528→/** Compact booking chip for the multi-day table cells. Non-overlapping: each
+  1529→  1529→ *  chip is a flex child in its cell so multiple bookings stack vertically.
+  1530→  1530→ *  Hovering opens a rich HoverCard popover showing full booking + invoice
+  1531→  1531→ *  details (date/time, customer name+phone, services, products, staff,
+  1532→  1532→ *  promotion, tip, total). */
+  1533→  1533→function BookingChip({
+  1534→  1534→  booking,
+  1535→  1535→  canViewCustomerPhone,
+  1536→  1536→  onClick,
+  1537→  1537→  onEdit,
+  1538→  1538→  onAssignStaff,
+  1539→  1539→}: {
+  1540→  1540→  booking: Booking;
+  1541→  1541→  canViewCustomerPhone: boolean;
+  1542→  1542→  onClick: () => void;
+  1543→  1543→  /** Open the booking edit dialog (used by the "Xếp nhân viên" button in the
+  1544→  1544→      hover popover for services with no staff). Optional — when omitted, the
+  1545→  1545→      assign-staff button is hidden in the popover. */
+  1546→  1546→  onEdit?: () => void;
+  1547→  1547→  /** Open the dedicated "Xếp nhân viên" dialog (preferred over onEdit for the
+  1548→  1548→      assign-staff button). When provided, the popover's "Xếp nhân viên" button
+  1549→  1549→      calls this; falls back to onEdit when not provided. */
+  1550→  1550→  onAssignStaff?: () => void;
+  1551→  1551→}) {
+  1552→  1552→  const serviceRows = getAllServices(booking);
+  1553→  1553→  const svc = serviceRows[0] || null;
+  1554→  1554→  const serviceName = svc?.service?.name || "Dịch vụ";
+  1555→  1555→  const staffName = svc?.staff?.name || "—";
+  1556→  1556→  const totalDuration = serviceRows.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+  1557→  1557→  const isPaid = booking.status === "checkout";
+  1558→  1558→  const isCancelled = booking.status === "cancelled";
+  1559→  1559→  const isNoShow = booking.status === "no_show";
+  1560→  1560→  const isCheckin = booking.status === "checkin";
+  1561→  1561→  const isReviewing = useIsReviewing(booking.id);
+  1562→  1562→  // SAME scheme as SegmentBlock above (user's color spec):
+  1563→  1563→  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
+  1564→  1564→  let chipBg: string;
+  1565→  1565→  let timeText: string;
+  1566→  1566→  if (isPaid) {
+  1567→  1567→    chipBg = "bg-white border-gray-300";
+  1568→  1568→    timeText = "text-gray-700";
+  1569→  1569→  } else if (isCancelled) {
+  1570→  1570→    chipBg = "bg-red-50 border-red-200";
+  1571→  1571→    timeText = "text-red-700";
+  1572→  1572→  } else if (isNoShow) {
+  1573→  1573→    chipBg = "bg-amber-50 border-amber-300";
+  1574→  1574→    timeText = "text-amber-700";
+  1575→  1575→  } else if (isCheckin && isReviewing) {
+  1576→  1576→    chipBg = "bg-purple-300 border-purple-600";
+  1577→  1577→    timeText = "text-purple-900";
+  1578→  1578→  } else if (isCheckin) {
+  1579→  1579→    chipBg = "bg-green-200 border-green-500";
+  1580→  1580→    timeText = "text-green-900";
+  1581→  1581→  } else {
+  1582→  1582→    chipBg = "bg-blue-100 border-blue-500";
+  1583→  1583→    timeText = "text-blue-800";
+  1584→  1584→  }
+  1585→  1585→
+  1586→  1586→  const timeStr = booking.date_time
+  1587→  1587→    ? (() => {
+  1588→  1588→        // Timezone-safe Vietnam time (Supabase stores +00:00; the "THH:MM"
+  1589→  1589→        // segment is UTC, not the VN time the user entered).
+  1590→  1590→        return toVietnamTime(booking.date_time!);
+  1591→  1591→      })()
+  1592→  1592→    : "";
+  1593→  1593→
+  1594→  1594→  const phone = booking.customer?.phone || "";
+  1595→  1595→
+  1596→  1596→  return (
+  1597→  1597→    <HoverCard openDelay={200} closeDelay={150}>
+  1598→  1598→      <HoverCardTrigger asChild>
+  1599→  1599→        <button
+  1600→  1600→          type="button"
+  1601→  1601→          onClick={onClick}
+  1602→  1602→          title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
+  1603→  1603→          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
+  1604→  1604→        >
+  1605→  1605→          <div className="flex items-center justify-between">
+  1606→  1606→            <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
+  1607→  1607→            {booking.numberOfCustomers > 1 && (
+  1608→  1608→              <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+  1609→  1609→                ×{booking.numberOfCustomers}
+  1610→  1610→              </span>
+  1611→  1611→            )}
+  1612→  1612→          </div>
+  1613→  1613→          {/* Customer — multi-customer "Cùng lịch" bookings list every slot's
+  1614→  1614→              customer; others show the single booking customer. */}
+  1615→  1615→          {(() => {
+  1616→  1616→            const slotCustomers = getAllSlotCustomers(booking.note);
+  1617→  1617→            if (slotCustomers && slotCustomers.length > 0) {
+  1618→  1618→              return (
+  1619→  1619→                <div className="mt-0.5 space-y-0.5">
+  1620→  1620→                  {slotCustomers.map((sc, i) => (
+  1621→  1621→                    <div key={i} className="truncate text-sm font-medium text-gray-900">
+  1622→  1622→                      {sc.walkin ? (
+  1623→  1623→                        <span className="text-gray-500">Khách vãng lai</span>
+  1624→  1624→                      ) : (
+  1625→  1625→                        <>
+  1626→  1626→                          {sc.name || "Khách"}
+  1627→  1627→                          {sc.phone && (
+  1628→  1628→                            <span className="ml-1 text-xs font-normal text-gray-500">
+  1629→  1629→                              {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+  1630→  1630→                            </span>
+  1631→  1631→                          )}
+  1632→  1632→                        </>
+  1633→  1633→                      )}
+  1634→  1634→                    </div>
+  1635→  1635→                  ))}
+  1636→  1636→                </div>
+  1637→  1637→              );
+  1638→  1638→            }
+  1639→  1639→            return (
+  1640→  1640→              <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+  1641→  1641→                {booking.customer?.name || "Khách"}
+  1642→  1642→                {phone && (
+  1643→  1643→                  <span className="ml-1 text-xs font-normal text-gray-500">
+  1644→  1644→                    {canViewCustomerPhone ? phone : maskPhone(phone)}
+  1645→  1645→                  </span>
+  1646→  1646→                )}
+  1647→  1647→              </div>
+  1648→  1648→            );
+  1649→  1649→          })()}
+  1650→  1650→          {/* Services — list ALL of them, one line per service. The staff name
+  1651→  1651→              sits to the RIGHT of each service (same line) so the cashier sees
+  1652→  1652→              who performs each service at a glance. */}
+  1653→  1653→          <div className="mt-0.5 space-y-0.5">
+  1654→  1654→            {serviceRows.map((s, i) => (
+  1655→  1655→              <div key={i} className="flex items-center justify-between gap-1">
+  1656→  1656→                <span className="truncate text-xs text-gray-700">
+  1657→  1657→                  {s.service?.name || "Dịch vụ"}
+  1658→  1658→                  {s.service?.duration ? (
+  1659→  1659→                    <span className="ml-0.5 text-gray-500">({s.service.duration})</span>
+  1660→  1660→                  ) : null}
+  1661→  1661→                </span>
+  1662→  1662→                {s.staff?.name && (
+  1663→  1663→                  <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>
+  1664→  1664→                )}
+  1665→  1665→              </div>
+  1666→  1666→            ))}
+  1667→  1667→            {serviceRows.length === 0 && (
+  1668→  1668→              <div className="truncate text-xs text-gray-600">{serviceName}</div>
+  1669→  1669→            )}
+  1670→  1670→          </div>
+  1671→  1671→          {totalDuration > 0 && (
+  1672→  1672→            <div className="mt-0.5 text-[10px] font-medium text-gray-500">
+  1673→  1673→              Tổng: {totalDuration} phút
+  1674→  1674→            </div>
+  1675→  1675→          )}
+  1676→  1676→        </button>
+  1677→  1677→      </HoverCardTrigger>
+  1678→  1678→      <HoverCardContent
+  1679→  1679→        side="right"
+  1680→  1680→        align="start"
+  1681→  1681→        className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
+  1682→  1682→      >
+  1683→  1683→        <BookingHoverDetails
+  1684→  1684→          booking={booking}
+  1685→  1685→          canViewCustomerPhone={canViewCustomerPhone}
+  1686→  1686→          statusOptions={[]}
+  1687→  1687→          onStatusChange={() => {}}
+  1688→  1688→          selectOpen={false}
+  1689→  1689→          setSelectOpen={() => {}}
+  1690→  1690→          onEdit={onEdit || onClick}
+  1691→  1691→          onDelete={() => {}}
+  1692→  1692→          canCancelPayment={false}
+  1693→  1693→          onOpenInvoice={onClick}
+  1694→  1694→          onAssignStaff={onAssignStaff || onEdit || onClick}
+  1695→  1695→        />
+  1696→  1696→      </HoverCardContent>
+  1697→  1697→    </HoverCard>
+  1698→  1698→  );
+  1699→  1699→}
+  1700→  1700→
+  1701→  1701→/** Rich hover popover content — redesigned per user request:
+  1702→  1702→ *  Line 1: customer name | phone
+  1703→  1703→ *  Line 2: status badge + status Select (Checkin / Không đến / Hủy)
+  1704→  1704→ *  Line 3: services with (duration), staff name below in blue
+  1705→  1705→ *  Line 4: "Đơn hàng" link (or "Xem hóa đơn" if paid) → opens invoice dialog
+  1706→  1706→ *  Line 5: square edit + trash buttons
+  1707→  1707→ *  Lazily fetches the linked invoice for the paid-amount display.
+  1708→  1708→ *
+  1709→  1709→ *  Exported so the Khung giờ (time-grid) view can reuse the SAME popover
+  1710→  1710→ *  content, keeping the hover experience identical across both views. */
+  1711→  1711→export function BookingHoverDetails({
+  1712→  1712→  booking,
+  1713→  1713→  canViewCustomerPhone,
+  1714→  1714→  statusOptions,
+  1715→  1715→  onStatusChange,
+  1716→  1716→  selectOpen,
+  1717→  1717→  setSelectOpen,
+  1718→  1718→  onEdit,
+  1719→  1719→  onDelete,
+  1720→  1720→  canCancelPayment,
+  1721→  1721→  onOpenInvoice,
+  1722→  1722→  onAssignStaff,
+  1723→  1723→}: {
+  1724→  1724→  booking: Booking;
+  1725→  1725→  canViewCustomerPhone: boolean;
+  1726→  1726→  statusOptions: BookingStatusType[];
+  1727→  1727→  onStatusChange: (status: BookingStatusType) => void;
+  1728→  1728→  selectOpen: boolean;
+  1729→  1729→  setSelectOpen: (open: boolean) => void;
+  1730→  1730→  onEdit: () => void;
+  1731→  1731→  onDelete: () => void;
+  1732→  1732→  canCancelPayment: boolean;
+  1733→  1733→  onOpenInvoice: () => void;
+  1734→  1734→  /** Open the booking edit dialog to assign a staff. Called by the "Xếp nhân
+  1735→  1735→      viên" button shown in the services list when a service has no staff. */
+  1736→  1736→  onAssignStaff?: () => void;
+  1737→  1737→}) {
+  1738→  1738→  // Parse date + time using the timezone-safe Vietnam helpers. Supabase
+  1739→  1739→  // stores date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
+  1740→  1740→  // is the UTC time — NOT the Vietnam wall-clock time the user entered.
+  1741→  1741→  // Parsing the raw segment directly would display "03:30" for a 10:30 VN
+  1742→  1742→  // booking (off by 7h).
+  1743→  1743→  const dateStr = booking.date_time
+  1744→  1744→    ? (() => {
+  1745→  1745→        const isoDayParts = toVietnamDay(booking.date_time).split("-");
+  1746→  1746→        if (isoDayParts.length !== 3) return "";
+  1747→  1747→        return `${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]} ${toVietnamTime(booking.date_time)}`;
+  1748→  1748→      })()
+  1749→  1749→    : "";
+  1750→  1750→
+  1751→  1751→  // Lazy-load the invoice detail (items, tip, promotion, final_amount).
+  1752→  1752→  // Bookings that were never checked out have no invoice → the query returns
+  1753→  1753→  // null and we show only the booking's own services.
+  1754→  1754→  const { data: invoiceData, isLoading } = useQuery({
+  1755→  1755→    queryKey: ["booking-hover-invoice", booking.id],
+  1756→  1756→    queryFn: async () => {
+  1757→  1757→      const res = await fetch(
+  1758→  1758→        `/api/supabase/invoices?booking_id=${encodeURIComponent(booking.id)}&limit=1`
+  1759→  1759→      );
+  1760→  1760→      const json = await res.json();
+  1761→  1761→      if (!json.ok || !Array.isArray(json.data) || json.data.length === 0) return null;
+  1762→  1762→      return json.data[0] as {
+  1763→  1763→        code?: string | null;
+  1764→  1764→        status?: string | null;
+  1765→  1765→        final_amount?: number | string | null;
+  1766→  1766→        total_amount?: number | string | null;
+  1767→  1767→        discount?: number | string | null;
+  1768→  1768→        tip?: number;
+  1769→  1769→        promotion?: { name?: string; code?: string; discountValue?: number; discountAmount?: number } | null;
+  1770→  1770→        payment_method?: string | null;
+  1771→  1771→        items?: Array<{
+  1772→  1772→          name?: string;
+  1773→  1773→          type?: string;
+  1774→  1774→          quantity?: number;
+  1775→  1775→          price?: number;
+  1776→  1776→          discount?: number;
+  1777→  1777→          total?: number;
+  1778→  1778→          staffName?: string;
+  1779→  1779→        }>;
+  1780→  1780→      } | null;
+  1781→  1781→    },
+  1782→  1782→    staleTime: 60_000, // cache for 1 min so re-hover doesn't refetch
+  1783→  1783→  });
+  1784→  1784→
+  1785→  1785→  // Booking's own services (always available, even without an invoice).
+  1786→  1786→  const bookingServices = (booking.services as BookingServiceRow[]) || [];
+  1787→  1787→  // Invoice items — split services vs products.
+  1788→  1788→  const invoiceItems = invoiceData?.items || [];
+  1789→  1789→  const serviceItems = invoiceItems.filter((it) => it.type === "service");
+  1790→  1790→  const productItems = invoiceItems.filter((it) => it.type === "product" || (it.type && it.type !== "service"));
+  1791→  1791→  // Build a name→duration map from the booking's own services so invoice
+  1792→  1792→  // service items can also show their duration (the invoice item itself only
+  1793→  1793→  // carries price/quantity, not duration).
+  1794→  1794→  const durationByName = new Map<string, number>();
+  1795→  1795→  for (const s of bookingServices) {
+  1796→  1796→    if (s.service?.name && s.service?.duration) {
+  1797→  1797→      durationByName.set(s.service.name, s.service.duration);
+  1798→  1798→    }
+  1799→  1799→  }
+  1800→  1800→  // Fallback to booking services when invoice has no service items yet.
+  1801→  1801→  // Sort by sort_order so the numbering matches the multi-customer slot
+  1802→  1802→  // customer order (slots[i] ↔ services[i] in sort_order).
+  1803→  1803→  const displayServices: Array<{
+  1804→  1804→    name?: string;
+  1805→  1805→    type?: string;
+  1806→  1806→    quantity?: number;
+  1807→  1807→    price?: number;
+  1808→  1808→    discount?: number;
+  1809→  1809→    total?: number;
+  1810→  1810→    staffName?: string;
+  1811→  1811→    duration?: number;
+  1812→  1812→  }> = serviceItems.length > 0
+  1813→  1813→    ? serviceItems.map((it) => ({
+  1814→  1814→        ...it,
+  1815→  1815→        duration: (it.name && durationByName.get(it.name)) ?? undefined,
+  1816→  1816→      }))
+  1817→  1817→    : bookingServices
+  1818→  1818→        .slice()
+  1819→  1819→        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  1820→  1820→        .map((s) => ({
+  1821→  1821→          name: s.service?.name || "Dịch vụ",
+  1822→  1822→          type: "service",
+  1823→  1823→          quantity: 1,
+  1824→  1824→          price: Number(s.service?.price) || 0,
+  1825→  1825→          discount: 0,
+  1826→  1826→          total: Number(s.service?.price) || 0,
+  1827→  1827→          staffName: s.staff?.name,
+  1828→  1828→          duration: s.service?.duration,
+  1829→  1829→        }));
+  1830→  1830→
+  1831→  1831→  const fmt = (n: number | string | null | undefined) => {
+  1832→  1832→    const v = Number(n) || 0;
+  1833→  1833→    return new Intl.NumberFormat("vi-VN").format(v) + "đ";
+  1834→  1834→  };
+  1835→  1835→
+  1836→  1836→  const tip = Number(invoiceData?.tip) || 0;
+  1837→  1837→  const discount = Number(invoiceData?.discount) || 0;
+  1838→  1838→  const finalAmount = invoiceData?.final_amount ?? booking.invoice?.final_amount;
+  1839→  1839→  const promo = invoiceData?.promotion;
+  1840→  1840→  const isPaid = booking.status === "checkout";
+  1841→  1841→  // Multi-customer "Cùng lịch" booking — detected via the [[MULTI]] note marker.
+  1842→  1842→  // Used to add customer/service numbering in the hover tooltip.
+  1843→  1843→  const isMulti = !!getAllSlotCustomers(booking.note);
+  1844→  1844→  // When the booking has been checked in (customer is being served), the
+  1845→  1845→  // "Đơn hàng" link becomes "Xem hóa đơn" — clicking it opens the invoice
+  1846→  1846→  // dialog so the cashier can review/add items and proceed to payment.
+  1847→  1847→  // This matches the user's requirement: a checkin booking's order link
+  1848→  1848→  // should read "Xem hóa đơn" (not "Đơn hàng"), and clicking it opens:
+  1849→  1849→  //  - the invoice dialog (payment dialog) if no invoice exists yet or the
+  1850→  1850→  //    invoice is still pending (staff hasn't completed checkout), OR
+  1851→  1851→  //  - the paid invoice view if the invoice is already completed (this branch
+  1852→  1852→  //    is handled by the `isPaid` gate above — a `checkin` booking with a
+  1853→  1853→  //    completed invoice is unusual; the normal flow transitions the booking
+  1854→  1854→  //    to `checkout` when the invoice is paid).
+  1855→  1855→  const isCheckin = booking.status === "checkin";
+  1856→  1856→  const showInvoiceLabel = isPaid || isCheckin;
+  1857→  1857→  const statusLabel = BookingStatusLabel[booking.status as BookingStatusType] || booking.status;
+  1858→  1858→  const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
+  1859→  1859→
+  1860→  1860→  return (
+  1861→  1861→    <div className="space-y-1 p-2">
+  1862→  1862→      {/* Line 1: customer name | phone — multi-customer "Cùng lịch" bookings
+  1863→  1863→          list every slot's customer WITH numbering (1. 2. 3. ...); others show
+  1864→  1864→          the single booking customer. */}
+  1865→  1865→      {(() => {
+  1866→  1866→        const slotCustomers = getAllSlotCustomers(booking.note);
+  1867→  1867→        if (slotCustomers && slotCustomers.length > 0) {
+  1868→  1868→          return (
+  1869→  1869→            <div className="space-y-1 border-b pb-1">
+  1870→  1870→              {slotCustomers.map((sc, i) => (
+  1871→  1871→                <div key={i} className="flex items-center justify-between gap-2">
+  1872→  1872→                  <span className="truncate text-sm font-semibold text-gray-900">
+  1873→  1873→                    <span className="text-emerald-600">{i + 1}.</span>{" "}
+  1874→  1874→                    {sc.walkin ? <span className="text-gray-500">Khách vãng lai</span> : (sc.name || "Khách")}
+  1875→  1875→                  </span>
+  1876→  1876→                  {!sc.walkin && sc.phone && (
+  1877→  1877→                    <span className="shrink-0 text-xs text-gray-500">
+  1878→  1878→                      {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+  1879→  1879→                    </span>
+  1880→  1880→                  )}
+  1881→  1881→                </div>
+  1882→  1882→              ))}
+  1883→  1883→            </div>
+  1884→  1884→          );
+  1885→  1885→        }
+  1886→  1886→        return (
+  1887→  1887→          <div className="flex items-center justify-between gap-2 border-b pb-1">
+  1888→  1888→            <span className="truncate text-sm font-semibold text-gray-900">
+  1889→  1889→              {booking.customer?.name || "Khách"}
+  1890→  1890→            </span>
+  1891→  1891→            {booking.customer?.phone && (
+  1892→  1892→              <span className="shrink-0 text-xs text-gray-500">
+  1893→  1893→                {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
+  1894→  1894→              </span>
+  1895→  1895→            )}
+  1896→  1896→          </div>
+  1897→  1897→        );
+  1898→  1898→      })()}
+  1899→  1899→
+  1900→  1900→      {/* Line 2: status badge + status Select (Checkin / Không đến / Hủy) */}
+  1901→  1901→      <div className="flex items-center gap-2">
+  1902→  1902→        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColors.bg} ${statusColors.text}`}>
+  1903→  1903→          {statusLabel}
+  1904→  1904→        </span>
+  1905→  1905→        {statusOptions.length > 0 ? (
+  1906→  1906→          <Select
+  1907→  1907→            value=""
+  1908→  1908→            open={selectOpen}
+  1909→  1909→            onOpenChange={(open) => setSelectOpen(open)}
+  1910→  1910→            onValueChange={(value) => {
+  1911→  1911→              onStatusChange(value as BookingStatusType);
+  1912→  1912→              setSelectOpen(false);
+  1913→  1913→            }}
+  1914→  1914→          >
+  1915→  1915→            <SelectTrigger className="h-6 w-auto min-w-0 max-w-[110px] text-[11px] gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+  1916→  1916→              <SelectValue placeholder="Đổi trạng thái" />
+  1917→  1917→            </SelectTrigger>
+  1918→  1918→            <SelectContent>
+  1919→  1919→              {statusOptions.map((st) => (
+  1920→  1920→                <SelectItem key={st} value={st} className="text-xs">
+  1921→  1921→                  {BookingStatusLabel[st]}
+  1922→  1922→                </SelectItem>
+  1923→  1923→              ))}
+  1924→  1924→            </SelectContent>
+  1925→  1925→          </Select>
+  1926→  1926→        ) : null}
+  1927→  1927→      </div>
+  1928→  1928→
+  1929→  1929→      {/* Line 3: services — name (duration), staff name below in blue.
+  1930→  1930→          For multi-customer bookings, each service is numbered to match the
+  1931→  1931→          customer numbering above (1. ↔ customer 1, 2. ↔ customer 2, etc.).
+  1932→  1932→          When a service has NO staff assigned, a small blue "Xếp nhân viên"
+  1933→  1933→          button appears below the service name so the user can assign one
+  1934→  1934→          directly from the hover popover (mirrors the button on the block
+  1935→  1935→          face). */}
+  1936→  1936→      {displayServices.length > 0 && (
+  1937→  1937→        <div className="space-y-1 border-t pt-1">
+  1938→  1938→          {displayServices.map((s, i) => (
+  1939→  1939→            <div key={i} className="space-y-0.5">
+  1940→  1940→              <div className="text-xs text-gray-900">
+  1941→  1941→                {isMulti && <span className="text-emerald-600">{i + 1}.</span>}{" "}
+  1942→  1942→                {s.name || "Dịch vụ"}
+  1943→  1943→                {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
+  1944→  1944→              </div>
+  1945→  1945→              {s.staffName ? (
+  1946→  1946→                <div className="text-[11px] font-medium text-sky-600">{s.staffName}</div>
+  1947→  1947→              ) : onAssignStaff ? (
+  1948→  1948→                <button
+  1949→  1949→                  type="button"
+  1950→  1950→                  onClick={(e) => {
+  1951→  1951→                    e.stopPropagation();
+  1952→  1952→                    onAssignStaff();
+  1953→  1953→                  }}
+  1954→  1954→                  className="inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+  1955→  1955→                  title="Xếp nhân viên cho dịch vụ này"
+  1956→  1956→                >
+  1957→  1957→                  Xếp nhân viên
+  1958→  1958→                </button>
+  1959→  1959→              ) : null}
+  1960→  1960→            </div>
+  1961→  1961→          ))}
+  1962→  1962→        </div>
+  1963→  1963→      )}
+  1964→  1964→
+  1965→  1965→      {/* Line 4: "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn" link + "Checkin" button.
+  1966→  1966→          - checkout (paid) → "Xem hóa đơn" (opens the full paid invoice view)
+  1967→  1967→          - checkin (being served) → "Xem hóa đơn" (opens the invoice/payment
+  1968→  1968→            dialog so the cashier can review items and proceed to payment)
+  1969→  1969→          - confirmed / new / cancelled / no_show → "Đơn hàng" (opens the
+  1970→  1970→            booking edit dialog — no invoice to view yet)
+  1971→  1971→          The "Checkin" button appears ONLY for confirmed/new bookings (the
+  1972→  1972→          customer hasn't arrived yet). Clicking it transitions the booking to
+  1973→  1973→          "checkin" via onStatusChange("checkin"). Once checked in, the button
+  1974→  1974→          disappears (the status is already checkin). */}
+  1975→  1975→      <div className="border-t pt-1">
+  1976→  1976→        <div className="mb-0.5 text-xs text-gray-500">
+  1977→  1977→          Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
+  1978→  1978→        </div>
+  1979→  1979→        <div className="flex items-center gap-2">
+  1980→  1980→          <button
+  1981→  1981→            type="button"
+  1982→  1982→            onClick={(e) => {
+  1983→  1983→              e.stopPropagation();
+  1984→  1984→              onOpenInvoice();
+  1985→  1985→            }}
+  1986→  1986→            className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+  1987→  1987→          >
+  1988→  1988→            {showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}
+  1989→  1989→          </button>
+  1990→  1990→          {finalAmount != null && (
+  1991→  1991→            <span className="text-xs font-medium text-emerald-700">
+  1992→  1992→              {fmt(finalAmount)}
+  1993→  1993→            </span>
+  1994→  1994→          )}
+  1995→  1995→          {/* Checkin button — only for confirmed/new (customer not yet arrived).
+  1996→  1996→              Uses onStatusChange("checkin") to transition. Hidden for checkin
+  1997→  1997→              (already checked in) and terminal statuses (checkout/cancelled/no_show).
+  1998→  1998→              Positioned IMMEDIATELY NEXT TO "Đơn hàng" (not pushed to the far
+  1999→  1999→              right) so it reads as a companion action, not a separate section. */}
+  2000→  2000→          {(booking.status === "confirmed" || booking.status === "new") && (
+
+[showing lines 1-2000 of 2002; use offset=2001 with limit to continue reading]

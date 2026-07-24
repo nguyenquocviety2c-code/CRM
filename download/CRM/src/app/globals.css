@@ -280,3 +280,22 @@ textarea { min-height: 56px !important; }
 .order-dialog-dense .text-lg { font-size: 17px !important; }
 .order-dialog-dense .text-sm { font-size: 13px !important; }
 .order-dialog-dense .text-xs { font-size: 11px !important; }
+
+/*
+ * Booking highlight flash animation — blinks 3 times (0→1→0→1→0→1→1)
+ * to draw the user's attention after navigating from Thu ngân → Lịch hẹn.
+ * Duration: 1.5s (3 × 0.5s per blink cycle).
+ */
+@keyframes booking-flash {
+  0%   { opacity: 1; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.9); }
+  16%  { opacity: 1; box-shadow: 0 0 8px 4px rgba(16, 185, 129, 0.9); }
+  33%  { opacity: 0.4; box-shadow: 0 0 0 0px rgba(16, 185, 129, 0); }
+  50%  { opacity: 1; box-shadow: 0 0 8px 4px rgba(16, 185, 129, 0.9); }
+  66%  { opacity: 0.4; box-shadow: 0 0 0 0px rgba(16, 185, 129, 0); }
+  83%  { opacity: 1; box-shadow: 0 0 8px 4px rgba(16, 185, 129, 0.9); }
+  100% { opacity: 1; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4); }
+}
+
+.booking-highlight-flash {
+  animation: booking-flash 1.5s ease-in-out forwards;
+}

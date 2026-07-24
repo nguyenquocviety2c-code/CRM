@@ -1,0 +1,704 @@
+     1→"use client";
+     2→
+     3→import { useState } from "react";
+     4→import dynamic from "next/dynamic";
+     5→import { useRouter } from "next/navigation";
+     6→// Lazy-load InvoiceDialog + PaidInvoiceView — only opened on demand (user
+     7→// clicks a checkin/checkout booking). Keeps the customer view's initial
+     8→// bundle small. Customer history now navigates to /customers/[id].
+     9→const InvoiceDialog = dynamic(
+    10→  () => import("./invoice-dialog").then((m) => m.InvoiceDialog),
+    11→  { ssr: false }
+    12→);
+    13→const PaidInvoiceView = dynamic(
+    14→  () => import("./paid-invoice-view").then((m) => m.PaidInvoiceView),
+    15→  { ssr: false }
+    16→);
+    17→import { useQueryClient } from "@tanstack/react-query";
+    18→import { Pencil, Trash2, List, Clock, ChevronDown, Columns3, RotateCcw } from "lucide-react";
+    19→import { Booking } from "stores/booking-store";
+    20→import { BookingStatusLabel, BookingStatusBadgeColors, BookingStatusType } from "@/lib/constants";
+    21→import { useAuthStore } from "@/stores/auth-store";
+    22→import { maskPhone } from "@/lib/phone-mask";
+    23→import { toVietnamDay, toVietnamTime } from "@/lib/utils";
+    24→import { parseMultiCustomerNote, getAllSlotCustomers } from "@/lib/multi-customer";
+    25→import { queryKeys } from "@/lib/query-keys";
+    26→import { useToast } from "@/hooks/use-toast";
+    27→import {
+    28→  Select,
+    29→  SelectContent,
+    30→  SelectItem,
+    31→  SelectTrigger,
+    32→  SelectValue,
+    33→} from "@/components/ui/select";
+    34→import {
+    35→  DropdownMenu,
+    36→  DropdownMenuContent,
+    37→  DropdownMenuItem,
+    38→  DropdownMenuTrigger,
+    39→} from "@/components/ui/dropdown-menu";
+    40→import { Checkbox } from "@/components/ui/checkbox";
+    41→import { Button } from "@/components/ui/button";
+    42→
+    43→interface BookingCustomerViewProps {
+    44→  bookings: Booking[];
+    45→  total: number;
+    46→  page: number;
+    47→  limit: number;
+    48→  onPageChange: (page: number) => void;
+    49→  onStatusChange: (bookingId: string, newStatus: BookingStatusType) => void;
+    50→  onEdit: (booking: Booking) => void;
+    51→  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+    52→      no staff assigned. Called by the "Xếp nhân viên" link in the list rows. */
+    53→  onAssignStaff?: (booking: Booking) => void;
+    54→  onDelete: (bookingId: string) => void;
+    55→  /** Called after an invoice is successfully paid — typically transitions booking to checkout. */
+    56→  onInvoicePaid?: (bookingId: string) => void;
+    57→  /** Renders the calendar (Khung giờ) view when the user switches to it. */
+    58→  onSwitchToCalendar?: () => React.ReactNode;
+    59→  /** List/calendar view mode (controlled by parent — buttons are in BookingFilter). */
+    60→  listViewMode?: "list" | "calendar";
+    61→  /** Column visibility state (controlled by parent). */
+    62→  visibleColumns?: Record<string, boolean>;
+    63→  /** Column definitions (controlled by parent). */
+    64→  columnDefs?: Array<{ key: string; label: string }>;
+    65→  /** Toggle a column's visibility (controlled by parent). */
+    66→  onToggleColumn?: (key: string) => void;
+    67→  /**
+    68→   * Open the invoice dialog for a booking. When provided, the parent owns the
+    69→   * InvoiceDialog (used by staff-view / time-grid which don't render it inline).
+    70→   * When omitted, THIS view renders its own InvoiceDialog (list-view buttons +
+    71→   * the pencil icon for checkin/checkout bookings).
+    72→   */
+    73→  onShowInvoice?: (booking: Booking) => void;
+    74→}
+    75→
+    76→export function BookingCustomerView({
+    77→  bookings,
+    78→  total,
+    79→  page,
+    80→  limit,
+    81→  onPageChange,
+    82→  onStatusChange,
+    83→  onEdit,
+    84→  onAssignStaff,
+    85→  onDelete,
+    86→  onInvoicePaid,
+    87→  onSwitchToCalendar,
+    88→  listViewMode = "list",
+    89→  visibleColumns: visibleColsProp,
+    90→  columnDefs: columnDefsProp,
+    91→  onToggleColumn,
+    92→  onShowInvoice,
+    93→}: BookingCustomerViewProps) {
+    94→  const { hasPermission } = useAuthStore();
+    95→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+    96→  const canCancelPayment = hasPermission("cancel_payment");
+    97→  const canEditReminder = hasPermission("edit_reminder");
+    98→  const queryClient = useQueryClient();
+    99→  const { toast } = useToast();
+   100→  const router = useRouter();
+   101→  // Tracks which booking's reminder is currently being PATCHed (set → reset)
+   102→  // so we can disable the control and prevent double-clicks while in flight.
+   103→  const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
+   104→
+   105→  /**
+   106→   * Optimistically update the React Query cache for a booking's reminder_at.
+   107→   * Iterates all cached booking queries and patches the matching booking row
+   108→   * in-place, so the cell flips immediately without waiting for the refetch.
+   109→   */
+   110→  const optimisticallyUpdateReminder = (bookingId: string, reminderAt: string | null) => {
+   111→    queryClient.setQueriesData<{ data?: Booking[] } | undefined>(
+   112→      { queryKey: queryKeys.bookings.all },
+   113→      (old) => {
+   114→        if (!old?.data || !Array.isArray(old.data)) return old;
+   115→        return {
+   116→          ...old,
+   117→          data: old.data.map((b) =>
+   118→            b.id === bookingId ? { ...b, reminder_at: reminderAt } : b
+   119→          ),
+   120→        };
+   121→      }
+   122→    );
+   123→  };
+   124→  // Local invoice dialog state — only used when the parent does NOT pass
+   125→  // onShowInvoice (i.e. the list view owns its own dialog). When onShowInvoice
+   126→  // is provided (calendar/staff views driven by the page), the parent owns it.
+   127→  const [invoiceBooking, setInvoiceBooking] = useState<Booking | null>(null);
+   128→  const openInvoice = (booking: Booking) => {
+   129→    if (onShowInvoice) onShowInvoice(booking);
+   130→    else setInvoiceBooking(booking);
+   131→  };
+   132→
+   133→  // Default column visibility (all visible) if not provided by parent.
+   134→  const visibleColumns = visibleColsProp || {
+   135→    date: true, time: true, code: true, customer: true,
+   136→    note: true, payment: true, reminder: true, status: true,
+   137→  };
+   138→  const columnDefs = columnDefsProp || [
+   139→    { key: "date", label: "Ngày đặt" },
+   140→    { key: "time", label: "Giờ" },
+   141→    { key: "code", label: "Mã" },
+   142→    { key: "customer", label: "Khách hàng" },
+   143→    { key: "note", label: "Ghi chú & dịch vụ" },
+   144→    { key: "payment", label: "Thanh toán" },
+   145→    { key: "reminder", label: "Nhắc lịch" },
+   146→    { key: "status", label: "Trạng thái" },
+   147→  ];
+   148→  const viewMode = listViewMode;
+   149→
+   150→  const totalPages = Math.ceil(total / limit);
+   151→  const startItem = (page - 1) * limit + 1;
+   152→  const endItem = Math.min(page * limit, total);
+   153→
+   154→  const formatDate = (dateStr: string) => {
+   155→    // Use the timezone-safe Vietnam day helper. Supabase normalizes stored
+   156→    // date_time offsets to +00:00 (UTC), so naively extracting the "YYYY-MM-DD"
+   157→    // prefix returns the UTC day, not the Vietnam day the user entered.
+   158→    const iso = toVietnamDay(dateStr).split("-");
+   159→    if (iso.length === 3) return `${iso[2]}/${iso[1]}/${iso[0]}`;
+   160→    return format(new Date(dateStr), "dd/MM/yyyy", { locale: vi });
+   161→  };
+   162→
+   163→  const formatTime = (dateStr: string) => {
+   164→    // Use the timezone-safe Vietnam time helper. Supabase normalizes stored
+   165→    // date_time offsets to +00:00 (UTC), so the "THH:MM" segment is the UTC
+   166→    // time — NOT the Vietnam time the user entered (e.g. 09:30 VN stored as
+   167→    // 02:30 UTC would otherwise display as "02:30", outside business hours).
+   168→    return toVietnamTime(dateStr) || format(new Date(dateStr), "HH:mm", { locale: vi });
+   169→  };
+   170→
+   171→  const getStatusBadgeClass = (status: BookingStatusType) => {
+   172→    const colors = BookingStatusBadgeColors[status];
+   173→    return `${colors.bg} ${colors.text}`;
+   174→  };
+   175→
+   176→  // Determine a booking's display date/time. API returns date_time (ISO);
+   177→  // legacy code may populate date/time strings directly.
+   178→  const getBookingDate = (booking: Booking): string => {
+   179→    if (booking.date) return booking.date;
+   180→    if (booking.date_time) return formatDate(booking.date_time);
+   181→    return "";
+   182→  };
+   183→  const getBookingTime = (booking: Booking): string => {
+   184→    if (booking.time) return booking.time;
+   185→    if (booking.date_time) return formatTime(booking.date_time);
+   186→    return "";
+   187→  };
+   188→
+   189→  // Extract structured service info from a booking's services array.
+   190→  // Handles both the Supabase nested shape (BookingServiceRow) and the legacy
+   191→  // flat shape (BookingServiceEntry).
+   192→  const getServiceDisplay = (booking: Booking) => {
+   193→    const services = booking.services as Array<BookingServiceRow | { serviceId: string; staffId: string; serviceCategoryId: string }>;
+   194→    return services.map((s) => {
+   195→      // Nested Supabase shape.
+   196→      const row = s as BookingServiceRow;
+   197→      if (row && row.service && typeof row.service === "object") {
+   198→        return {
+   199→          serviceName: row.service.name,
+   200→          categoryName: row.category?.name || null,
+   201→          staffName: row.staff?.name || null,
+   202→        };
+   203→      }
+   204→      // Legacy flat shape — names not available, return IDs.
+   205→      const flat = s as { serviceId: string; staffId: string; serviceCategoryId: string };
+   206→      return {
+   207→        serviceName: flat.serviceId || null,
+   208→        categoryName: flat.serviceCategoryId || null,
+   209→        staffName: flat.staffId || null,
+   210→      };
+   211→    });
+   212→  };
+   213→
+   214→  return (
+   215→    <div className="flex flex-col gap-4">
+   216→      {/* Calendar (Khung giờ) view */}
+   217→      {viewMode === "calendar" && onSwitchToCalendar && (
+   218→        <div>{onSwitchToCalendar()}</div>
+   219→      )}
+   220→
+   221→      {/* Table (list view only — calendar view uses BookingTimeGrid at page level) */}
+   222→      {viewMode === "list" && (
+   223→      <div className="overflow-x-auto rounded-lg border bg-white">
+   224→        <table className="w-full text-xs border-collapse" style={{ lineHeight: "1.3" }}>
+   225→          <thead>
+   226→            <tr className="border-b-2 border-gray-400 bg-gray-50">
+   227→              {visibleColumns.date && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Ngày đặt</th>}
+   228→              {visibleColumns.time && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Giờ</th>}
+   229→              {visibleColumns.code && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Mã</th>}
+   230→              {visibleColumns.customer && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Khách hàng</th>}
+   231→              {visibleColumns.note && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Ghi chú & dịch vụ</th>}
+   232→              {visibleColumns.payment && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Thanh toán</th>}
+   233→              {visibleColumns.reminder && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Nhắc lịch</th>}
+   234→              {visibleColumns.status && <th className="border-r border-gray-300 px-3 py-1 text-left font-medium text-gray-700">Trạng thái</th>}
+   235→              <th className="px-3 py-1 text-left font-medium text-gray-700"></th>
+   236→            </tr>
+   237→          </thead>
+   238→          <tbody>
+   239→            {bookings.map((booking) => {
+   240→              const serviceDisplay = getServiceDisplay(booking);
+   241→              return (
+   242→              <tr key={booking.id} className="border-b border-gray-300 hover:bg-gray-50">
+   243→                {visibleColumns.date && (
+   244→                <td className="border-r border-gray-300 px-3 py-1 text-gray-600">
+   245→                  {getBookingDate(booking)}
+   246→                </td>
+   247→                )}
+   248→                {visibleColumns.time && (
+   249→                <td className="border-r border-gray-300 px-3 py-1 text-gray-600">
+   250→                  {getBookingTime(booking)}
+   251→                </td>
+   252→                )}
+   253→                {visibleColumns.code && (
+   254→                <td className="border-r border-gray-300 px-3 py-1">
+   255→                  <button
+   256→                    type="button"
+   257→                    onClick={() => {
+   258→                      const isPaid = booking.status === "checkout";
+   259→                      if (isPaid) openInvoice(booking);
+   260→                      else onEdit(booking);
+   261→                    }}
+   262→                    className="font-medium text-sky-600 hover:text-sky-700 hover:underline cursor-pointer"
+   263→                    title={booking.status === "checkout" ? "Xem hóa đơn" : "Chỉnh sửa lịch hẹn"}
+   264→                  >
+   265→                    {booking.code}
+   266→                  </button>
+   267→                </td>
+   268→                )}
+   269→                {visibleColumns.customer && (
+   270→                <td className="border-r border-gray-300 px-3 py-1">
+   271→                  {/* Multi-customer "Cùng lịch" booking: list every slot's
+   272→                      customer — those with info → name (line 1) + phone (line 2);
+   273→                      empty slots → "Khách vãng lai". Single-customer / "Khác
+   274→                      lịch" bookings show the booking's one customer as before. */}
+   275→                  {(() => {
+   276→                    const slotCustomers = getAllSlotCustomers(booking.note);
+   277→                    if (slotCustomers && slotCustomers.length > 0) {
+   278→                      return (
+   279→                        <div className="space-y-0.5">
+   280→                          {slotCustomers.map((sc, i) => (
+   281→                            <div key={i} className="space-y-0.5">
+   282→                              {/* Numbered customer label: "1. Hoàng Vũ" / "2. Khách vãng lai".
+   283→                                  Uses the same text size as single-customer bookings
+   284→                                  (font-medium, default table text-xs) so the column
+   285→                                  reads consistently. Named customers are green
+   286→                                  clickable links to the history dialog; walk-in
+   287→                                  customers are plain text. */}
+   288→                              {sc.walkin || !sc.id ? (
+   289→                                <div className="font-medium text-gray-900">
+   290→                                  {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
+   291→                                </div>
+   292→                              ) : (
+   293→                                <button
+   294→                                  type="button"
+   295→                                  onClick={() =>
+   296→                                    router.push(`/customers/${sc.id}`)
+   297→                                  }
+   298→                                  className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+   299→                                  title="Xem lịch sử khách hàng"
+   300→                                >
+   301→                                  {i + 1}. {sc.name || "Khách"}
+   302→                                </button>
+   303→                              )}
+   304→                              {!sc.walkin && (
+   305→                                <div className="text-xs text-gray-500">
+   306→                                  {canViewCustomerPhone ? (sc.phone || "—") : maskPhone(sc.phone)}
+   307→                                </div>
+   308→                              )}
+   309→                            </div>
+   310→                          ))}
+   311→                        </div>
+   312→                      );
+   313→                    }
+   314→                    return (
+   315→                      <div className="space-y-0.5">
+   316→                        {booking.customer?.id ? (
+   317→                          <button
+   318→                            type="button"
+   319→                            onClick={() =>
+   320→                              router.push(`/customers/${booking.customer!.id}`)
+   321→                            }
+   322→                            className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+   323→                            title="Xem lịch sử khách hàng"
+   324→                          >
+   325→                            {booking.customer?.name || "—"}
+   326→                          </button>
+   327→                        ) : (
+   328→                          <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
+   329→                        )}
+   330→                        <div className="text-xs text-gray-500">{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
+   331→                      </div>
+   332→                    );
+   333→                  })()}
+   334→                </td>
+   335→                )}
+   336→                {visibleColumns.note && (
+   337→                <td className="border-r border-gray-300 px-3 py-1">
+   338→                  <div className="space-y-0.5">
+   339→                    {(() => {
+   340→                      // Multi-customer "Cùng lịch" booking: the note carries a
+   341→                      // [[MULTI]] JSON block (per-slot customer map). Customer
+   342→                      // info is shown in the "Khách hàng" column (not here) —
+   343→                      // this column shows ONLY services + staff (+ the cashier's
+   344→                      // own typed note if present). Falls back to the regular
+   345→                      // layout (ghi chú + services + staff) for plain bookings.
+   346→                      const parsed = parseMultiCustomerNote(booking.note);
+   347→                      const userNote = parsed ? parsed.userNote : (booking.note || "");
+   348→                      return (
+   349→                        <>
+   350→                          {userNote && (
+   351→                            <div className="text-xs text-gray-500">Ghi chú: {userNote}</div>
+   352→                          )}
+   353→                          {serviceDisplay.length === 0 ? (
+   354→                            <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
+   355→                          ) : (
+   356→                            (() => {
+   357→                              const parsed = parseMultiCustomerNote(booking.note);
+   358→                              const isMulti = !!(parsed && parsed.slots.length > 0);
+   359→                              const entries = serviceDisplay
+   360→                                .map((s) => ({ category: s.categoryName, staff: s.staffName }))
+   361→                                .filter((e) => e.category || e.staff);
+   362→                              if (entries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
+   363→                              return entries.map((e, idx) => (
+   364→                                <div key={idx} className="space-y-0.5">
+   365→                                  {/* Service name: black (text-gray-900). Staff name:
+   366→                                      yellow (text-yellow-600). For multi-customer
+   367→                                      bookings, number each service to match the
+   368→                                      numbered customers in the customer column. */}
+   369→                                  {e.category && (
+   370→                                    <div className="text-xs font-medium text-gray-900">
+   371→                                      {isMulti ? `${idx + 1}. ` : ""}{e.category}
+   372→                                    </div>
+   373→                                  )}
+   374→                                  {e.staff ? (
+   375→                                    <div className="text-xs text-yellow-600">NV: {e.staff}</div>
+   376→                                  ) : (
+   377→                                    /* When no staff is assigned to this service,
+   378→                                       show a blue "Xếp nhân viên" link so the
+   379→                                       cashier/staff can click it to open the
+   380→                                       booking edit dialog and pick a staff. The
+   381→                                       booking was created with a null staff_id
+   382→                                       (cashier allowed optional staff) and shows
+   383→                                       in the "Chưa xếp nhân viên" column in View
+   384→                                       nhân viên; here in View khách hàng the
+   385→                                       clickable link lets them assign a staff
+   386→                                       directly from the customer list. */
+   387→                                    <button
+   388→                                      type="button"
+   389→                                      onClick={() => (onAssignStaff || onEdit)(booking)}
+   390→                                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+   391→                                      title="Xếp nhân viên cho dịch vụ này"
+   392→                                    >
+   393→                                      Xếp nhân viên
+   394→                                    </button>
+   395→                                  )}
+   396→                                </div>
+   397→                              ));
+   398→                            })()
+   399→                          )}
+   400→                        </>
+   401→                      );
+   402→                    })()}
+   403→                    {/* "Tạo bởi": when created_by is null the booking was placed
+   404→                        by a customer via the /dat-lich kiosk → show "Khách hàng".
+   405→                        Otherwise show the creator staff's name (resolved by the
+   406→                        bookings API); "—" is a fallback for a deleted staff. */}
+   407→                    <div className="text-xs text-gray-500">
+   408→                      Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
+   409→                    </div>
+   410→                  </div>
+   411→                </td>
+   412→                )}
+   413→                {visibleColumns.payment && (
+   414→                <td className="border-r border-gray-300 px-3 py-1">
+   415→                  {booking.status === "checkin" && (
+   416→                    <div className="space-y-0.5">
+   417→                      <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
+   418→                        Hóa đơn
+   419→                      </button>
+   420→                      {booking.invoice?.final_amount != null && (
+   421→                        <div className="text-xs font-medium text-emerald-700">
+   422→                          {new Intl.NumberFormat("vi-VN").format(Number(booking.invoice.final_amount))}đ
+   423→                        </div>
+   424→                      )}
+   425→                    </div>
+   426→                  )}
+   427→                  {booking.status === "checkout" && (
+   428→                    <div className="space-y-0.5">
+   429→                      <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Đã thanh toán</span>
+   430→                      <div>
+   431→                        <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
+   432→                          Hóa đơn
+   433→                        </button>
+   434→                      </div>
+   435→                      {booking.invoice?.final_amount != null && (
+   436→                        <div className="text-xs font-medium text-emerald-700">
+   437→                          {new Intl.NumberFormat("vi-VN").format(Number(booking.invoice.final_amount))}đ
+   438→                        </div>
+   439→                      )}
+   440→                    </div>
+   441→                  )}
+   442→                </td>
+   443→                )}
+   444→                {visibleColumns.reminder && (
+   445→                <td className="border-r border-gray-300 px-3 py-1">
+   446→                  {(() => {
+   447→                    const formatReminder = (iso: string) => {
+   448→                      try {
+   449→                        const d = new Date(iso);
+   450→                        return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")} ${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
+   451→                      } catch { return ""; }
+   452→                    };
+   453→                    const isLoading = reminderLoadingId === booking.id;
+   454→                    // Case 1: reminder already set.
+   455→                    if (booking.reminder_at) {
+   456→                      // If the user has "edit_reminder" permission, the text
+   457→                      // is a clickable button that resets reminder_at to null
+   458→                      // (reverts to the unchecked "Chưa" state). Otherwise
+   459→                      // it's plain read-only text.
+   460→                      if (canEditReminder) {
+   461→                        return (
+   462→                          <button
+   463→                            type="button"
+   464→                            disabled={isLoading}
+   465→                            title="Bấm để đặt lại trạng thái chưa nhắc lịch"
+   466→                            onClick={async () => {
+   467→                              if (!booking.id || isLoading) return;
+   468→                              setReminderLoadingId(booking.id);
+   469→                              // Optimistic: clear reminder_at in the cache so
+   470→                              // the cell flips to the checkbox immediately.
+   471→                              optimisticallyUpdateReminder(booking.id, null);
+   472→                              try {
+   473→                                const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
+   474→                                  method: "PATCH",
+   475→                                  headers: { "Content-Type": "application/json" },
+   476→                                  body: JSON.stringify({ reminder_at: null }),
+   477→                                });
+   478→                                if (res.ok) {
+   479→                                  toast({
+   480→                                    title: "Đã đặt lại nhắc lịch",
+   481→                                    description: "Trạng thái đã chuyển về \"Chưa\".",
+   482→                                  });
+   483→                                  // Refetch to confirm with server data.
+   484→                                  await queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+   485→                                } else {
+   486→                                  // Revert optimistic update on failure.
+   487→                                  optimisticallyUpdateReminder(booking.id, booking.reminder_at);
+   488→                                  toast({
+   489→                                    title: "Không thể đặt lại",
+   490→                                    description: "Vui lòng thử lại.",
+   491→                                    variant: "destructive",
+   492→                                  });
+   493→                                }
+   494→                              } catch {
+   495→                                // Revert optimistic update on network error.
+   496→                                optimisticallyUpdateReminder(booking.id, booking.reminder_at);
+   497→                                toast({
+   498→                                  title: "Lỗi mạng",
+   499→                                  description: "Không thể kết nối đến server.",
+   500→                                  variant: "destructive",
+   501→                                });
+   502→                              } finally {
+   503→                                setReminderLoadingId(null);
+   504→                              }
+   505→                            }}
+   506→                            className="inline-flex items-center gap-1 rounded text-xs font-medium text-emerald-700 hover:text-emerald-900 hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline cursor-pointer"
+   507→                          >
+   508→                            <RotateCcw className="h-3 w-3 shrink-0" />
+   509→                            {isLoading ? "Đang đặt lại…" : `Đã nhắc lịch ${formatReminder(booking.reminder_at)}`}
+   510→                          </button>
+   511→                        );
+   512→                      }
+   513→                      // No edit_reminder permission — read-only text.
+   514→                      return (
+   515→                        <span className="text-xs font-medium text-emerald-700">
+   516→                          Đã nhắc lịch {formatReminder(booking.reminder_at)}
+   517→                        </span>
+   518→                      );
+   519→                    }
+   520→                    // Case 2: reminder NOT set — checkbox to mark as reminded.
+   521→                    return (
+   522→                      <label className={`flex items-center gap-2 ${isLoading ? "opacity-50 pointer-events-none" : "cursor-pointer"}`}>
+   523→                        <input
+   524→                          type="checkbox"
+   525→                          checked={false}
+   526→                          disabled={isLoading}
+   527→                          className="h-4 w-4 rounded border-gray-300"
+   528→                          onChange={async (e) => {
+   529→                            if (!booking.id) return;
+   530→                            e.currentTarget.disabled = true;
+   531→                            setReminderLoadingId(booking.id);
+   532→                            const now = new Date().toISOString();
+   533→                            // Optimistic: set reminder_at in the cache so the
+   534→                            // cell flips to "Đã nhắc lịch" immediately.
+   535→                            optimisticallyUpdateReminder(booking.id, now);
+   536→                            try {
+   537→                              const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
+   538→                                method: "PATCH",
+   539→                                headers: { "Content-Type": "application/json" },
+   540→                                body: JSON.stringify({ reminder_at: now }),
+   541→                              });
+   542→                              if (res.ok) {
+   543→                                toast({
+   544→                                  title: "Đã ghi nhận nhắc lịch",
+   545→                                  description: `Lúc ${formatReminder(now)}`,
+   546→                                });
+   547→                                // Refetch to confirm with server data.
+   548→                                await queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+   549→                              } else {
+   550→                                // Revert optimistic update on failure.
+   551→                                optimisticallyUpdateReminder(booking.id, null);
+   552→                                e.currentTarget.disabled = false;
+   553→                                toast({
+   554→                                  title: "Không thể ghi nhận",
+   555→                                  description: "Vui lòng thử lại.",
+   556→                                  variant: "destructive",
+   557→                                });
+   558→                              }
+   559→                            } catch {
+   560→                              // Revert optimistic update on network error.
+   561→                              optimisticallyUpdateReminder(booking.id, null);
+   562→                              e.currentTarget.disabled = false;
+   563→                              toast({
+   564→                                title: "Lỗi mạng",
+   565→                                description: "Không thể kết nối đến server.",
+   566→                                variant: "destructive",
+   567→                              });
+   568→                            } finally {
+   569→                              setReminderLoadingId(null);
+   570→                            }
+   571→                          }}
+   572→                        />
+   573→                        <span className="text-xs text-gray-500">{isLoading ? "Đang lưu…" : "Chưa"}</span>
+   574→                      </label>
+   575→                    );
+   576→                  })()}
+   577→                </td>
+   578→                )}
+   579→                {visibleColumns.status && (
+   580→                <td className="border-r border-gray-300 px-3 py-1">
+   581→                  <div className="space-y-0.5">
+   582→                    <div>
+   583→                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(booking.status)}`}>
+   584→                        {BookingStatusLabel[booking.status]}
+   585→                      </span>
+   586→                    </div>
+   587→                    {(() => {
+   588→                      // "checkout" is intentionally NOT a manual option: a booking
+   589→                      // auto-transitions to "checkout" once payment is completed in
+   590→                      // the Cashier/Invoice dialog. Manual options are:
+   591→                      // - confirmed / new → checkin, no_show, cancelled
+   592→                      // - checkin → cancelled (customer showed up but changed mind
+   593→                      //   before paying; the slot is freed for a new booking)
+   594→                      let nextStatuses: BookingStatusType[] = [];
+   595→                      if (booking.status === "confirmed" || booking.status === "new") {
+   596→                        nextStatuses = ["checkin", "no_show", "cancelled"];
+   597→                      } else if (booking.status === "checkin") {
+   598→                        nextStatuses = ["cancelled"];
+   599→                      }
+   600→                      if (nextStatuses.length === 0) return null;
+   601→                      return (
+   602→                        <Select value="" onValueChange={(value) => onStatusChange(booking.id, value as BookingStatusType)}>
+   603→                          <SelectTrigger className="h-6 w-full min-w-0 text-[11px] border-gray-300 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+   604→                            <SelectValue placeholder="Đổi trạng thái" />
+   605→                          </SelectTrigger>
+   606→                          <SelectContent>
+   607→                            {nextStatuses.map((st) => (
+   608→                              <SelectItem key={st} value={st} className="text-xs">{BookingStatusLabel[st]}</SelectItem>
+   609→                            ))}
+   610→                          </SelectContent>
+   611→                        </Select>
+   612→                      );
+   613→                    })()}
+   614→                  </div>
+   615→                </td>
+   616→                )}
+   617→                <td className="px-3 py-1">
+   618→                  <div className="flex items-center gap-1">
+   619→                    <Button
+   620→                      variant="ghost"
+   621→                      size="icon"
+   622→                      className="h-8 w-8 text-gray-500 hover:text-gray-700"
+   623→                      // Pencil opens the invoice dialog for checkin/checkout bookings
+   624→                      // (pending / paid invoice respectively); for other statuses it
+   625→                      // opens the edit-booking dialog as before.
+   626→                      onClick={() => {
+   627→                        if (booking.status === "checkin" || booking.status === "checkout") {
+   628→                          openInvoice(booking);
+   629→                        } else {
+   630→                          onEdit(booking);
+   631→                        }
+   632→                      }}
+   633→                    >
+   634→                      <Pencil className="h-4 w-4" />
+   635→                    </Button>
+   636→                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:text-red-700 disabled:opacity-30 disabled:cursor-not-allowed" disabled={!canCancelPayment} title={canCancelPayment ? undefined : "Bạn không có quyền hủy"} onClick={() => canCancelPayment && onDelete(booking.id)}>
+   637→                      <Trash2 className="h-4 w-4" />
+   638→                    </Button>
+   639→                  </div>
+   640→                </td>
+   641→              </tr>
+   642→              );
+   643→            })}
+   644→          </tbody>
+   645→        </table>
+   646→      </div>
+   647→      )}
+   648→
+   649→      {/* Pagination */}
+   650→      <div className="flex items-center justify-between rounded-lg border bg-white px-4 py-3 text-sm">
+   651→        <div className="text-gray-600">
+   652→          Hiển thị từ {startItem} đến {endItem} trên tổng số {total}
+   653→        </div>
+   654→        <div className="flex items-center gap-2">
+   655→          <Button
+   656→            variant="outline"
+   657→            size="sm"
+   658→            onClick={() => onPageChange(page - 1)}
+   659→            disabled={page <= 1}
+   660→          >
+   661→            Trước
+   662→          </Button>
+   663→          <span className="text-gray-600">
+   664→            Trang {page} / {totalPages}
+   665→          </span>
+   666→          <Button
+   667→            variant="outline"
+   668→            size="sm"
+   669→            onClick={() => onPageChange(page + 1)}
+   670→            disabled={page >= totalPages}
+   671→          >
+   672→            Sau
+   673→          </Button>
+   674→        </div>
+   675→      </div>
+   676→
+   677→      {/* Invoice dialog / paid invoice view (local — only rendered when the
+   678→          parent does NOT own it). For PAID bookings, show the full-page
+   679→          PaidInvoiceView; for unpaid, show the InvoiceDialog. */}
+   680→      {!onShowInvoice && invoiceBooking && (
+   681→        invoiceBooking.status === "checkout" && invoiceBooking.invoice?.id ? (
+   682→          <PaidInvoiceView
+   683→            invoiceId={invoiceBooking.invoice.id}
+   684→            customerName={invoiceBooking.customer?.name}
+   685→            customerPhone={invoiceBooking.customer?.phone}
+   686→            bookingCode={invoiceBooking.code}
+   687→            onClose={() => setInvoiceBooking(null)}
+   688→          />
+   689→        ) : (
+   690→          <InvoiceDialog
+   691→            booking={invoiceBooking}
+   692→            onClose={() => setInvoiceBooking(null)}
+   693→            onPaid={() => {
+   694→              if (onInvoicePaid) onInvoicePaid(invoiceBooking.id);
+   695→              setInvoiceBooking(null);
+   696→            }}
+   697→          />
+   698→        )
+   699→      )}
+   700→
+   701→    </div>
+   702→  );
+   703→}
+   704→

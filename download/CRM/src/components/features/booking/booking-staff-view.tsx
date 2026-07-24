@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Booking, BookingServiceRow } from "@/stores/booking-store";
+import { Booking, BookingServiceRow, useBookingStore } from "@/stores/booking-store";
 import {
   BookingStatusLabel,
   BookingStatusBadgeColors,
@@ -863,6 +863,19 @@ function SegmentBlock({
   // hooks). Shared across Booking + Cashier via sessionStorage; true when the
   // cashier has pressed "Thanh toán" (review mode), cleared on Hủy/Hoàn tất.
   const isReviewing = useIsReviewing(booking.id);
+  // Highlight flash — when navigating from Thu ngân's "Xem lịch hẹn" button,
+  // highlightBookingId is set in the store. The matching booking's card blinks
+  // 3× to draw attention. Must be read BEFORE any early return (rules of hooks).
+  const highlightBookingId = useBookingStore((s) => s.highlightBookingId);
+  const setHighlightBookingId = useBookingStore((s) => s.setHighlightBookingId);
+  const isHighlighted = highlightBookingId === booking.id;
+  // After the flash animation completes, clear the highlight so it doesn't
+  // re-flash on every re-render.
+  useEffect(() => {
+    if (!isHighlighted) return;
+    const timer = setTimeout(() => setHighlightBookingId(null), 1500);
+    return () => clearTimeout(timer);
+  }, [isHighlighted, setHighlightBookingId]);
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
 
@@ -1010,7 +1023,7 @@ function SegmentBlock({
             onClick();
           }
         }}
-        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
+        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}${isHighlighted ? " booking-highlight-flash" : ""}`}
       >
         {/* Time range for THIS service's slice + date + multi-service badge */}
         <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
@@ -1559,6 +1572,14 @@ function BookingChip({
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
   const isReviewing = useIsReviewing(booking.id);
+  const highlightBookingId = useBookingStore((s) => s.highlightBookingId);
+  const setHighlightBookingId = useBookingStore((s) => s.setHighlightBookingId);
+  const isHighlighted = highlightBookingId === booking.id;
+  useEffect(() => {
+    if (!isHighlighted) return;
+    const timer = setTimeout(() => setHighlightBookingId(null), 1500);
+    return () => clearTimeout(timer);
+  }, [isHighlighted, setHighlightBookingId]);
   // SAME scheme as SegmentBlock above (user's color spec):
   // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
   let chipBg: string;
@@ -1600,7 +1621,7 @@ function BookingChip({
           type="button"
           onClick={onClick}
           title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
-          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
+          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}${isHighlighted ? " booking-highlight-flash" : ""}`}
         >
           <div className="flex items-center justify-between">
             <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
