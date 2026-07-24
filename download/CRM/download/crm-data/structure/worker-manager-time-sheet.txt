@@ -1,0 +1,1145 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e15]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e16]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e17]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e18]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e19]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e20]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e21]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e22]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e23]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e24]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e25]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - heading "Quản lý nhân viên" [level=1, ref=e13]
+    - generic [ref=e14] clickable [onclick]
+      - combobox [expanded=false, ref=e26]: Chi nhánh: Level 1 Minh Khai icon: down
+        - generic
+          - generic
+            - StaticText "Chi nhánh: Level 1 Minh Khai"
+        - generic [ref=e30] clickable [cursor:pointer, onclick]
+    - generic
+      - tablist [ref=e31] focusable [tabindex]
+        - generic
+          - generic
+            - StaticText "  "
+            - generic
+              - tab "Chấm công" [selected, ref=e225]
+                - StaticText "Chấm công"
+              - tab "Quản lý lương" [ref=e226]
+                - StaticText "Quản lý lương"
+            - StaticText "  "
+      - tabpanel
+    - generic
+      - LabelText [ref=e32] clickable [cursor:pointer]
+        - radio "Tùy chỉnh" [checked=true, ref=e38]
+        - StaticText "Tùy chỉnh"
+      - LabelText [ref=e33] clickable [cursor:pointer]
+        - radio "Tổng quan" [checked=false, ref=e39]
+        - StaticText "Tổng quan"
+    - generic
+      - LabelText [ref=e34] clickable [cursor:pointer]
+        - radio "Tháng" [checked=true, ref=e40]
+        - StaticText "Tháng"
+      - LabelText [ref=e35] clickable [cursor:pointer]
+        - radio "Tuỳ chỉnh" [checked=false, ref=e41]
+        - StaticText "Tuỳ chỉnh"
+    - generic [ref=e27] clickable [onclick]
+      - textbox "Chọn thời điểm" [ref=e36]: 06/2026
+        - StaticText "06/2026"
+    - generic [ref=e28] clickable [onclick]
+      - combobox [expanded=false, ref=e37]
+        - generic
+          - generic [ref=e224] clickable [onclick]
+            - StaticText "Trạng thái"
+          - list
+            - listitem [level=1]
+              - generic
+                - textbox [ref=e227]
+    - button "icon: history Lịch sử thao tác" [ref=e29]
+      - StaticText "Lịch sử thao tác"
+    - generic
+      - separator
+      - heading "Tháng 6" [level=4, ref=e42]
+        - StaticText "Tháng 6"
+      - heading "(01/06/2026 - 30/06/2026)" [level=4, ref=e43]
+        - StaticText "(01/06/2026 - 30/06/2026)"
+      - StaticText "Đúng giờ"
+      - StaticText "Đi trễ/ Về sớm"
+      - StaticText "Chưa chấm công"
+      - StaticText "Chấm công thiếu"
+      - StaticText "Nghỉ làm"
+    - generic
+      - StaticText "Tên nhân viên"
+      - StaticText "Thứ Hai"
+      - StaticText " - "
+      - StaticText "01/06"
+      - StaticText "Thứ Ba"
+      - StaticText " - "
+      - StaticText "02/06"
+      - StaticText "Thứ Tư"
+      - StaticText " - "
+      - StaticText "03/06"
+      - StaticText "Thứ Năm"
+      - StaticText " - "
+      - StaticText "04/06"
+      - StaticText "Thứ Sáu"
+      - StaticText " - "
+      - StaticText "05/06"
+      - StaticText "Thứ Bảy"
+      - StaticText " - "
+      - StaticText "06/06"
+      - StaticText "Chủ Nhật"
+      - StaticText " - "
+      - StaticText "07/06"
+      - StaticText "Thứ Hai"
+      - StaticText " - "
+      - StaticText "08/06"
+      - StaticText "Thứ Ba"
+      - StaticText " - "
+      - StaticText "09/06"
+      - StaticText "Thứ Tư"
+      - StaticText " - "
+      - StaticText "10/06"
+      - StaticText "Thứ Năm"
+      - StaticText " - "
+      - StaticText "11/06"
+      - StaticText "Thứ Sáu"
+      - StaticText " - "
+      - StaticText "12/06"
+      - StaticText "Thứ Bảy"
+      - StaticText " - "
+      - StaticText "13/06"
+      - StaticText "Chủ Nhật"
+      - StaticText " - "
+      - StaticText "14/06"
+      - StaticText "Thứ Hai"
+      - StaticText " - "
+      - StaticText "15/06"
+      - StaticText "Thứ Ba"
+      - StaticText " - "
+      - StaticText "16/06"
+      - StaticText "Thứ Tư"
+      - StaticText " - "
+      - StaticText "17/06"
+      - StaticText "Thứ Năm"
+      - StaticText " - "
+      - StaticText "18/06"
+      - StaticText "Thứ Sáu"
+      - StaticText " - "
+      - StaticText "19/06"
+      - StaticText "Thứ Bảy"
+      - StaticText " - "
+      - StaticText "20/06"
+      - StaticText "Chủ Nhật"
+      - StaticText " - "
+      - StaticText "21/06"
+      - StaticText "Thứ Hai"
+      - StaticText " - "
+      - StaticText "22/06"
+      - StaticText "Thứ Ba"
+      - StaticText " - "
+      - StaticText "23/06"
+      - StaticText "Thứ Tư"
+      - StaticText " - "
+      - StaticText "24/06"
+      - StaticText "Thứ Năm"
+      - StaticText " - "
+      - StaticText "25/06"
+      - StaticText "Thứ Sáu"
+      - StaticText " - "
+      - StaticText "26/06"
+      - StaticText "Thứ Bảy"
+      - StaticText " - "
+      - StaticText "27/06"
+      - StaticText "Chủ Nhật"
+      - StaticText " - "
+      - StaticText "28/06"
+      - StaticText "Thứ Hai"
+      - StaticText " - "
+      - StaticText "29/06"
+      - StaticText "Thứ Ba"
+      - StaticText " - "
+      - StaticText "30/06"
+      - StaticText "Nguyễn Khánh Linh"
+      - generic [ref=e44] clickable [cursor:pointer, onclick]
+      - StaticText "Nguyễn Trường Đan"
+      - generic [ref=e45] clickable [cursor:pointer, onclick]
+      - StaticText "Bùi Đức Lâm"
+      - generic [ref=e46] clickable [cursor:pointer, onclick]
+      - StaticText "Nguyễn Thế Mạnh"
+      - generic [ref=e47] clickable [cursor:pointer, onclick]
+      - StaticText "Phan Phúc Thành (Xíu)"
+      - generic [ref=e48] clickable [cursor:pointer, onclick]
+      - StaticText "Phạm Thành"
+      - StaticText "Tuấn Anh Nguyễn"
+      - StaticText "Đỗ Anh Dũng"
+      - StaticText "Nguyễn Thu Trang"
+      - generic [ref=e49] clickable [cursor:pointer, onclick]
+      - StaticText "Nguyễn Ngọc Trà My"
+      - generic [ref=e50] clickable [cursor:pointer, onclick]
+      - StaticText "Đặng Thanh Thanh"
+      - generic [ref=e51] clickable [cursor:pointer, onclick]
+      - StaticText "TEST thợ"
+      - generic [ref=e52] clickable [cursor:pointer, onclick]
+      - generic [ref=e53] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e54] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e55] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e56] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e57] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e58] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e59] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e60] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e61] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e62] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e63] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e64] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e65] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e66] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e67] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e68] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e69] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e70] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e71] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e72] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e73] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e74] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e75] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e76] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e77] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e78] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e79] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e80] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e81] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e82] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e83] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e84] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e85] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e86] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e87] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e88] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e89] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e90] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e91] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e92] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e93] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e94] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e95] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e96] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e97] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e98] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e99] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e100] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e101] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e102] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e103] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e104] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e105] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e106] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e107] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e108] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e109] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e110] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e111] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e112] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e113] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e114] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e115] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e116] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e117] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e118] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e119] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e120] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e121] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e122] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e123] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e124] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e125] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e126] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e127] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e128] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e129] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e130] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e131] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e132] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e133] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e134] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e135] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e136] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e137] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e138] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e139] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e140] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e141] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e142] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e143] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e144] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e145] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e146] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e147] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e148] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e149] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e150] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e151] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e152] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e153] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e154] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e155] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e156] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e157] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e158] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e159] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e160] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e161] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e162] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e163] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e164] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e165] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e166] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e167] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e168] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e169] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e170] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e171] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e172] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e173] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e174] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e175] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e176] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e177] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e178] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e179] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e180] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e181] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e182] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e183] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e184] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e185] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e186] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e187] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e188] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e189] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e190] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e191] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e192] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e193] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e194] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e195] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e196] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e197] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e198] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e199] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e200] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e201] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e202] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e203] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e204] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e205] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e206] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e207] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e208] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e209] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e210] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e211] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e212] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e213] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e214] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e215] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e216] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e217] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e218] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e219] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e220] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e221] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e222] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+      - generic [ref=e223] clickable [onclick]
+        - StaticText "Ca ngày"
+        - StaticText "-- --"
+        - StaticText "Chưa chấm công"
+- StaticText "  "
+- StaticText "  "

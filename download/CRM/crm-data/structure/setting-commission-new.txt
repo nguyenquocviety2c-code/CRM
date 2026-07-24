@@ -1,0 +1,366 @@
+﻿- generic
+  - generic
+    - image "logo"
+    - menu
+      - menuitem "icon: wallet Thu ngân" [ref=e2]
+        - link "icon: wallet Thu ngân" [ref=e13]
+          - StaticText "Thu ngân"
+      - menuitem "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4" [ref=e3]
+        - link "icon: calendar Lịch hẹn 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5" [ref=e14]
+          - StaticText "Lịch hẹn"
+          - generic
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+            - superscript
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+              - generic
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+                - paragraph
+                  - StaticText "0"
+                - paragraph
+                  - StaticText "1"
+                - paragraph
+                  - StaticText "2"
+                - paragraph
+                  - StaticText "3"
+                - paragraph
+                  - StaticText "4"
+                - paragraph
+                  - StaticText "5"
+                - paragraph
+                  - StaticText "6"
+                - paragraph
+                  - StaticText "7"
+                - paragraph
+                  - StaticText "8"
+                - paragraph
+                  - StaticText "9"
+      - menuitem "icon: usergroup-add Khách hàng" [ref=e4]
+        - link "icon: usergroup-add Khách hàng" [ref=e15]
+          - StaticText "Khách hàng"
+      - menuitem "icon: solution CSKH" [ref=e5]
+        - link "icon: solution CSKH" [ref=e16]
+          - StaticText "CSKH"
+      - menuitem "icon: idcard Thẻ tiền mặt" [ref=e6]
+        - link "icon: idcard Thẻ tiền mặt" [ref=e17]
+          - StaticText "Thẻ tiền mặt"
+      - menuitem "icon: inbox Sản phẩm" [ref=e7]
+        - link "icon: inbox Sản phẩm" [ref=e18]
+          - StaticText "Sản phẩm"
+      - menuitem "icon: book Thu chi" [ref=e8]
+        - link "icon: book Thu chi" [ref=e19]
+          - StaticText "Thu chi"
+      - menuitem "icon: bar-chart Báo cáo" [ref=e9]
+        - link "icon: bar-chart Báo cáo" [ref=e20]
+          - StaticText "Báo cáo"
+      - menuitem "icon: picture Bộ sưu tập" [ref=e10]
+        - link "icon: picture Bộ sưu tập" [ref=e21]
+          - StaticText "Bộ sưu tập"
+      - menuitem "icon: file-done Quản lý nhân viên" [ref=e11]
+        - link "icon: file-done Quản lý nhân viên" [ref=e22]
+          - StaticText "Quản lý nhân viên"
+      - menuitem "icon: setting Cài đặt" [ref=e12]
+        - link "icon: setting Cài đặt" [ref=e23]
+          - StaticText "Cài đặt"
+    - image "avatar"
+    - StaticText "TESTCRM"
+    - generic [ref=e1] clickable [cursor:pointer, onclick]
+  - main
+    - generic
+      - StaticText "CÀI ĐẶT"
+      - link "Thông tin Salon" [ref=e24]
+      - link "Cài đặt nhân viên" [ref=e25]
+      - link "Ca làm việc" [ref=e26]
+      - link "Hoa hồng nhân viên" [ref=e27]
+      - link "Kênh đặt lịch" [ref=e28]
+      - link "Nguồn khách hàng" [ref=e29]
+      - link "Nhóm khách hàng" [ref=e30]
+      - link "Hạng khách hàng" [ref=e31]
+      - link "Tích điểm" [ref=e32]
+      - link "Đặt lịch" [ref=e33]
+      - generic
+        - heading "Hoa hồng nhân viên" [level=1, ref=e34]
+        - generic [ref=e35] clickable [onclick]
+          - combobox [expanded=false, ref=e41]: Chi nhánh: Level 1 Minh Khai icon: down
+            - generic
+              - generic
+                - StaticText "Chi nhánh: Level 1 Minh Khai"
+            - generic [ref=e52] clickable [cursor:pointer, onclick]
+        - button "icon: history Lịch sử thao tác" [ref=e42]
+          - StaticText "Lịch sử thao tác"
+        - button "icon: copy Sao chép" [ref=e36]
+          - StaticText "Sao chép"
+        - button "icon: setting Cài đặt nâng cao" [ref=e37]
+          - StaticText "Cài đặt nâng cao"
+        - generic
+          - generic
+            - tablist [ref=e38] focusable [tabindex]
+              - generic
+                - generic
+                  - StaticText "  "
+                  - generic
+                    - tab "HH làm dịch vụ" [selected, ref=e53]
+                      - StaticText "HH làm dịch vụ"
+                    - tab "HH bán dịch vụ" [ref=e54]
+                      - StaticText "HH bán dịch vụ"
+                    - tab "HH bán sản phẩm" [ref=e55]
+                      - StaticText "HH bán sản phẩm"
+                    - tab "HH bán gói" [ref=e56]
+                      - StaticText "HH bán gói"
+                    - tab "HH bán liệu trình" [ref=e57]
+                      - StaticText "HH bán liệu trình"
+                    - tab "HH bán/ nạp thẻ" [ref=e58]
+                      - paragraph
+                        - StaticText "HH bán/ nạp thẻ"
+                    - tab "HH khách yêu cầu" [ref=e59]
+                      - paragraph
+                        - StaticText "HH khách yêu cầu"
+                    - tab "HH theo khung giờ" [ref=e60]
+                      - paragraph
+                        - StaticText "HH theo khung giờ"
+                  - StaticText "  "
+            - tabpanel
+          - generic
+            - heading "Tên nhân viên" [level=4, ref=e43]
+            - button "icon: copy" [ref=e44]
+            - button "icon: right Master (6)" [expanded=false, ref=e45]
+              - StaticText "Master (6)"
+            - button "icon: right Artist (1)" [expanded=false, ref=e46]
+              - StaticText "Artist (1)"
+            - button "icon: right Creative Director (1)" [expanded=false, ref=e47]
+              - StaticText "Creative Director (1)"
+            - button "icon: right Lễ Tân / Thu Ngân (4)" [expanded=false, ref=e48]
+              - StaticText "Lễ Tân / Thu Ngân (4)"
+            - image
+            - heading "Không có dữ liệu!" [level=4, ref=e49]
+            - paragraph
+              - StaticText "Vui lòng chọn nhân viên để cài đặt hoa hồng."
+          - generic
+            - LabelText [ref=e39] clickable [cursor:pointer]
+              - radio "Chỉ 1 nhân viên" [checked=true, ref=e50]
+              - StaticText "Chỉ 1 nhân viên"
+            - LabelText [ref=e40] clickable [cursor:pointer]
+              - radio "Từ 2 nhân viên" [checked=false, ref=e51]
+              - StaticText "Từ 2 nhân viên"
+- StaticText "  "
+- StaticText "  "

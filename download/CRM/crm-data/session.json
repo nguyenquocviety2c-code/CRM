@@ -1,0 +1,31 @@
+{
+  "cookies": [
+    {
+      "name": "reactAppToken",
+      "value": "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3MDkyNSIsInJvbGUiOiJRdeG6o24gTMO9IiwibmFtZSI6IlRFU1RDUk0iLCJzYWxvbklkIjoiMTE1MSIsInVzZXJJZCI6IjcwOTI1IiwiaXNBZG1pblVzZXIiOiJGYWxzZSIsInRva2VuSWQiOiI0N2Y0NmIyYi1iNDk2LTRiYmEtYmMzOS04YjZhZjIzZDIzMjMiLCJhcHBDb2RlIjoiV0VCIiwiU2VjdXJpdHlTdGFtcCI6IjA2LzE4LzIwMjYgMTI6MTg6NTAiLCJlbWFpbEFkZHJlc3MiOiJjcm1sZXZlbDFAZ21haWwuY29tIiwiZXhwIjoxODY4MTkxMzYwLCJpc3MiOiJaV0Z6ZVhOaGJHOXVMblp1IiwiYXVkIjoiWldGemVYTmhiRzl1TG5adSJ9.ikDjjR87PYKpfEv_TcfN7-TKPTKT78GHtK2b0VLFOCXL1TauOnw7u9faIYE2g2HywVyWC7EpMOyUDBORk4xKGA",
+      "domain": "my.easysalon.vn",
+      "path": "/",
+      "expires": 1783745951.0,
+      "size": 557,
+      "httpOnly": false,
+      "secure": false,
+      "session": false
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://my.easysalon.vn",
+      "localStorage": [
+        {
+          "name": "lang",
+          "value": "vi"
+        },
+        {
+          "name": "firebase:host:easysalon-fcm.firebaseio.com",
+          "value": "\"s-gke-usc1-nssi4-48.firebaseio.com\""
+        }
+      ],
+      "sessionStorage": []
+    }
+  ]
+}
