@@ -1,0 +1,1214 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useMemo, useState, useCallback } from "react";
+     4→import Link from "next/link";
+     5→import { useQuery } from "@tanstack/react-query";
+     6→import { LogIn, Calendar as CalendarIcon, Clock, Scissors, User, Phone, CheckCircle2, Building2, Plus, Trash2, AlertCircle } from "lucide-react";
+     7→import { Button } from "@/components/ui/button";
+     8→import { Input } from "@/components/ui/input";
+     9→import { Label } from "@/components/ui/label";
+    10→import {
+    11→  Select,
+    12→  SelectContent,
+    13→  SelectItem,
+    14→  SelectTrigger,
+    15→  SelectValue,
+    16→} from "@/components/ui/select";
+    17→import { DatePicker } from "@/components/ui/date-picker";
+    18→import { TimePicker } from "@/components/ui/time-picker";
+    19→import { useBranchStore } from "@/stores/branch-store";
+    20→import { useAuthStore } from "@/stores/auth-store";
+    21→import { useToast } from "@/hooks/use-toast";
+    22→import { cn, localDayToUtcRange } from "@/lib/utils";
+    23→
+    24→// ---------------------------------------------------------------------------
+    25→// Types for the reference data fetched from Supabase.
+    26→// ---------------------------------------------------------------------------
+    27→interface ServiceCategory {
+    28→  id: string;
+    29→  name: string;
+    30→  branches?: string[];
+    31→}
+    32→interface Service {
+    33→  id: string;
+    34→  name: string;
+    35→  duration: number;
+    36→  price?: number;
+    37→  category_id: string | null;
+    38→}
+    39→interface Staff {
+    40→  id: string;
+    41→  name: string;
+    42→  groupName?: string;
+    43→}
+    44→interface ExistingBooking {
+    45→  id: string;
+    46→  date_time: string;
+    47→  status: string;
+    48→  services: Array<{
+    49→    staff_id: string | null;
+    50→    duration?: number;
+    51→    service?: { duration?: number } | null;
+    52→  }>;
+    53→}
+    54→
+    55→// Hairdresser groups that can be booked for a service (mirrors booking-dialog).
+    56→const HAIRDRESSER_GROUPS = ["Artist", "Creative Director", "Master", "Junior"];
+    57→
+    58→export default function DatLichPage() {
+    59→  const { toast } = useToast();
+    60→  const { branches, selectedBranchId, setBranches, setSelectedBranchId } = useBranchStore();
+    61→  // Whether a staff member is logged in. The /dat-lich page is public
+    62→  // (customers book without an account), but staff also use it. When a staff
+    63→  // is signed in, the "already has a booking" notice is for internal use, so
+    64→  // we omit the customer-facing "contact CSKH to change the booking" line.
+    65→  const isLoggedIn = !!useAuthStore((s) => s.user);
+    66→
+    67→  // --- Form state ---------------------------------------------------------
+    68→  // Multi-service booking: the customer can add 2, 3, or more services in a
+    69→  // single booking. Each row has its own category/service/staff. All services
+    70→  // run in PARALLEL (same start time, each on a different staff). The backend
+    71→  // enforces "each service must use a different staff" — we mirror that here
+    72→  // with a client-side check and disable the submit when violated.
+    73→  interface ServiceRow {
+    74→    id: string;
+    75→    categoryId: string;
+    76→    serviceId: string;
+    77→    staffId: string;
+    78→  }
+    79→  const newRow = () => ({
+    80→    id: `r${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    81→    categoryId: "",
+    82→    serviceId: "",
+    83→    staffId: "",
+    84→  });
+    85→  const [customerName, setCustomerName] = useState("");
+    86→  const [customerPhone, setCustomerPhone] = useState("");
+    87→  const [bookingDate, setBookingDate] = useState(""); // "DD/MM/YYYY"
+    88→  const [serviceRows, setServiceRows] = useState<ServiceRow[]>([newRow()]);
+    89→  const [bookingTime, setBookingTime] = useState(""); // "HH:MM"
+    90→  const [submitting, setSubmitting] = useState(false);
+    91→  const [success, setSuccess] = useState(false);
+    92→  const [error, setError] = useState("");
+    93→  // Existing-booking confirmation: when the customer (by phone) already has
+    94→  // non-cancelled bookings, we show a confirmation prompt listing them before
+    95→  // actually creating a new booking. `pendingExisting` holds the list while
+    96→  // the user decides; `skipExistingCheck` is set true after they confirm so
+    97→  // the re-submit skips the check.
+    98→  const [pendingExisting, setPendingExisting] = useState<
+    99→    Array<{ date: string; time: string; status: string; branchName: string; services: Array<{ name: string; staffName: string }> }>
+   100→  >([]);
+   101→  const [skipExistingCheck, setSkipExistingCheck] = useState(false);
+   102→  // Customer autocomplete: when the user types a name OR phone prefix (≥2
+   103→  // chars), fetch matching customers and show a dropdown. Selecting a result
+   104→  // fills BOTH name + phone. `activeField` tracks which input the user is
+   105→  // currently typing in so the dropdown anchors under it.
+   106→  const [suggestions, setSuggestions] = useState<
+   107→    Array<{ id: string; name: string; phone: string | null; code: string | null }>
+   108→  >([]);
+   109→  const [showSuggestions, setShowSuggestions] = useState(false);
+   110→  const [activeField, setActiveField] = useState<"name" | "phone" | null>(null);
+   111→
+   112→  // --- Fetch branches (customer-facing page has no admin BranchSelector) ---
+   113→  // The branch list is needed to render the dropdown below. We also populate
+   114→  // the store so downstream queries (categories/staff/bookings) can use it.
+   115→  useQuery({
+   116→    queryKey: ["dat-lich-branches"],
+   117→    queryFn: async () => {
+   118→      const res = await fetch("/api/supabase/branches?active=true");
+   119→      const json = await res.json();
+   120→      if (json.ok && Array.isArray(json.data)) {
+   121→        setBranches(json.data);
+   122→        // Auto-select the first active branch if nothing is selected yet.
+   123→        if (!selectedBranchId && json.data.length > 0) {
+   124→          setSelectedBranchId(json.data[0].id);
+   125→        }
+   126→      }
+   127→      return json.data || [];
+   128→    },
+   129→  });
+   130→
+   131→  // --- Reference data: service categories ---------------------------------
+   132→  const { data: categoriesData } = useQuery<ServiceCategory[]>({
+   133→    queryKey: ["dat-lich-categories", selectedBranchId],
+   134→    queryFn: async () => {
+   135→      const res = await fetch("/api/supabase/service-categories?active=true");
+   136→      const json = await res.json();
+   137→      const all = (json.data || []) as ServiceCategory[];
+   138→      // Keep only categories available at the selected branch.
+   139→      if (!selectedBranchId || selectedBranchId === "all") return all;
+   140→      return all.filter((c) => (c.branches || []).includes(selectedBranchId));
+   141→    },
+   142→    enabled: !!selectedBranchId,
+   143→  });
+   144→
+   145→  // --- Reference data: services -------------------------------------------
+   146→  const { data: servicesData } = useQuery<Service[]>({
+   147→    queryKey: ["dat-lich-services"],
+   148→    queryFn: async () => {
+   149→      const res = await fetch("/api/supabase/services?limit=200");
+   150→      const json = await res.json();
+   151→      return (json.data || []) as Service[];
+   152→    },
+   153→  });
+   154→
+   155→  // --- Reference data: staff (hairdressers only) --------------------------
+   156→  const { data: staffData } = useQuery<Staff[]>({
+   157→    queryKey: ["dat-lich-staff", selectedBranchId],
+   158→    queryFn: async () => {
+   159→      if (!selectedBranchId) return [];
+   160→      const res = await fetch(
+   161→        `/api/supabase/staff?branch_id=${selectedBranchId}&active=true&limit=200`
+   162→      );
+   163→      const json = await res.json();
+   164→      if (!json.ok) return [];
+   165→      return (json.data as Array<Record<string, unknown>>)
+   166→        .filter((s) => {
+   167→          const groupName = (s.group as { name?: string } | null)?.name;
+   168→          return groupName && HAIRDRESSER_GROUPS.includes(groupName);
+   169→        })
+   170→        .map((s) => ({
+   171→          id: s.id as string,
+   172→          name: s.name as string,
+   173→          groupName: (s.group as { name?: string } | null)?.name,
+   174→        }));
+   175→    },
+   176→    enabled: !!selectedBranchId,
+   177→  });
+   178→
+   179→  // --- Phone lookup: determine if the customer is new or returning -------
+   180→  // A "returning" (old) customer is one whose exact phone number already
+   181→  // exists in the customers table. This drives the service-category filter
+   182→  // (new customers see the "Dành cho khách hàng mới" cut; old customers see
+   183→  // the regular "Dịch Vụ Cắt").
+   184→  const trimmedPhone = customerPhone.trim();
+   185→  const { data: phoneLookup } = useQuery<
+   186→    { id: string; phone?: string | null }[] | null
+   187→  >({
+   188→    queryKey: ["dat-lich-phone-lookup", trimmedPhone],
+   189→    queryFn: async () => {
+   190→      if (!trimmedPhone) return null;
+   191→      const res = await fetch(
+   192→        `/api/supabase/customers?search=${encodeURIComponent(trimmedPhone)}&limit=20`
+   193→      );
+   194→      const json = await res.json();
+   195→      if (!json.ok) return null;
+   196→      return (json.data || []) as { id: string; phone?: string | null }[];
+   197→    },
+   198→    enabled: trimmedPhone.length >= 9,
+   199→  });
+   200→  const isOldCustomer = useMemo(() => {
+   201→    if (!trimmedPhone || !phoneLookup) return false;
+   202→    return phoneLookup.some((c) => c.phone === trimmedPhone);
+   203→  }, [trimmedPhone, phoneLookup]);
+   204→
+   205→  // --- Customer autocomplete ----------------------------------------------
+   206→  // Debounced search: when the user types ≥2 chars in EITHER the name or phone
+   207→  // field, fetch matching customers (by name prefix OR phone prefix) and show
+   208→  // a dropdown. Selecting a suggestion fills both name + phone.
+   209→  useEffect(() => {
+   210→    // Determine the search term based on which field the user is typing in.
+   211→    const term =
+   212→      activeField === "phone"
+   213→        ? customerPhone.trim()
+   214→        : activeField === "name"
+   215→          ? customerName.trim()
+   216→          : "";
+   217→    let cancelled = false;
+   218→    const t = setTimeout(async () => {
+   219→      if (term.length < 2) {
+   220→        if (!cancelled) {
+   221→          setSuggestions([]);
+   222→          setShowSuggestions(false);
+   223→        }
+   224→        return;
+   225→      }
+   226→      try {
+   227→        const res = await fetch(
+   228→          `/api/supabase/customers?search=${encodeURIComponent(term)}&limit=10`
+   229→        );
+   230→        const json = await res.json();
+   231→        if (cancelled) return;
+   232→        if (json.ok && Array.isArray(json.data)) {
+   233→          // Filter to prefix matches on name OR phone (the API's `search`
+   234→          // does an ilike contains; we refine to prefix for relevance).
+   235→          const lower = term.toLowerCase();
+   236→          const matches = (json.data as Array<{ id: string; name: string; phone?: string | null; code?: string | null }>)
+   237→            .filter((c) => {
+   238→              const nameMatch = (c.name || "").toLowerCase().startsWith(lower);
+   239→              const phoneMatch = (c.phone || "").startsWith(term);
+   240→              return nameMatch || phoneMatch;
+   241→            })
+   242→            .map((c) => ({ id: c.id, name: c.name, phone: c.phone ?? null, code: c.code ?? null }));
+   243→          if (!cancelled) {
+   244→            setSuggestions(matches);
+   245→            setShowSuggestions(matches.length > 0);
+   246→          }
+   247→        }
+   248→      } catch {
+   249→        if (!cancelled) {
+   250→          setSuggestions([]);
+   251→          setShowSuggestions(false);
+   252→        }
+   253→      }
+   254→    }, 250); // 250ms debounce
+   255→    return () => {
+   256→      cancelled = true;
+   257→      clearTimeout(t);
+   258→    };
+   259→  }, [customerName, customerPhone, activeField]);
+   260→
+   261→  const selectSuggestion = (s: { name: string; phone: string | null }) => {
+   262→    setCustomerName(s.name);
+   263→    setCustomerPhone(s.phone || "");
+   264→    setShowSuggestions(false);
+   265→    setActiveField(null);
+   266→  };
+   267→  const customerType: "new" | "old" = isOldCustomer ? "old" : "new";
+   268→
+   269→  // Categories filtered by branch AND customer type (mirrors booking-dialog):
+   270→  // - New customer (phone not in DB): hide "Dịch Vụ Cắt", keep new-customer cut.
+   271→  // - Old customer (phone in DB): hide "Dành cho khách hàng mới - DV Cắt".
+   272→  const categories = useMemo(() => {
+   273→    const all = categoriesData || [];
+   274→    const byBranch =
+   275→      !selectedBranchId || selectedBranchId === "all"
+   276→        ? all
+   277→        : all.filter((c) => (c.branches || []).includes(selectedBranchId));
+   278→    return byBranch.filter((c) => {
+   279→      const name = c.name.toLowerCase();
+   280→      const isNewCustomerCut = name.includes("dành cho khách hàng mới");
+   281→      const isRegularCut =
+   282→        name.includes("dịch vụ cắt") || name === "dịch vụ cắt";
+   283→      if (customerType === "new") {
+   284→        if (isRegularCut && !isNewCustomerCut) return false;
+   285→      } else {
+   286→        if (isNewCustomerCut) return false;
+   287→      }
+   288→      return true;
+   289→    });
+   290→  }, [categoriesData, selectedBranchId, customerType]);
+   291→
+   292→  const allServices = servicesData || [];
+   293→  const allStaff = staffData || [];
+   294→
+   295→  // If a row's selected category is no longer visible after the customer-type
+   296→  // filter changes (e.g. phone typed → old customer → "Dành cho KH mới" hidden),
+   297→  // reset that row's service selection chain to avoid a stale hidden selection.
+   298→  // Implemented as a render-phase update (the React 19 idiom for "adjust state
+   299→  // when a derived value changes") rather than setState-in-effect, to avoid
+   300→  // cascading renders and the react-hooks/set-state-in-effect lint error.
+   301→  const categoriesKey = categories.map((c) => c.id).join("|");
+   302→  const [prevCategoriesKey, setPrevCategoriesKey] = useState(categoriesKey);
+   303→  if (categoriesKey !== prevCategoriesKey) {
+   304→    setPrevCategoriesKey(categoriesKey);
+   305→    setServiceRows((prev) => {
+   306→      let changed = false;
+   307→      const next = prev.map((row) => {
+   308→        if (row.categoryId && !categories.some((c) => c.id === row.categoryId)) {
+   309→          changed = true;
+   310→          return { ...row, categoryId: "", serviceId: "", staffId: "" };
+   311→        }
+   312→        return row;
+   313→      });
+   314→      return changed ? next : prev;
+   315→    });
+   316→  }
+   317→
+   318→  // Per-row helpers: services filtered by the row's category, and staff
+   319→  // filtered by the row's service (name-based narrowing mirrors booking-dialog).
+   320→  const servicesForCategory = useCallback(
+   321→    (catId: string) => allServices.filter((s) => !catId || s.category_id === catId),
+   322→    [allServices]
+   323→  );
+   324→  const staffForService = useCallback(
+   325→    (svcId: string) => {
+   326→      if (!svcId) return allStaff;
+   327→      const svc = allServices.find((s) => s.id === svcId);
+   328→      if (!svc) return allStaff;
+   329→      const n = (svc.name || "").toLowerCase();
+   330→      if (n.includes("creative director")) {
+   331→        return allStaff.filter((s) => s.groupName === "Creative Director");
+   332→      }
+   333→      if (n.includes("artist")) {
+   334→        return allStaff.filter((s) => s.groupName === "Artist");
+   335→      }
+   336→      return allStaff;
+   337→    },
+   338→    [allStaff, allServices]
+   339→  );
+   340→
+   341→  // --- Feasible-time computation (multi-service aware) --------------------
+   342→  // Fetch the day's existing bookings (for the branch). We compute which
+   343→  // HH:MM start times would cause a conflict for ANY of the selected staff.
+   344→  // In the parallel model, all services start at the same time T; a time T
+   345→  // is infeasible if, for ANY service row, the staff is busy during
+   346→  // [T, T + service_duration]. So the hidden set = union across all rows.
+   347→  const isoDay = useMemo(() => {
+   348→    const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   349→    return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+   350→  }, [bookingDate]);
+   351→
+   352→  // Collect the "active" rows: those with both a service and a staff chosen.
+   353→  // These are the rows that participate in the feasibility computation.
+   354→  const activeRows = useMemo(
+   355→    () => serviceRows.filter((r) => r.serviceId && r.staffId),
+   356→    [serviceRows]
+   357→  );
+   358→  const hasActiveRow = activeRows.length > 0;
+   359→
+   360→  const { data: dayBookings } = useQuery<ExistingBooking[]>({
+   361→    queryKey: ["dat-lich-day-bookings", isoDay, selectedBranchId],
+   362→    queryFn: async () => {
+   363→      if (!isoDay) return [];
+   364→      const params = new URLSearchParams();
+   365→      params.set("page", "1");
+   366→      params.set("limit", "200");
+   367→      // Timezone-safe: isoDay is a Vietnam calendar day; convert to its UTC
+   368→      // range so Supabase filters the correct window (no 7-hour shift).
+   369→      const dl = localDayToUtcRange(isoDay);
+   370→      params.set("date_from", dl.from);
+   371→      params.set("date_to", dl.to);
+   372→      if (selectedBranchId) params.set("branch_id", selectedBranchId);
+   373→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   374→      const json = await res.json();
+   375→      if (!json.ok) return [];
+   376→      return (json.data || []) as ExistingBooking[];
+   377→    },
+   378→    enabled: !!isoDay && hasActiveRow,
+   379→  });
+   380→
+   381→  // Compute hiddenHours + hiddenMinutes for the TimePicker across ALL active
+   382→  // rows. A minute is hidden if it conflicts for ANY active row's staff.
+   383→  const { hiddenHours, hiddenMinutes } = useMemo(() => {
+   384→    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>> };
+   385→    if (!isoDay || activeRows.length === 0) return empty;
+   386→    const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   387→    if (!m) return empty;
+   388→    // Use the +07:00 offset so dayBase is the correct UTC instant for VN
+   389→    // midnight (same fix as the booking dialog + cashier service selector).
+   390→    const dayBase = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00+07:00`).getTime();
+   391→    if (isNaN(dayBase)) return empty;
+   392→
+   393→    // Build per-row busy intervals + duration. Each row contributes its own
+   394→    // staff's busy slots and its own service duration.
+   395→    const rowSpecs: Array<{
+   396→      intervals: { startMs: number; endMs: number }[];
+   397→      durationMs: number;
+   398→    }> = [];
+   399→    for (const row of activeRows) {
+   400→      const svc = allServices.find((s) => s.id === row.serviceId);
+   401→      const durationMs = (svc?.duration || 60) * 60 * 1000;
+   402→      if (durationMs <= 0) continue;
+   403→      const intervals: { startMs: number; endMs: number }[] = [];
+   404→      for (const b of dayBookings || []) {
+   405→        if (b.status === "cancelled" || b.status === "no_show") continue;
+   406→        const exStart = new Date(b.date_time).getTime();
+   407→        if (isNaN(exStart)) continue;
+   408→        for (const s of b.services || []) {
+   409→          if (s.staff_id !== row.staffId) continue;
+   410→          const dur =
+   411→            (Number(s.duration) || Number(s.service?.duration) || 60) * 60 * 1000;
+   412→          intervals.push({ startMs: exStart, endMs: exStart + dur });
+   413→        }
+   414→      }
+   415→      rowSpecs.push({ intervals, durationMs });
+   416→    }
+   417→    if (rowSpecs.length === 0) return empty;
+   418→
+   419→    const hh = new Set<string>();
+   420→    const hm: Record<string, Set<string>> = {};
+   421→    const hourHasFeasible: Record<string, boolean> = {};
+   422→    for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
+   423→    for (let min = 0; min < 60 * 24; min++) {
+   424→      const startMs = dayBase + min * 60 * 1000;
+   425→      // A minute conflicts if ANY row's staff is busy during [start, start+dur].
+   426→      const overlaps = rowSpecs.some((spec) => {
+   427→        const endMs = startMs + spec.durationMs;
+   428→        return spec.intervals.some((iv) => startMs < iv.endMs && iv.startMs < endMs);
+   429→      });
+   430→      const hStr = String(Math.floor(min / 60)).padStart(2, "0");
+   431→      const mStr = String(min % 60).padStart(2, "0");
+   432→      if (overlaps) {
+   433→        if (!hm[hStr]) hm[hStr] = new Set<string>();
+   434→        hm[hStr].add(mStr);
+   435→      } else {
+   436→        hourHasFeasible[hStr] = true;
+   437→      }
+   438→    }
+   439→    for (let h = 0; h < 24; h++) {
+   440→      const hStr = String(h).padStart(2, "0");
+   441→      if (!hourHasFeasible[hStr]) hh.add(hStr);
+   442→    }
+   443→    return { hiddenHours: hh, hiddenMinutes: hm };
+   444→  }, [activeRows, isoDay, dayBookings, bookingDate, allServices]);
+   445→
+   446→  // --- Row mutation helpers -----------------------------------------------
+   447→  const updateRow = (id: string, patch: Partial<ServiceRow>) => {
+   448→    setServiceRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+   449→  };
+   450→  const onRowCategoryChange = (id: string, catId: string) => {
+   451→    // Changing category resets service + staff for that row.
+   452→    updateRow(id, { categoryId: catId, serviceId: "", staffId: "" });
+   453→    setBookingTime("");
+   454→  };
+   455→  const onRowServiceChange = (id: string, svcId: string) => {
+   456→    // Changing service resets staff for that row.
+   457→    updateRow(id, { serviceId: svcId, staffId: "" });
+   458→    setBookingTime("");
+   459→  };
+   460→  const onRowStaffChange = (id: string, stId: string) => {
+   461→    updateRow(id, { staffId: stId });
+   462→    setBookingTime("");
+   463→  };
+   464→  const addRow = () => {
+   465→    setServiceRows((prev) => [...prev, newRow()]);
+   466→  };
+   467→  const removeRow = (id: string) => {
+   468→    setServiceRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+   469→    setBookingTime("");
+   470→  };
+   471→  // Changing the branch invalidates the whole service chain — staff and
+   472→  // service availability are branch-specific. Reset all rows + time.
+   473→  const onBranchChange = (id: string) => {
+   474→    setSelectedBranchId(id);
+   475→    setServiceRows([newRow()]);
+   476→    setBookingTime("");
+   477→  };
+   478→
+   479→  // Part 1 (customer info) must be fully filled before Part 2 (service) opens.
+   480→  const part1Complete = !!(
+   481→    customerName.trim() &&
+   482→    customerPhone.trim() &&
+   483→    bookingDate
+   484→  );
+   485→  // A row is "complete" when it has category + service + staff. At least one
+   486→  // complete row is required before the time picker opens. Incomplete rows
+   487→  // (empty or half-filled) are ignored at submit time.
+   488→  const completeRows = useMemo(
+   489→    () => serviceRows.filter((r) => r.categoryId && r.serviceId && r.staffId),
+   490→    [serviceRows]
+   491→  );
+   492→  // Khung giờ requires at least 1 complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên).
+   493→  const timePickerReady = part1Complete && completeRows.length >= 1;
+   494→
+   495→  // Within-form staff conflict: two complete rows sharing the same staff would
+   496→  // overlap in the parallel model (both start at T). The backend rejects this;
+   497→  // we surface the conflict early so the customer can pick a different staff.
+   498→  const duplicateStaff = useMemo(() => {
+   499→    const ids = completeRows.map((r) => r.staffId);
+   500→    return ids.some((id, i) => ids.indexOf(id) !== i);
+   501→  }, [completeRows]);
+   502→
+   503→  const canSubmit =
+   504→    part1Complete &&
+   505→    completeRows.length >= 1 &&
+   506→    !duplicateStaff &&
+   507→    !!bookingTime &&
+   508→    !!selectedBranchId &&
+   509→    !submitting;
+   510→
+   511→  // --- Submit: lookup/create customer, then create booking -----------------
+   512→  const handleSubmit = async () => {
+   513→    if (!canSubmit) return;
+   514→    setError("");
+   515→    setSubmitting(true);
+   516→    try {
+   517→      // 0. One-time offer check: if ANY selected category is "Dành cho khách
+   518→      //    hàng mới - DV Cắt", the customer (by phone) may only book it ONCE.
+   519→      //    If they already have a non-cancelled booking with this category,
+   520→      //    block the submit with a detailed message pointing to the existing
+   521→      //    booking's service, staff, exact date/time, and branch.
+   522→      const hasNewCustomerCut = completeRows.some((row) => {
+   523→        const cat = categories.find((c) => c.id === row.categoryId);
+   524→        return !!cat && cat.name.toLowerCase().includes("dành cho khách hàng mới");
+   525→      });
+   526→      if (hasNewCustomerCut && customerPhone.trim()) {
+   527→        try {
+   528→          const checkRes = await fetch(
+   529→            `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(customerPhone.trim())}`
+   530→          );
+   531→          const checkJson = await checkRes.json();
+   532→          if (checkJson.ok && checkJson.data?.exists) {
+   533→            const d = checkJson.data;
+   534→            // Build a detailed "cannot book" message that spells out the
+   535→            // existing booking's service, staff, exact date + time, and branch
+   536→            // so the customer/staff knows exactly which appointment is blocking
+   537→            // the new one (instead of just a date with no context).
+   538→            const dateStr = d.existingDate || "—";
+   539→            const timeStr = d.existingTime || "—";
+   540→            const svcStr = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
+   541→            const staffStr = d.existingStaffName || "(chưa phân thợ)";
+   542→            const branchStr = d.existingBranchName ? ` — Chi nhánh: ${d.existingBranchName}` : "";
+   543→            setError(
+   544→              `Không thể đặt lịch vì bạn đã có một lịch "${svcStr}" đã đặt trước đó.\n` +
+   545→              `• Thợ: ${staffStr}\n` +
+   546→              `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}\n` +
+   547→              (isLoggedIn
+   548→                ? "Vui lòng huỷ/chỉnh sửa lịch cũ trước khi đặt lịch mới."
+   549→                : " Để đặt ngày khác vui lòng liên hệ bộ phận CSKH để thay đổi lịch.")
+   550→            );
+   551→            setSubmitting(false);
+   552→            return;
+   553→          }
+   554→        } catch {
+   555→          /* best-effort — don't block on network errors */
+   556→        }
+   557→      }
+   558→
+   559→      // 0b. Existing-booking confirmation: if the customer (by phone) already
+   560→      //     has any non-cancelled booking, show a confirmation prompt listing
+   561→      //     them (date/time/services/branch) and ask "are you sure?". Only
+   562→      //     proceed when the user confirms. Skipped on the re-submit after
+   563→      //     confirmation (skipExistingCheck) or when there's no phone.
+   564→      if (!skipExistingCheck && customerPhone.trim()) {
+   565→        try {
+   566→          const existRes = await fetch(
+   567→            `/api/supabase/bookings/by-phone?phone=${encodeURIComponent(customerPhone.trim())}`
+   568→          );
+   569→          const existJson = await existRes.json();
+   570→          if (existJson.ok && Array.isArray(existJson.data) && existJson.data.length > 0) {
+   571→            setPendingExisting(existJson.data);
+   572→            setSubmitting(false);
+   573→            return; // stop — the confirmation UI takes over
+   574→          }
+   575→        } catch {
+   576→          /* best-effort — don't block on network errors */
+   577→        }
+   578→      }
+   579→
+   580→      // 1. Look up the customer by phone (exact match). If found, reuse id.
+   581→      let customerId: string | null = null;
+   582→      try {
+   583→        const searchRes = await fetch(
+   584→          `/api/supabase/customers?search=${encodeURIComponent(customerPhone.trim())}&limit=20`
+   585→        );
+   586→        const searchJson = await searchRes.json();
+   587→        if (searchJson.ok && Array.isArray(searchJson.data)) {
+   588→          const exact = searchJson.data.find(
+   589→            (c: { phone?: string | null }) =>
+   590→              c.phone && c.phone === customerPhone.trim()
+   591→          );
+   592→          if (exact) customerId = exact.id;
+   593→        }
+   594→      } catch {
+   595→        /* ignore — will create below */
+   596→      }
+   597→
+   598→      // 2. If no existing customer, create one (name + phone + branch).
+   599→      if (!customerId) {
+   600→        const createRes = await fetch("/api/supabase/customers", {
+   601→          method: "POST",
+   602→          headers: { "Content-Type": "application/json" },
+   603→          body: JSON.stringify({
+   604→            name: customerName.trim(),
+   605→            phone: customerPhone.trim(),
+   606→            branch_id: selectedBranchId,
+   607→          }),
+   608→        });
+   609→        const createJson = await createRes.json();
+   610→        if (createRes.ok && createJson.ok && createJson.data?.id) {
+   611→          customerId = createJson.data.id;
+   612→        } else if (createRes.status === 409 && createJson.existing_customer?.id) {
+   613→          // Race: phone existed but wasn't returned by the search above.
+   614→          customerId = createJson.existing_customer.id;
+   615→        } else {
+   616→          throw new Error(createJson.error || "Không thể tạo khách hàng");
+   617→        }
+   618→      }
+   619→
+   620→      // 3. Build the ISO date_time with explicit +07:00 (Vietnam) offset so
+   621→      //    Postgres stores the VN time correctly. Without the offset, the
+   622→      //    naive string is treated as UTC and evening bookings (≥17:00 VN)
+   623→      //    shift to the next day.
+   624→      const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   625→      if (!m) throw new Error("Ngày đặt lịch không hợp lệ");
+   626→      const isoDateTime = `${m[3]}-${m[2]}-${m[1]}T${bookingTime}:00+07:00`;
+   627→
+   628→      // 4. Create the booking.
+   629→      const bookingRes = await fetch("/api/supabase/bookings", {
+   630→        method: "POST",
+   631→        headers: { "Content-Type": "application/json" },
+   632→        body: JSON.stringify({
+   633→          date_time: isoDateTime,
+   634→          customer_id: customerId,
+   635→          branch_id: selectedBranchId,
+   636→          status: "confirmed",
+   637→          number_of_customers: 1,
+   638→          services: completeRows.map((row) => ({
+   639→            service_id: row.serviceId,
+   640→            service_category_id: row.categoryId || null,
+   641→            staff_id: row.staffId,
+   642→          })),
+   643→        }),
+   644→      });
+   645→      const bookingJson = await bookingRes.json();
+   646→      if (!bookingRes.ok || !bookingJson.ok) {
+   647→        throw new Error(bookingJson.error || "Không thể tạo lịch hẹn");
+   648→      }
+   649→
+   650→      setSuccess(true);
+   651→      setSkipExistingCheck(false);
+   652→      setPendingExisting([]);
+   653→      toast({
+   654→        title: "Đặt lịch thành công",
+   655→        description: `${customerName.trim()} — ${bookingDate} ${bookingTime}`,
+   656→      });
+   657→    } catch (err) {
+   658→      const msg = err instanceof Error ? err.message : "Đã có lỗi xảy ra";
+   659→      setError(msg);
+   660→      toast({
+   661→        title: "Đặt lịch thất bại",
+   662→        description: msg,
+   663→        variant: "destructive",
+   664→      });
+   665→    } finally {
+   666→      setSubmitting(false);
+   667→    }
+   668→  };
+   669→
+   670→  const resetForm = () => {
+   671→    setCustomerName("");
+   672→    setCustomerPhone("");
+   673→    setBookingDate("");
+   674→    setServiceRows([newRow()]);
+   675→    setBookingTime("");
+   676→    setSuccess(false);
+   677→    setSkipExistingCheck(false);
+   678→    setPendingExisting([]);
+   679→  };
+   680→
+   681→  // --- Booking form -------------------------------------------------------
+   682→  return (
+   683→    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-emerald-50">
+   684→      {/* Top bar with brand + login button (top-right corner) */}
+   685→      <header className="flex items-center justify-between border-b bg-white px-6 py-4">
+   686→        <div className="flex items-center gap-2.5">
+   687→          <img
+   688→            src="/level1-haircare-logo.png"
+   689→            alt="Level 1 Haircare"
+   690→            className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-amber-300/60"
+   691→          />
+   692→          <span
+   693→            className="text-lg font-semibold tracking-wide"
+   694→            style={{
+   695→              fontFamily: "'Playfair Display', Georgia, 'Times New Roman', serif",
+   696→              color: "#004D40",
+   697→              letterSpacing: "0.02em",
+   698→            }}
+   699→          >
+   700→            Level 1 Haircare
+   701→          </span>
+   702→          <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+   703→            Đặt lịch
+   704→          </span>
+   705→        </div>
+   706→        <Link
+   707→          href="/login"
+   708→          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+   709→        >
+   710→          <LogIn className="h-4 w-4" />
+   711→          Đăng nhập
+   712→        </Link>
+   713→      </header>
+   714→
+   715→      {/* Form card */}
+   716→      <main className="mx-auto max-w-3xl px-4 py-8">
+   717→        <div className="mb-6 text-center">
+   718→          <h1 className="text-2xl font-bold text-gray-900">Đặt lịch dịch vụ</h1>
+   719→          <p className="mt-1 text-sm text-gray-500">
+   720→            Điền thông tin và chọn dịch vụ, kỹ thuật viên, khung giờ phù hợp.
+   721→          </p>
+   722→        </div>
+   723→
+   724→        <div className="space-y-6">
+   725→          {/* Part 1: Customer info. All text inside is forced to black + bold
+   726→              for clarity. */}
+   727→          <section className="rounded-xl border bg-white p-6 shadow-sm [&_*]:!text-black [&_label]:!font-bold [&_h2]:!font-bold [&_span:not(.text-red-500)]:!text-black [&_.text-red-500]:!text-red-500">
+   728→            <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-gray-900">
+   729→              <User className="h-4 w-4 text-emerald-600" />
+   730→              Thông tin khách hàng
+   731→            </h2>
+   732→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+   733→              {/* Cửa hàng (branch) — staff/services are branch-specific. */}
+   734→              <div className="space-y-1.5 sm:col-span-2">
+   735→                <Label htmlFor="branch" className="text-sm text-gray-700">
+   736→                  <span className="text-red-500">*</span> Cửa hàng
+   737→                </Label>
+   738→                <Select
+   739→                  value={selectedBranchId || ""}
+   740→                  onValueChange={onBranchChange}
+   741→                >
+   742→                  <SelectTrigger className="h-10">
+   743→                    <span className="flex items-center gap-2">
+   744→                      <Building2 className="h-4 w-4 text-gray-400" />
+   745→                      <SelectValue placeholder="Chọn cửa hàng" />
+   746→                    </span>
+   747→                  </SelectTrigger>
+   748→                  <SelectContent>
+   749→                    {branches.length === 0 ? (
+   750→                      <SelectItem value="_none" disabled>
+   751→                        Không có cửa hàng
+   752→                      </SelectItem>
+   753→                    ) : (
+   754→                      branches.map((b) => (
+   755→                        <SelectItem key={b.id} value={b.id}>
+   756→                          {b.name}
+   757→                        </SelectItem>
+   758→                      ))
+   759→                    )}
+   760→                  </SelectContent>
+   761→                </Select>
+   762→              </div>
+   763→              <div className="space-y-1.5">
+   764→                <Label htmlFor="name" className="text-sm text-gray-700">
+   765→                  <span className="text-red-500">*</span> Họ tên khách
+   766→                </Label>
+   767→                <div className="relative">
+   768→                  <Input
+   769→                    id="name"
+   770→                    value={customerName}
+   771→                    onChange={(e) => {
+   772→                      setCustomerName(e.target.value);
+   773→                      setActiveField("name");
+   774→                      setShowSuggestions(true);
+   775→                    }}
+   776→                    onFocus={() => {
+   777→                      setActiveField("name");
+   778→                      if (suggestions.length > 0) setShowSuggestions(true);
+   779→                    }}
+   780→                    onBlur={() => {
+   781→                      // Delay hide so a click on a suggestion registers first.
+   782→                      setTimeout(() => setShowSuggestions(false), 200);
+   783→                    }}
+   784→                    placeholder="Nhập họ và tên"
+   785→                    className="h-10"
+   786→                    autoComplete="off"
+   787→                  />
+   788→                  {showSuggestions && activeField === "name" && suggestions.length > 0 && (
+   789→                    <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
+   790→                      {suggestions.map((s) => (
+   791→                        <button
+   792→                          key={s.id}
+   793→                          type="button"
+   794→                          onMouseDown={(e) => {
+   795→                            e.preventDefault();
+   796→                            selectSuggestion(s);
+   797→                          }}
+   798→                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50"
+   799→                        >
+   800→                          <span className="font-medium text-gray-800">{s.name}</span>
+   801→                          <span className="text-xs text-gray-500">{s.phone || "—"}</span>
+   802→                        </button>
+   803→                      ))}
+   804→                    </div>
+   805→                  )}
+   806→                </div>
+   807→              </div>
+   808→              <div className="space-y-1.5">
+   809→                <Label htmlFor="phone" className="text-sm text-gray-700">
+   810→                  <span className="text-red-500">*</span> Số điện thoại
+   811→                </Label>
+   812→                <div className="relative">
+   813→                  <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+   814→                  <Input
+   815→                    id="phone"
+   816→                    value={customerPhone}
+   817→                    onChange={(e) => {
+   818→                      setCustomerPhone(e.target.value);
+   819→                      setActiveField("phone");
+   820→                      setShowSuggestions(true);
+   821→                    }}
+   822→                    onFocus={() => {
+   823→                      setActiveField("phone");
+   824→                      if (suggestions.length > 0) setShowSuggestions(true);
+   825→                    }}
+   826→                    onBlur={() => {
+   827→                      setTimeout(() => setShowSuggestions(false), 200);
+   828→                    }}
+   829→                    placeholder="0xxx xxx xxx"
+   830→                    className="h-10 pl-9"
+   831→                    autoComplete="off"
+   832→                  />
+   833→                  {showSuggestions && activeField === "phone" && suggestions.length > 0 && (
+   834→                    <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
+   835→                      {suggestions.map((s) => (
+   836→                        <button
+   837→                          key={s.id}
+   838→                          type="button"
+   839→                          onMouseDown={(e) => {
+   840→                            e.preventDefault();
+   841→                            selectSuggestion(s);
+   842→                          }}
+   843→                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50"
+   844→                        >
+   845→                          <span className="font-medium text-gray-800">{s.phone || "—"}</span>
+   846→                          <span className="text-xs text-gray-500">{s.name}</span>
+   847→                        </button>
+   848→                      ))}
+   849→                    </div>
+   850→                  )}
+   851→                </div>
+   852→              </div>
+   853→              <div className="space-y-1.5 sm:col-span-2">
+   854→                <Label htmlFor="date" className="text-sm text-gray-700">
+   855→                  <span className="text-red-500">*</span> Ngày đặt lịch
+   856→                </Label>
+   857→                <div className="relative max-w-xs">
+   858→                  <CalendarIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+   859→                  <div className="pl-9">
+   860→                    <DatePicker value={bookingDate} onChange={setBookingDate} />
+   861→                  </div>
+   862→                </div>
+   863→              </div>
+   864→            </div>
+   865→          </section>
+   866→
+   867→          {/* Part 2: Service selection (locked until Part 1 is complete).
+   868→              Multi-service: the customer can add 2, 3, or more services, each
+   869→              on a different staff. All services start at the SAME time (parallel
+   870→              model) so the Khung giờ picker is a single shared field below. */}
+   871→          <section
+   872→            className={cn(
+   873→              "rounded-xl border bg-white p-6 shadow-sm transition-opacity [&_*]:!text-black [&_label]:!font-bold [&_h2]:!font-bold [&_span:not(.text-red-500)]:!text-black [&_.text-red-500]:!text-red-500",
+   874→              !part1Complete && "opacity-50"
+   875→            )}
+   876→          >
+   877→            <h2 className="mb-4 flex items-center gap-2 text-base font-semibold text-gray-900">
+   878→              <Scissors className="h-4 w-4 text-emerald-600" />
+   879→              Dịch vụ
+   880→              {!part1Complete && (
+   881→                <span className="ml-auto text-xs font-normal text-gray-400">
+   882→                  Vui lòng nhập đầy đủ thông tin khách hàng trước
+   883→                </span>
+   884→              )}
+   885→            </h2>
+   886→            <div className="space-y-4">
+   887→              {serviceRows.map((row, idx) => {
+   888→                const rowServices = servicesForCategory(row.categoryId);
+   889→                const rowStaff = staffForService(row.serviceId);
+   890→                return (
+   891→                  <div
+   892→                    key={row.id}
+   893→                    className="rounded-lg border border-gray-200 bg-gray-50/50 p-4"
+   894→                  >
+   895→                    <div className="mb-3 flex items-center justify-between">
+   896→                      <span className="text-sm font-medium text-gray-700">
+   897→                        Dịch vụ {idx + 1}
+   898→                      </span>
+   899→                      <Button
+   900→                        type="button"
+   901→                        variant="ghost"
+   902→                        size="sm"
+   903→                        className="h-8 px-2 text-gray-400 hover:text-red-600"
+   904→                        disabled={serviceRows.length <= 1}
+   905→                        onClick={() => removeRow(row.id)}
+   906→                      >
+   907→                        <Trash2 className="h-4 w-4" />
+   908→                      </Button>
+   909→                    </div>
+   910→                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+   911→                      {/* Nhóm dịch vụ */}
+   912→                      <div className="space-y-1.5">
+   913→                        <Label className="text-sm text-gray-700">Nhóm dịch vụ</Label>
+   914→                        <Select
+   915→                          value={row.categoryId}
+   916→                          onValueChange={(v) => onRowCategoryChange(row.id, v)}
+   917→                          disabled={!part1Complete}
+   918→                        >
+   919→                          <SelectTrigger className="h-10">
+   920→                            <SelectValue
+   921→                              placeholder={
+   922→                                part1Complete ? "Chọn nhóm dịch vụ" : "Nhập thông tin KH trước"
+   923→                              }
+   924→                            />
+   925→                          </SelectTrigger>
+   926→                          <SelectContent>
+   927→                            {categories.length === 0 ? (
+   928→                              <SelectItem value="_none" disabled>
+   929→                                Không có nhóm dịch vụ
+   930→                              </SelectItem>
+   931→                            ) : (
+   932→                              categories.map((c) => (
+   933→                                <SelectItem key={c.id} value={c.id}>
+   934→                                  {c.name}
+   935→                                </SelectItem>
+   936→                              ))
+   937→                            )}
+   938→                          </SelectContent>
+   939→                        </Select>
+   940→                      </div>
+   941→
+   942→                      {/* Dịch vụ */}
+   943→                      <div className="space-y-1.5">
+   944→                        <Label className="text-sm text-gray-700">Dịch vụ</Label>
+   945→                        <Select
+   946→                          value={row.serviceId}
+   947→                          onValueChange={(v) => onRowServiceChange(row.id, v)}
+   948→                          disabled={!part1Complete || !row.categoryId}
+   949→                        >
+   950→                          <SelectTrigger className="h-10">
+   951→                            <SelectValue
+   952→                              placeholder={
+   953→                                !part1Complete
+   954→                                  ? "Nhập thông tin KH trước"
+   955→                                  : row.categoryId
+   956→                                    ? "Chọn dịch vụ"
+   957→                                    : "Chọn nhóm trước"
+   958→                              }
+   959→                            />
+   960→                          </SelectTrigger>
+   961→                          <SelectContent>
+   962→                            {rowServices.length === 0 ? (
+   963→                              <SelectItem value="_none" disabled>
+   964→                                Không có dịch vụ
+   965→                              </SelectItem>
+   966→                            ) : (
+   967→                              rowServices.map((s) => (
+   968→                                <SelectItem key={s.id} value={s.id}>
+   969→                                  {s.name}
+   970→                                  {s.price ? ` — ${new Intl.NumberFormat("vi-VN").format(Number(s.price))}đ` : ""}
+   971→                                </SelectItem>
+   972→                              ))
+   973→                            )}
+   974→                          </SelectContent>
+   975→                        </Select>
+   976→                      </div>
+   977→
+   978→                      {/* Kỹ thuật viên */}
+   979→                      <div className="space-y-1.5">
+   980→                        <Label className="text-sm text-gray-700">Kỹ thuật viên</Label>
+   981→                        <Select
+   982→                          value={row.staffId}
+   983→                          onValueChange={(v) => onRowStaffChange(row.id, v)}
+   984→                          disabled={!part1Complete || !row.serviceId}
+   985→                        >
+   986→                          <SelectTrigger className="h-10">
+   987→                            <SelectValue
+   988→                              placeholder={
+   989→                                !part1Complete
+   990→                                  ? "Nhập thông tin KH trước"
+   991→                                  : row.serviceId
+   992→                                    ? "Chọn kỹ thuật viên"
+   993→                                    : "Chọn dịch vụ trước"
+   994→                              }
+   995→                            />
+   996→                          </SelectTrigger>
+   997→                          <SelectContent>
+   998→                            {rowStaff.length === 0 ? (
+   999→                              <SelectItem value="_none" disabled>
+  1000→                                Không có kỹ thuật viên
+  1001→                              </SelectItem>
+  1002→                            ) : (
+  1003→                              rowStaff.map((s) => (
+  1004→                                <SelectItem key={s.id} value={s.id}>
+  1005→                                  {s.name}
+  1006→                                  {s.groupName ? ` (${s.groupName})` : ""}
+  1007→                                </SelectItem>
+  1008→                              ))
+  1009→                            )}
+  1010→                          </SelectContent>
+  1011→                        </Select>
+  1012→                      </div>
+  1013→                    </div>
+  1014→                  </div>
+  1015→                );
+  1016→              })}
+  1017→            </div>
+  1018→
+  1019→            {/* Add another service row */}
+  1020→            <div className="mt-4">
+  1021→              <Button
+  1022→                type="button"
+  1023→                variant="outline"
+  1024→                onClick={addRow}
+  1025→                disabled={!part1Complete}
+  1026→                className="border-dashed"
+  1027→              >
+  1028→                <Plus className="mr-2 h-4 w-4" /> Thêm dịch vụ
+  1029→              </Button>
+  1030→            </div>
+  1031→
+  1032→            {/* Within-form duplicate-staff warning: in the parallel model two
+  1033→                services sharing the same staff would overlap at the start time.
+  1034→                The backend rejects this; we surface it here so the customer can
+  1035→                pick a different staff before submitting. */}
+  1036→            {duplicateStaff && (
+  1037→              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+  1038→                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+  1039→                <span>
+  1040→                  Mỗi dịch vụ trong một lịch hẹn phải dùng thợ khác nhau. Vui lòng chọn thợ khác cho các dịch vụ trùng nhau.
+  1041→                </span>
+  1042→              </div>
+  1043→            )}
+  1044→
+  1045→            {/* Khung giờ — shared across all services (parallel model: all
+  1046→                services start at the same time). Locked until at least one
+  1047→                complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên) exists. */}
+  1048→            <div className="mt-4 max-w-xs space-y-1.5">
+  1049→              <Label className="text-sm text-gray-700">Khung giờ</Label>
+  1050→              <div
+  1051→                className={cn(
+  1052→                  "relative transition-opacity",
+  1053→                  !timePickerReady && "pointer-events-none opacity-40"
+  1054→                )}
+  1055→              >
+  1056→                <Clock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+  1057→                <div className="pl-9">
+  1058→                  <TimePicker
+  1059→                    value={bookingTime}
+  1060→                    onChange={setBookingTime}
+  1061→                    placeholder={
+  1062→                      timePickerReady ? "HH:MM" : "Chọn dịch vụ + NV trước"
+  1063→                    }
+  1064→                    hiddenHours={hiddenHours}
+  1065→                    hiddenMinutes={hiddenMinutes}
+  1066→                  />
+  1067→                </div>
+  1068→              </div>
+  1069→              {completeRows.length >= 1 && bookingDate && (dayBookings?.length ?? 0) > 0 && (
+  1070→                <p className="text-xs text-gray-400">
+  1071→                  Các khung giờ bận đã được ẩn.
+  1072→                </p>
+  1073→              )}
+  1074→            </div>
+  1075→          </section>
+  1076→
+  1077→          {/* Submit */}
+  1078→          {error && (
+  1079→            <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+  1080→              {error}
+  1081→            </div>
+  1082→          )}
+  1083→          <div className="flex justify-end">
+  1084→            <Button
+  1085→              onClick={handleSubmit}
+  1086→              disabled={!canSubmit || submitting}
+  1087→              className="bg-emerald-600 px-8 py-2 text-base hover:bg-emerald-700 disabled:opacity-50"
+  1088→            >
+  1089→              {submitting ? "Đang đặt lịch..." : "Đặt lịch"}
+  1090→            </Button>
+  1091→          </div>
+  1092→
+  1093→          {/* Existing-booking confirmation — shown when the customer (by
+  1094→              phone) already has non-cancelled bookings. Lists them and asks
+  1095→              whether to continue creating the new booking. */}
+  1096→          {pendingExisting.length > 0 && (
+  1097→            <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-5">
+  1098→              <div className="flex items-start gap-3">
+  1099→                <span className="mt-0.5 text-xl">⚠️</span>
+  1100→                <div className="flex-1">
+  1101→                  <h3 className="text-base font-semibold text-amber-900">
+  1102→                    Khách hàng có lịch hẹn chưa thanh toán
+  1103→                  </h3>
+  1104→                  <p className="mt-1 text-sm text-amber-800">
+  1105→                    Số điện thoại này có {pendingExisting.length} lịch hẹn chưa thanh toán. Bạn có chắc muốn đặt lịch tiếp không?
+  1106→                  </p>
+  1107→                  <div className="mt-3 space-y-2">
+  1108→                    {pendingExisting.map((b) => (
+  1109→                      <div key={b.id} className="rounded-lg bg-white/70 p-3 text-sm">
+  1110→                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+  1111→                          <span className="text-amber-700">Ngày giờ:</span>
+  1112→                          <span className="font-medium text-amber-900">{b.date} · {b.time}</span>
+  1113→                          <span className="text-amber-700">Chi nhánh:</span>
+  1114→                          <span className="font-medium text-amber-900">{b.branchName || "—"}</span>
+  1115→                          <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-800">
+  1116→                            {b.status}
+  1117→                          </span>
+  1118→                        </div>
+  1119→                        <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+  1120→                          <span className="text-amber-700">Dịch vụ:</span>
+  1121→                          <span className="font-medium text-amber-900">
+  1122→                            {b.services.map((s) => s.name + (s.staffName ? ` (${s.staffName})` : "")).join(", ")}
+  1123→                          </span>
+  1124→                        </div>
+  1125→                      </div>
+  1126→                    ))}
+  1127→                  </div>
+  1128→                  <div className="mt-4 flex justify-end gap-2">
+  1129→                    <Button
+  1130→                      type="button"
+  1131→                      variant="outline"
+  1132→                      onClick={() => {
+  1133→                        setPendingExisting([]);
+  1134→                        setSkipExistingCheck(false);
+  1135→                      }}
+  1136→                    >
+  1137→                      Hủy
+  1138→                    </Button>
+  1139→                    <Button
+  1140→                      type="button"
+  1141→                      className="bg-amber-600 text-white hover:bg-amber-700"
+  1142→                      onClick={() => {
+  1143→                        setPendingExisting([]);
+  1144→                        setSkipExistingCheck(true);
+  1145→                        handleSubmit();
+  1146→                      }}
+  1147→                    >
+  1148→                      OK, đặt tiếp
+  1149→                    </Button>
+  1150→                  </div>
+  1151→                </div>
+  1152→              </div>
+  1153→            </div>
+  1154→          )}
+  1155→
+  1156→          {/* Inline success message — shown below the form after a successful
+  1157→              booking. Displays the booking summary + an OK button that resets
+  1158→              the form so the customer (or next customer) can book again. */}
+  1159→          {success && (
+  1160→            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+  1161→              <div className="flex items-start gap-3">
+  1162→                <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
+  1163→                <div className="flex-1">
+  1164→                  <h3 className="text-base font-semibold text-emerald-900">
+  1165→                    Đặt lịch thành công!
+  1166→                  </h3>
+  1167→                  <p className="mt-1 text-sm text-emerald-800">
+  1168→                    Cảm ơn <span className="font-semibold">{customerName}</span> đã đặt lịch.
+  1169→                  </p>
+  1170→                  <div className="mt-3 rounded-lg bg-white/70 p-3 text-sm">
+  1171→                    <div className="flex justify-between py-0.5">
+  1172→                      <span className="text-emerald-700">Ngày giờ:</span>
+  1173→                      <span className="font-medium text-emerald-900">{bookingDate} · {bookingTime}</span>
+  1174→                    </div>
+  1175→                    <div className="flex justify-between py-0.5">
+  1176→                      <span className="text-emerald-700">Dịch vụ:</span>
+  1177→                      <span className="font-medium text-emerald-900">
+  1178→                        {completeRows
+  1179→                          .map((r) => allServices.find((s) => s.id === r.serviceId)?.name)
+  1180→                          .filter(Boolean)
+  1181→                          .join(", ")}
+  1182→                      </span>
+  1183→                    </div>
+  1184→                    <div className="flex justify-between py-0.5">
+  1185→                      <span className="text-emerald-700">Thợ:</span>
+  1186→                      <span className="font-medium text-emerald-900">
+  1187→                        {completeRows
+  1188→                          .map((r) => {
+  1189→                            const svc = allServices.find((s) => s.id === r.serviceId);
+  1190→                            const st = allStaff.find((s) => s.id === r.staffId);
+  1191→                            return `${svc?.name || "?"} (${st?.name || "?"})`;
+  1192→                          })
+  1193→                          .join(", ")}
+  1194→                      </span>
+  1195→                    </div>
+  1196→                  </div>
+  1197→                  <div className="mt-4 flex justify-end">
+  1198→                    <Button
+  1199→                      onClick={resetForm}
+  1200→                      className="bg-emerald-600 px-8 py-2 hover:bg-emerald-700"
+  1201→                    >
+  1202→                      OK
+  1203→                    </Button>
+  1204→                  </div>
+  1205→                </div>
+  1206→              </div>
+  1207→            </div>
+  1208→          )}
+  1209→        </div>
+  1210→      </main>
+  1211→    </div>
+  1212→  );
+  1213→}
+  1214→

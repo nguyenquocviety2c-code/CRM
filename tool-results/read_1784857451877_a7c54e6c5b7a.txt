@@ -1,0 +1,1833 @@
+     1→"use client";
+     2→
+     3→import { useState, useEffect, useMemo } from "react";
+     4→import { useQuery, useQueryClient } from "@tanstack/react-query";
+     5→import { Search, PlusCircle, ChevronLeft, Columns3, ChevronDown } from "lucide-react";
+     6→import { Input } from "@/components/ui/input";
+     7→import { queryKeys } from "@/lib/query-keys";
+     8→import { localDayToUtcRange, toVietnamDay, toVietnamTime } from "@/lib/utils";
+     9→import { useCashierStore, ItemType, InvoiceItem } from "@/stores/cashier-store";
+    10→import { useBranchStore } from "@/stores/branch-store";
+    11→import { useToast } from "@/hooks/use-toast";
+    12→import { DatePicker } from "@/components/ui/date-picker";
+    13→import { TimePicker } from "@/components/ui/time-picker";
+    14→import {
+    15→  Select,
+    16→  SelectContent,
+    17→  SelectItem,
+    18→  SelectTrigger,
+    19→  SelectValue,
+    20→} from "@/components/ui/select";
+    21→import {
+    22→  Dialog,
+    23→  DialogContent,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→  DialogFooter,
+    27→} from "@/components/ui/dialog";
+    28→import { Label } from "@/components/ui/label";
+    29→import { Button } from "@/components/ui/button";
+    30→import { Checkbox } from "@/components/ui/checkbox";
+    31→import {
+    32→  DropdownMenu,
+    33→  DropdownMenuContent,
+    34→  DropdownMenuItem,
+    35→  DropdownMenuTrigger,
+    36→} from "@/components/ui/dropdown-menu";
+    37→import { useAuthStore } from "@/stores/auth-store";
+    38→
+    39→interface ServiceItem {
+    40→  id: string;
+    41→  code: string;
+    42→  name: string;
+    43→  price: number;
+    44→  duration?: number;
+    45→  category?: { name: string } | null;
+    46→  categoryId?: string | null;
+    47→  branch_id?: string | null;
+    48→}
+    49→
+    50→interface SupabaseService {
+    51→  id: string;
+    52→  code: string;
+    53→  name: string;
+    54→  price: number;
+    55→  active: boolean;
+    56→  duration?: number;
+    57→  category: { id: string; name: string } | null;
+    58→  branch_id?: string | null;
+    59→}
+    60→
+    61→interface SupabaseServiceCategory {
+    62→  id: string;
+    63→  name: string;
+    64→  active: boolean;
+    65→  branches: string[];
+    66→}
+    67→
+    68→interface SupabaseProduct {
+    69→  id: string;
+    70→  code: string;
+    71→  name: string;
+    72→  price: number;
+    73→  active: boolean;
+    74→  category: { id: string; name: string } | null;
+    75→  product_type?: string | null;
+    76→}
+    77→
+    78→interface SupabaseProductCategory {
+    79→  id: string;
+    80→  name: string;
+    81→  code?: string;
+    82→  active: boolean;
+    83→  sort_order?: number;
+    84→}
+    85→
+    86→interface SupabasePackage {
+    87→  id: string;
+    88→  code: string;
+    89→  name: string;
+    90→  total_price: number;
+    91→  discount_price: number;
+    92→  active: boolean;
+    93→  category: { id: string; name: string } | null;
+    94→}
+    95→
+    96→interface SupabaseStaff {
+    97→  id: string;
+    98→  name: string;
+    99→  group?: { name?: string } | null;
+   100→}
+   101→
+   102→const tabs = [
+   103→  { id: "service" as ItemType, label: "Dịch vụ" },
+   104→  { id: "product" as ItemType, label: "Sản phẩm" },
+   105→  { id: "package" as ItemType, label: "Gói dịch vụ" },
+   106→];
+   107→
+   108→// ID of the "Khách vãng lai" customer source. Used to create guest customer
+   109→// records for walk-in tabs (mirrors the booking dialog).
+   110→const WALKIN_SOURCE_ID = "779ddad6-01fa-4887-8647-134ce699d643";
+   111→const WALKIN_SOURCE_NAME = "Khách vãng lai";
+   112→
+   113→export function ServiceSelector() {
+   114→  const { toast } = useToast();
+   115→  const [activeTab, setActiveTab] = useState<ItemType>("service");
+   116→  const [search, setSearch] = useState("");
+   117→  // Tab visibility — all 3 tabs visible by default. Unticking one in the
+   118→  // "Cột" dropdown hides it from the tab bar. If the active tab is hidden,
+   119→  // auto-switch to the first visible tab.
+   120→  const [visibleTabs, setVisibleTabs] = useState<Record<string, boolean>>({
+   121→    service: true,
+   122→    product: true,
+   123→    package: true,
+   124→  });
+   125→  const toggleTabVisible = (tabId: string) => {
+   126→    setVisibleTabs((prev) => {
+   127→      const next = { ...prev, [tabId]: prev[tabId] !== false ? false : true };
+   128→      // Don't allow hiding all tabs — keep at least 1 visible.
+   129→      const visibleCount = Object.values(next).filter(Boolean).length;
+   130→      if (visibleCount === 0) return prev;
+   131→      // If the active tab was just hidden, switch to the first visible one.
+   132→      if (next[tabId] === false && activeTab === tabId) {
+   133→        const firstVisible = tabs.find((t) => next[t.id] !== false);
+   134→        if (firstVisible) {
+   135→          setActiveTab(firstVisible.id);
+   136→          setSearch("");
+   137→          setExpandedServiceCategoryId(null);
+   138→          setExpandedProductCategoryId(null);
+   139→        }
+   140→      }
+   141→      return next;
+   142→    });
+   143→  };
+   144→  const {
+   145→    activeTabId,
+   146→    activeCustomers,
+   147→    addInvoiceItem,
+   148→    removeInvoiceItem,
+   149→    tabMeta,
+   150→    updateTabMeta,
+   151→    invoices,
+   152→  } = useCashierStore();
+   153→  // Resolve the active customer (for phone lookup in the existing-booking
+   154→  // confirmation check). activeCustomers is the list of open tabs; find the
+   155→  // one whose customerId matches activeTabId.
+   156→  const activeCustomer = activeCustomers.find(
+   157→    (c) => c.customerId === activeTabId
+   158→  );
+   159→  const { selectedBranchId } = useBranchStore();
+   160→  const { hasPermission } = useAuthStore();
+   161→  // Permission: can the logged-in staff assign employees to services?
+   162→  // If false, the staff dropdown is hidden and services are booked without
+   163→  // a specific staff assignment.
+   164→  const canAssignStaff = hasPermission("assign_staff");
+   165→  const queryClient = useQueryClient();
+   166→  // For the service tab: the currently-expanded service category (click a
+   167→  // category to drill into its services). null = show the category list.
+   168→  const [expandedServiceCategoryId, setExpandedServiceCategoryId] = useState<string | null>(null);
+   169→  // For the product tab: same drill-down idea. null = show the product-group
+   170→  // list; a group id = show that group's priced products.
+   171→  const [expandedProductCategoryId, setExpandedProductCategoryId] = useState<string | null>(null);
+   172→
+   173→  // Dialog state: picking a service (in the service tab, after drilling into
+   174→  // a category) opens this dialog so the cashier can choose staff + date +
+   175→  // time. The service is only added to the invoice on OK.
+   176→  const [serviceDialogOpen, setServiceDialogOpen] = useState(false);
+   177→  const [selectedService, setSelectedService] = useState<ServiceItem | null>(null);
+   178→  const [selectedStaffId, setSelectedStaffId] = useState<string>("");
+   179→  const [selectedDate, setSelectedDate] = useState<string>("");
+   180→  const [selectedTime, setSelectedTime] = useState<string>("");
+   181→  const [addingFromDialog, setAddingFromDialog] = useState(false);
+   182→  const [dialogError, setDialogError] = useState<string>("");
+   183→  // True when this is the 2nd+ service on the tab — the date/time are derived
+   184→  // from the booking's START (parallel: all services start simultaneously) and
+   185→  // the date/time inputs are hidden in the dialog so the cashier only picks
+   186→  // the staff.
+   187→  const [isParallelService, setIsParallelService] = useState(false);
+   188→  // Existing-booking confirmation: when adding the first service to a draft
+   189→  // tab, if the customer (by phone) already has non-cancelled bookings, show
+   190→  // a confirmation prompt listing them. `skipExistingBookingsCheck` is set
+   191→  // true after the user confirms so the re-add skips the check.
+   192→  const [pendingExistingBookings, setPendingExistingBookings] = useState<
+   193→    Array<{ id: string; date: string; time: string; status: string; branchName: string; services: Array<{ name: string; staffName: string }> }>
+   194→  >([]);
+   195→  const [skipExistingBookingsCheck, setSkipExistingBookingsCheck] = useState(false);
+   196→  // Shared "Thêm sản phẩm / Thêm gói dịch vụ" dialog for PRODUCT and PACKAGE
+   197→  // items. Per the user's latest request, BOTH item types now open this dialog
+   198→  // (products no longer add directly). The dialog shows:
+   199→  //   - Item name + price
+   200→  //   - Date + Time (DISABLED, pre-filled with the current date/time when the
+   201→  //     dialog opens — the cashier can't change them; they're stamped "now")
+   202→  //   - Staff Select — shown ONLY for packages (required). Products have NO
+   203→  //     staff field (per the earlier "no required staff for products" request).
+   204→  // On OK: the item is added with the stamped date/time (+ staff name for
+   205→  // packages). On Cancel: nothing is added. We reuse the same state + Dialog
+   206→  // for both product and package clicks (the active tab determines the item
+   207→  // type at add time via `handleAddItem`).
+   208→  const [simpleStaffDialogItem, setSimpleStaffDialogItem] = useState<ServiceItem | null>(null);
+   209→  const [simpleStaffPickStaffId, setSimpleStaffPickStaffId] = useState<string>("");
+   210→  // Date/time stamped when the dialog opens (= the moment the cashier clicked
+   211→  // "Thêm sản phẩm" / "Thêm gói dịch vụ"). Read-only in the UI; passed to
+   212→  // `handleAddItem` on confirm so each product/package line item carries the
+   213→  // timestamp of when it was added.
+   214→  const [simpleStaffDialogDate, setSimpleStaffDialogDate] = useState<string>("");
+   215→  const [simpleStaffDialogTime, setSimpleStaffDialogTime] = useState<string>("");
+   216→
+   217→  // Fetch services from Supabase
+   218→  const { data: servicesData, isLoading: servicesLoading } = useQuery({
+   219→    queryKey: queryKeys.services.list({ search, active: "true" }),
+   220→    queryFn: async () => {
+   221→      const params = new URLSearchParams();
+   222→      params.set("active", "true");
+   223→      params.set("limit", "200");
+   224→      if (search) params.set("search", search);
+   225→      const res = await fetch(`/api/supabase/services?${params.toString()}`);
+   226→      const json = await res.json();
+   227→      if (!json.ok) throw new Error(json.error);
+   228→      return (json.data as SupabaseService[]).map((s) => ({
+   229→        id: s.id,
+   230→        code: s.code,
+   231→        name: s.name,
+   232→        price: s.price,
+   233→        duration: s.duration,
+   234→        category: s.category,
+   235→        categoryId: s.category?.id || null,
+   236→        branch_id: s.branch_id || null,
+   237→      }));
+   238→    },
+   239→    enabled: activeTab === "service",
+   240→  });
+   241→
+   242→  // Fetch service categories (for the service tab's category drill-down).
+   243→  // Each category carries a `branches` array; we only show categories whose
+   244→  // branches include the selected store.
+   245→  const { data: serviceCategoriesData } = useQuery<SupabaseServiceCategory[]>({
+   246→    queryKey: ["cashier-service-categories", selectedBranchId],
+   247→    queryFn: async () => {
+   248→      const res = await fetch("/api/supabase/service-categories?active=true");
+   249→      const json = await res.json();
+   250→      return (json.data as SupabaseServiceCategory[]) || [];
+   251→    },
+   252→    enabled: activeTab === "service",
+   253→  });
+   254→  // Categories available at the selected store (or all when "all" stores).
+   255→  // Also filtered by the active tab's "Khách cũ" status so the cut categories
+   256→  // match the customer (mirrors the booking dialog):
+   257→  // - Khách cũ (old): hide "Dành cho khách hàng mới - DV Cắt", keep "Dịch Vụ Cắt".
+   258→  // - Not Khách cũ (new / walk-in / booking with a non-old customer): hide
+   259→  //   "Dịch Vụ Cắt", keep "Dành cho khách hàng mới - DV Cắt".
+   260→  // The real status (`customerType`) is fetched from the API when a tab is
+   261→  // opened; until it resolves we fall back to the tab-type heuristic.
+   262→  const activeTabMeta = activeTabId ? tabMeta[activeTabId] : undefined;
+   263→  const effectiveCustomerType: "old" | "new" = activeTabMeta?.customerType
+   264→    ? activeTabMeta.customerType
+   265→    : activeTabMeta?.type === "old"
+   266→      ? "old"
+   267→      : "new";
+   268→  const storeServiceCategories = (serviceCategoriesData || []).filter((c) => {
+   269→    if (selectedBranchId && selectedBranchId !== "all") {
+   270→      if (!(c.branches || []).includes(selectedBranchId)) return false;
+   271→    }
+   272→    const name = c.name.toLowerCase();
+   273→    const isNewCustomerCut = name.includes("dành cho khách hàng mới");
+   274→    const isRegularCut = name.includes("dịch vụ cắt") || name === "dịch vụ cắt";
+   275→    if (effectiveCustomerType === "new") {
+   276→      // Not a "Khách cũ": hide regular "Dịch Vụ Cắt", keep the new-customer cut.
+   277→      if (isRegularCut && !isNewCustomerCut) return false;
+   278→    } else {
+   279→      // "Khách cũ": hide the new-customer-only cut, keep regular "Dịch Vụ Cắt".
+   280→      if (isNewCustomerCut) return false;
+   281→    }
+   282→    return true;
+   283→  });
+   284→  // Services of the currently-expanded category (filtered by store too).
+   285→  const expandedCategoryServices = (servicesData || []).filter((s) => {
+   286→    if (!expandedServiceCategoryId) return false;
+   287→    if (s.categoryId !== expandedServiceCategoryId) return false;
+   288→    if (!selectedBranchId || selectedBranchId === "all") return true;
+   289→    // Services may store multiple branch ids comma-separated in branch_id.
+   290→    const svcBranches = (s.branch_id || "").split(",").map((x) => x.trim());
+   291→    return svcBranches.includes(selectedBranchId);
+   292→  });
+   293→
+   294→  // Fetch staff list (for the service dialog). Mirrors the booking dialog:
+   295→  // only hairdresser groups are listed.
+   296→  const { data: staffData } = useQuery<SupabaseStaff[]>({
+   297→    queryKey: ["cashier-service-dialog-staff", selectedBranchId],
+   298→    queryFn: async () => {
+   299→      if (!selectedBranchId || selectedBranchId === "all") return [];
+   300→      const res = await fetch(
+   301→        `/api/supabase/staff?branch_id=${selectedBranchId}&active=true&limit=200`
+   302→      );
+   303→      const json = await res.json();
+   304→      if (!json.ok) return [];
+   305→      const hairdresserGroups = ["Artist", "Creative Director", "Master", "Junior"];
+   306→      return (json.data as SupabaseStaff[]).filter((s) => {
+   307→        const groupName = s.group?.name;
+   308→        return groupName && hairdresserGroups.includes(groupName);
+   309→      });
+   310→    },
+   311→  });
+   312→  const allStaff: SupabaseStaff[] = staffData || [];
+   313→  // Filter staff based on the selected service name:
+   314→  // - "Artist" in name → only Artist group.
+   315→  // - "Creative Director" in name → only Creative Director group.
+   316→  // - Otherwise → all hairdresser groups (Artist, Creative Director, Master, Junior).
+   317→  const staffList: SupabaseStaff[] = (() => {
+   318→    if (!selectedService) return allStaff;
+   319→    const svcName = (selectedService.name || "").toLowerCase();
+   320→    if (svcName.includes("creative director")) {
+   321→      return allStaff.filter((s) => s.group?.name === "Creative Director");
+   322→    }
+   323→    if (svcName.includes("artist")) {
+   324→      return allStaff.filter((s) => s.group?.name === "Artist");
+   325→    }
+   326→    return allStaff;
+   327→  })();
+   328→
+   329→  // ------------------------------------------------------------------
+   330→  // Feasible-time computation for the service dialog (mirrors the booking
+   331→  // dialog's logic). When the user picks a staff + date + service, we fetch
+   332→  // the staff's existing non-cancelled bookings for that day and compute
+   333→  // which HH:MM start times would overlap with them. Hours with NO feasible
+   334→  // minute are hidden entirely in the TimePicker; otherwise only infeasible
+   335→  // minutes within an hour are hidden.
+   336→  // ------------------------------------------------------------------
+   337→  const [busyIntervals, setBusyIntervals] = useState<
+   338→    Record<string, { startMs: number; endMs: number }[]>
+   339→  >({});
+   340→  // Parse the dialog's date ("DD/MM/YYYY") + selected staff + service duration
+   341→  // to build a cache key for fetching busy intervals.
+   342→  const feasibleKey = useMemo(() => {
+   343→    if (!selectedStaffId || !selectedDate || !selectedService) return "";
+   344→    const m = selectedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   345→    if (!m) return "";
+   346→    return `${selectedStaffId}|${m[3]}-${m[2]}-${m[1]}`;
+   347→  }, [selectedStaffId, selectedDate, selectedService]);
+   348→
+   349→  useEffect(() => {
+   350→    if (!feasibleKey || busyIntervals[feasibleKey] !== undefined) return;
+   351→    let cancelled = false;
+   352→    (async () => {
+   353→      const [staffId, isoDay] = feasibleKey.split("|");
+   354→      const params = new URLSearchParams();
+   355→      params.set("page", "1");
+   356→      params.set("limit", "200");
+   357→      // Timezone-safe: isoDay is a Vietnam calendar day (from the dialog's
+   358→      // DD/MM/YYYY date). Convert to its UTC range so Supabase filters by
+   359→      // the correct UTC window (no 7-hour shift).
+   360→      const busyDayRange = localDayToUtcRange(isoDay);
+   361→      params.set("date_from", busyDayRange.from);
+   362→      params.set("date_to", busyDayRange.to);
+   363→      if (selectedBranchId) params.set("branch_id", selectedBranchId);
+   364→      try {
+   365→        const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   366→        const json = await res.json();
+   367→        if (!json.ok || cancelled) return;
+   368→        const bookings = json.data || [];
+   369→        const intervals: { startMs: number; endMs: number }[] = [];
+   370→        for (const b of bookings) {
+   371→          if (b.status === "cancelled" || b.status === "no_show") continue;
+   372→          const exStart = new Date(b.date_time as string).getTime();
+   373→          if (isNaN(exStart)) continue;
+   374→          for (const s of (b.services as Array<Record<string, unknown>>) || []) {
+   375→            if (s.staff_id !== staffId) continue;
+   376→            const dur = (Number(s.duration) || Number((s.service as { duration?: number } | null)?.duration) || 60) * 60 * 1000;
+   377→            intervals.push({ startMs: exStart, endMs: exStart + dur });
+   378→          }
+   379→        }
+   380→        if (!cancelled) {
+   381→          setBusyIntervals((prev) => ({ ...prev, [feasibleKey]: intervals }));
+   382→        }
+   383→      } catch {
+   384→        /* ignore */
+   385→      }
+   386→    })();
+   387→    return () => { cancelled = true; };
+   388→  }, [feasibleKey, selectedBranchId, busyIntervals]);
+   389→
+   390→  // Compute hiddenHours + hiddenMinutes for the TimePicker in the dialog.
+   391→  const timeFeasibility = useMemo(() => {
+   392→    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>> };
+   393→    if (!feasibleKey || !selectedService) return empty;
+   394→    const intervals = busyIntervals[feasibleKey];
+   395→    if (!intervals || intervals.length === 0) return empty;
+   396→    // Service duration from the selected service (default 60 min).
+   397→    const durationMs = (Number(selectedService.duration) || 60) * 60 * 1000;
+   398→    if (durationMs <= 0) return empty;
+   399→    const m = selectedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   400→    if (!m) return empty;
+   401→    // Use the +07:00 offset so dayBase is the correct UTC instant for VN
+   402→    // midnight. Date.UTC treats VN hours as UTC → 7-hour offset → the
+   403→    // feasibility check would never match existing bookings (they're stored
+   404→    // with the correct +07:00 offset, so their epoch ms is 7 hours off from
+   405→    // a Date.UTC-based dayBase).
+   406→    const dayBase = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00+07:00`).getTime();
+   407→    if (isNaN(dayBase)) return empty;
+   408→    const hiddenHours = new Set<string>();
+   409→    const hiddenMinutes: Record<string, Set<string>> = {};
+   410→    const hourHasFeasible: Record<string, boolean> = {};
+   411→    for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
+   412→    for (let min = 0; min < 60 * 24; min++) {
+   413→      const startMs = dayBase + min * 60 * 1000;
+   414→      const endMs = startMs + durationMs;
+   415→      const overlaps = intervals.some((iv) => startMs < iv.endMs && iv.startMs < endMs);
+   416→      const hStr = String(Math.floor(min / 60)).padStart(2, "0");
+   417→      const mStr = String(min % 60).padStart(2, "0");
+   418→      if (overlaps) {
+   419→        if (!hiddenMinutes[hStr]) hiddenMinutes[hStr] = new Set<string>();
+   420→        hiddenMinutes[hStr].add(mStr);
+   421→      } else {
+   422→        hourHasFeasible[hStr] = true;
+   423→      }
+   424→    }
+   425→    for (let h = 0; h < 24; h++) {
+   426→      const hStr = String(h).padStart(2, "0");
+   427→      if (!hourHasFeasible[hStr]) hiddenHours.add(hStr);
+   428→    }
+   429→    return { hiddenHours, hiddenMinutes };
+   430→  }, [feasibleKey, busyIntervals, selectedService, selectedDate]);
+   431→
+   432→  // Fetch products from Supabase — only show products with price > 0 AND
+   433→  // product_type = "trading" (Sản phẩm kinh doanh). Products marked as
+   434→  // "consumption" (Sản phẩm tiêu thụ) are internal-use only and hidden
+   435→  // from the cashier's product selector.
+   436→  const { data: productsData, isLoading: productsLoading } = useQuery({
+   437→    queryKey: queryKeys.products.list({ search, active: "true" }),
+   438→    queryFn: async () => {
+   439→      const params = new URLSearchParams();
+   440→      params.set("active", "true");
+   441→      params.set("limit", "200");
+   442→      if (search) params.set("search", search);
+   443→      const res = await fetch(`/api/supabase/products?${params.toString()}`);
+   444→      const json = await res.json();
+   445→      if (!json.ok) throw new Error(json.error);
+   446→      return (json.data as SupabaseProduct[])
+   447→        .filter((p) => p.price > 0 && (p.product_type || "trading") === "trading")
+   448→        .map((p) => ({
+   449→          id: p.id,
+   450→          code: p.code,
+   451→          name: p.name,
+   452→          price: p.price,
+   453→          category: p.category,
+   454→        }));
+   455→    },
+   456→    enabled: activeTab === "product",
+   457→  });
+   458→
+   459→  // Fetch product categories/groups (for the product tab's group drill-down).
+   460→  // Product categories are NOT branch-scoped (unlike service categories), so
+   461→  // no branch filtering is needed here.
+   462→  const { data: productCategoriesData } = useQuery<SupabaseProductCategory[]>({
+   463→    queryKey: ["cashier-product-categories"],
+   464→    queryFn: async () => {
+   465→      const res = await fetch("/api/supabase/product-categories?active=true");
+   466→      const json = await res.json();
+   467→      return (json.data as SupabaseProductCategory[]) || [];
+   468→    },
+   469→    enabled: activeTab === "product",
+   470→  });
+   471→  // Product groups that contain AT LEAST ONE trading product with price > 0.
+   472→  // (Groups with only 0đ or consumption-only products are hidden.)
+   473→  const pricedProductCategories = (productCategoriesData || []).filter((cat) =>
+   474→    (productsData || []).some(
+   475→      (p) => p.category?.id === cat.id && Number(p.price) > 0
+   476→    )
+   477→  );
+   478→  // Products of the currently-expanded product group (already price > 0 from
+   479→  // the queryFn filter, but kept explicit for safety/self-documenting).
+   480→  const expandedCategoryProducts = (productsData || []).filter((p) => {
+   481→    if (!expandedProductCategoryId) return false;
+   482→    if (p.category?.id !== expandedProductCategoryId) return false;
+   483→    return Number(p.price) > 0;
+   484→  });
+   485→
+   486→  // Fetch packages from Supabase
+   487→  const { data: packagesData, isLoading: packagesLoading } = useQuery({
+   488→    queryKey: queryKeys.packages.list({ search, active: "true" }),
+   489→    queryFn: async () => {
+   490→      const params = new URLSearchParams();
+   491→      params.set("active", "true");
+   492→      params.set("limit", "200");
+   493→      if (search) params.set("search", search);
+   494→      const res = await fetch(`/api/supabase/packages?${params.toString()}`);
+   495→      const json = await res.json();
+   496→      if (!json.ok) throw new Error(json.error);
+   497→      return (json.data as SupabasePackage[]).map((p) => ({
+   498→        id: p.id,
+   499→        code: p.code,
+   500→        name: p.name,
+   501→        price: p.discount_price || p.total_price,
+   502→        category: p.category,
+   503→      }));
+   504→    },
+   505→    enabled: activeTab === "package",
+   506→  });
+   507→
+   508→  const items: ServiceItem[] =
+   509→    activeTab === "service"
+   510→      ? servicesData || []
+   511→      : activeTab === "product"
+   512→        // Only show products with a price > 0 (hide 0đ products — they are
+   513→        // typically accessories/consumables not for sale, per the business rule
+   514→        // that mirrors the booking invoice dialog's product picker).
+   515→        ? (productsData || []).filter((p) => Number(p.price) > 0)
+   516→        : packagesData || [];
+   517→
+   518→  const isLoading =
+   519→    activeTab === "service"
+   520→      ? servicesLoading
+   521→      : activeTab === "product"
+   522→        ? productsLoading
+   523→        : packagesLoading;
+   524→
+   525→  const handleAddItem = (
+   526→    item: ServiceItem,
+   527→    opts?: { staffName?: string; date?: string; time?: string }
+   528→  ) => {
+   529→    if (!activeTabId) return;
+   530→    const invoiceItem: InvoiceItem = {
+   531→      id: `${item.id}-${crypto.randomUUID()}`,
+   532→      itemId: item.id,
+   533→      name: item.name,
+   534→      type: activeTab,
+   535→      price: Number(item.price),
+   536→      quantity: 1,
+   537→      discount: 0,
+   538→      total: Number(item.price),
+   539→      staffName: opts?.staffName,
+   540→      date: opts?.date,
+   541→      time: opts?.time,
+   542→    };
+   543→    addInvoiceItem(activeTabId, invoiceItem);
+   544→  };
+   545→
+   546→  // Clicking a service in the service tab opens the staff/date/time dialog.
+   547→  const handleServiceClick = (item: ServiceItem) => {
+   548→    setSelectedService(item);
+   549→    setSelectedStaffId("");
+   550→    setDialogError("");
+   551→    const meta = activeTabId ? tabMeta[activeTabId] : undefined;
+   552→    // Service 2+: the tab already has a booking with at least one service.
+   553→    // PARALLEL model: default the date/time to the BOOKING's START time (the
+   554→    // 1st service's start), NOT the 1st service's end. All services in a
+   555→    // booking run simultaneously (each on a different staff). The date/time
+   556→    // inputs are hidden in the dialog when isParallelService is true — the
+   557→    // cashier only picks the staff.
+   558→    //
+   559→    // Resilience: `lastServiceStartMs` may be missing when the tabMeta was
+   560→    // persisted by an OLDER code version (before this field was added) and
+   561→    // the tab was re-opened (the customer-tabs setup only runs once per tab
+   562→    // id). In that case, fall back to computing the start from the first
+   563→    // service item's date/time fields (stored on the invoice item when the
+   564→    // service was added). This ensures the 2nd-service dialog ALWAYS hides
+   565→    // the date/time inputs when there's already ≥1 service on the tab.
+   566→    const hasExistingService =
+   567→      meta?.bookingCreated &&
+   568→      (meta.lastServiceStartMs != null ||
+   569→        (activeTabId && (invoices[activeTabId]?.items || []).some((it) => it.type === "service")));
+   570→    if (hasExistingService) {
+   571→      // Prefer the stored start ms; fall back to the first service item's
+   572→      // date/time; fall back to the booking's date_time (meta doesn't carry
+   573→      // it directly, so the service item fields are the practical fallback).
+   574→      let startMs = meta?.lastServiceStartMs;
+   575→      if (!startMs) {
+   576→        // Derive from the first service item's date ("DD/MM/YYYY") + time
+   577→        // ("HH:MM") fields — these are set when the service is added.
+   578→        const firstService = (invoices[activeTabId]?.items || []).find(
+   579→          (it) => it.type === "service"
+   580→        );
+   581→        if (firstService?.date && firstService?.time) {
+   582→          const m = firstService.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   583→          const tm = firstService.time.match(/^(\d{1,2}):(\d{2})$/);
+   584→          if (m && tm) {
+   585→            const isoDayFallback = `${m[3]}-${m[2]}-${m[1]}`;
+   586→            startMs = new Date(`${isoDayFallback}T${tm[1].padStart(2, "0")}:${tm[2]}:00+07:00`).getTime();
+   587→          }
+   588→        }
+   589→      }
+   590→      if (startMs) {
+   591→        const vnDay = toVietnamDay(startMs); // "YYYY-MM-DD"
+   592→        const vnTime = toVietnamTime(startMs); // "HH:MM"
+   593→        const [, mo, d] = vnDay.split("-");
+   594→        const y = vnDay.split("-")[0];
+   595→        setSelectedDate(`${d}/${mo}/${y}`);
+   596→        setSelectedTime(vnTime);
+   597→      }
+   598→      setIsParallelService(true);
+   599→    } else {
+   600→      // First service on this tab → default date = today AND time = current
+   601→      // time (HH:MM). Per the user's request, the date/time fields in the
+   602→      // dialog are DISABLED (read-only) and always pre-filled with the moment
+   603→      // the cashier clicked "Thêm dịch vụ" — the cashier can't change them.
+   604→      // This means every service add carries a date/time, so
+   605→      // `shouldSyncBooking` (staff + date + time all set) is true whenever a
+   606→      // staff is picked → a Lịch hẹn booking is always created/synced. The
+   607→      // cashier just picks the staff and confirms; the booking is stamped
+   608→      // "now".
+   609→      const now = new Date();
+   610→      const d = String(now.getDate()).padStart(2, "0");
+   611→      const m = String(now.getMonth() + 1).padStart(2, "0");
+   612→      const y = now.getFullYear();
+   613→      const hh = String(now.getHours()).padStart(2, "0");
+   614→      const mm = String(now.getMinutes()).padStart(2, "0");
+   615→      setSelectedDate(`${d}/${m}/${y}`);
+   616→      setSelectedTime(`${hh}:${mm}`);
+   617→      setIsParallelService(false);
+   618→    }
+   619→    setServiceDialogOpen(true);
+   620→  };
+   621→
+   622→  // Clicking a PRODUCT or PACKAGE opens the shared "Thêm sản phẩm / Thêm gói
+   623→  // dịch vụ" dialog. The dialog pre-fills the current date + time (disabled —
+   624→  // the cashier can't change them) and shows a staff Select ONLY for packages
+   625→  // (products have no staff field). On OK the item is added with the stamped
+   626→  // date/time (+ staff name for packages); on Cancel it is NOT added.
+   627→  const handleProductOrPackageClick = (item: ServiceItem) => {
+   628→    // Stamp the current date/time — these are read-only in the dialog.
+   629→    const now = new Date();
+   630→    const dd = String(now.getDate()).padStart(2, "0");
+   631→    const mm = String(now.getMonth() + 1).padStart(2, "0");
+   632→    const yyyy = now.getFullYear();
+   633→    const hh = String(now.getHours()).padStart(2, "0");
+   634→    const mi = String(now.getMinutes()).padStart(2, "0");
+   635→    setSimpleStaffDialogDate(`${dd}/${mm}/${yyyy}`);
+   636→    setSimpleStaffDialogTime(`${hh}:${mi}`);
+   637→    setSimpleStaffDialogItem(item);
+   638→    setSimpleStaffPickStaffId("");
+   639→  };
+   640→
+   641→  // OK on the shared dialog: add the product/package to the invoice with the
+   642→  // stamped date/time (+ the picked staff's name for packages), then close.
+   643→  // For products: no staff required → OK is always enabled. For packages: the
+   644→  // cashier MUST pick a staff (OK disabled until one is picked) — UNLESS they
+   645→  // lack the assign_staff permission, in which case the item is added with no
+   646→  // staff (the Select is hidden and OK is enabled).
+   647→  const handleSimpleStaffDialogConfirm = () => {
+   648→    if (!simpleStaffDialogItem) return;
+   649→    // Packages require a staff (when the cashier can assign staff). Products
+   650→    // never require a staff.
+   651→    const isPackage = activeTab === "package";
+   652→    const staff = isPackage
+   653→      ? allStaff.find((s) => s.id === simpleStaffPickStaffId)
+   654→      : null;
+   655→    if (isPackage && canAssignStaff && !staff) return; // safety — OK disabled
+   656→    handleAddItem(simpleStaffDialogItem, {
+   657→      staffName: staff?.name,
+   658→      date: simpleStaffDialogDate,
+   659→      time: simpleStaffDialogTime,
+   660→    });
+   661→    setSimpleStaffDialogItem(null);
+   662→    setSimpleStaffPickStaffId("");
+   663→    setSimpleStaffDialogDate("");
+   664→    setSimpleStaffDialogTime("");
+   665→  };
+   666→
+   667→  // OK on the service dialog: ALWAYS adds the service to the invoice. A booking
+   668→  // in Lịch hẹn is created/updated ONLY when the cashier selected BOTH a staff
+   669→  // AND a time — otherwise the service is just a line item (no appointment).
+   670→  // When syncing to Lịch hẹn:
+   671→  // - First service on a draft tab → create a new booking (POST).
+   672→  // - Second+ service: gap ≤ 15 min → add to the SAME booking (PUT);
+   673→  //   gap > 15 min → create a SEPARATE booking (POST).
+   674→  const handleDialogConfirm = async () => {
+   675→    if (!activeTabId || !selectedService) return;
+   676→    setDialogError("");
+   677→    const meta = activeTabId ? tabMeta[activeTabId] : undefined;
+   678→    const staff = selectedStaffId ? staffList.find((s) => s.id === selectedStaffId) : null;
+   679→    const staffName = staff?.name;
+   680→
+   681→    // Booking-sync rule: a Lịch hẹn entry is created/updated ONLY when the
+   682→    // cashier has selected BOTH a staff AND a time. If either is missing, the
+   683→    // service is still added to the invoice (the cashier can checkout without
+   684→    // an appointment), but no booking is created in the Lịch hẹn module.
+   685→    // This lets the cashier quickly ring up a walk-in product/service sale
+   686→    // without scheduling, while still syncing to Lịch hẹn when a real
+   687→    // appointment is booked.
+   688→    // A Lịch hẹn booking is created whenever date + time are set, EVEN when
+   689→    // no staff is picked. When staff is empty, the booking's service gets a
+   690→    // null staff_id — it shows in the "Chưa xếp nhân viên" column in View
+   691→    // nhân viên and as an "Xếp nhân viên" clickable row in View khách hàng.
+   692→    // Previously staff was required to sync; now it's optional so the cashier
+   693→    // can create an appointment slot first and assign a staff later.
+   694→    const shouldSyncBooking = !!(selectedDate && selectedTime);
+   695→
+   696→    const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
+   697→    const isNewCustomerCut =
+   698→      (selectedService.categoryId || "") === newCustomerCutCategoryId;
+   699→    const meta0 = activeTabId ? tabMeta[activeTabId] : undefined;
+   700→    const excludeBookingId = meta0?.bookingId || "";
+   701→    const phone0 = activeCustomer?.phone?.trim() || "";
+   702→
+   703→    // The new-customer-cut one-time-offer check and the existing-bookings
+   704→    // confirmation prompt only apply when we're actually creating a booking.
+   705→    // If the cashier is just adding a line item (no staff/time), skip them.
+   706→    if (shouldSyncBooking) {
+   707→      // 0. One-time offer check: "Dành cho khách hàng mới - DV Cắt" can only be
+   708→      //    booked ONCE per phone.
+   709→      if (isNewCustomerCut && phone0) {
+   710→        try {
+   711→          const excludeParam = excludeBookingId
+   712→            ? `&excludeBookingId=${encodeURIComponent(excludeBookingId)}`
+   713→            : "";
+   714→          const checkRes = await fetch(
+   715→            `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(phone0)}${excludeParam}`
+   716→          );
+   717→          const checkJson = await checkRes.json();
+   718→          if (checkJson.ok && checkJson.data?.exists) {
+   719→            const d = checkJson.data;
+   720→            // Detailed "cannot book" message — identifies the blocking booking
+   721→            // precisely (customer, service, staff, date+time, branch, status)
+   722→            // so the cashier understands which existing appointment is blocking
+   723→            // the new one. The status is key: a "checkout" (paid) booking no
+   724→            // longer appears in the active booking list, so without the status
+   725→            // the cashier would think the customer has no booking at all.
+   726→            const custName = d.existingCustomerName || "(khách không rõ)";
+   727→            const svcName = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
+   728→            const staffName = d.existingStaffName || "(chưa phân thợ)";
+   729→            const dateStr = d.existingDate || "—";
+   730→            const timeStr = d.existingTime || "—";
+   731→            const branchStr = d.existingBranchName ? `\n• Chi nhánh: ${d.existingBranchName}` : "";
+   732→            const statusLabel: Record<string, string> = {
+   733→              pending: "Chờ xác nhận",
+   734→              confirmed: "Đã xác nhận",
+   735→              checkout: "Đã thanh toán",
+   736→              cancelled: "Đã huỷ",
+   737→              no_show: "Không đến",
+   738→            };
+   739→            const statusStr = d.existingStatus
+   740→              ? `\n• Trạng thái: ${statusLabel[d.existingStatus] || d.existingStatus}`
+   741→              : "";
+   742→            setDialogError(
+   743→              `Không thể đặt lịch vì khách hàng "${custName}" đã có một lịch "${svcName}" đã đặt trước đó.\n` +
+   744→              `• Thợ: ${staffName}\n` +
+   745→              `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}${statusStr}\n` +
+   746→              `Lưu ý: ưu đãi "Dành cho khách hàng mới" chỉ được đặt 1 lần. Vui lòng huỷ/chỉnh sửa lịch cũ hoặc chọn nhóm dịch vụ khác.`
+   747→            );
+   748→            return;
+   749→          }
+   750→        } catch {
+   751→          /* best-effort — don't block on network errors */
+   752→        }
+   753→      }
+   754→
+   755→      // 0b. Existing-booking confirmation: when adding the FIRST service to a
+   756→      //     draft tab (about to create a new booking), check if the customer
+   757→      //     already has non-cancelled, non-checkout bookings. If so, show a
+   758→      //     confirmation prompt. Skipped for service 2+ and after the user confirms.
+   759→      //
+   760→      //     The check uses phone OR customerId — phone is preferred (exact
+   761→      //     match), but when the cashier has linked a walk-in tab to a real
+   762→      //     customer by name (no phone entered yet), we can still check by
+   763→      //     customerId. Pass excludeBookingId so the current tab's own booking
+   764→      //     (if any) is excluded from the results.
+   765→      const isFirstServiceOnTab = !(meta0?.bookingCreated && meta0?.bookingId);
+   766→      // Also check for booking tabs that are adding a service that will create
+   767→      // a NEW separate booking (forceNew path) — same confirmation needed.
+   768→      const customerId0 = meta0?.customerId || activeCustomer?.customerId || "";
+   769→      const canCheckExisting = phone0 || (customerId0 && !customerId0.startsWith("walkin-"));
+   770→      if (isFirstServiceOnTab && !skipExistingBookingsCheck && canCheckExisting) {
+   771→        try {
+   772→          const params = new URLSearchParams();
+   773→          if (phone0) params.set("phone", phone0);
+   774→          else if (customerId0) params.set("customerId", customerId0);
+   775→          if (excludeBookingId) params.set("excludeBookingId", excludeBookingId);
+   776→          const existRes = await fetch(
+   777→            `/api/supabase/bookings/by-phone?${params.toString()}`
+   778→          );
+   779→          const existJson = await existRes.json();
+   780→          if (existJson.ok && Array.isArray(existJson.data) && existJson.data.length > 0) {
+   781→            setPendingExistingBookings(existJson.data);
+   782→            return; // stop — the confirmation UI takes over
+   783→          }
+   784→        } catch {
+   785→          /* best-effort */
+   786→        }
+   787→      }
+   788→    }
+   789→
+   790→    setAddingFromDialog(true);
+   791→    try {
+   792→      // Clamp the selected time to business hours (08:30 - 19:30) BEFORE using
+   793→      // it. The TimePicker's dropdown only shows 08-19, but the user can TYPE
+   794→      // any time directly into the input. The TimePicker's onBlur handler
+   795→      // clamps too, but it may NOT fire when the user clicks OK (the button
+   796→      // click doesn't blur the input in all cases). This clamp is the
+   797→      // client-side safety net; the server also validates.
+   798→      if (selectedTime) {
+   799→        const tm = selectedTime.match(/^(\d{1,2}):(\d{2})$/);
+   800→        if (tm) {
+   801→          let h = parseInt(tm[1], 10);
+   802→          let m = parseInt(tm[2], 10);
+   803→          if (!isNaN(h) && !isNaN(m)) {
+   804→            const totalMin = h * 60 + m;
+   805→            const OPEN_MIN = 8 * 60 + 30;
+   806→            const CLOSE_MIN = 19 * 60 + 30;
+   807→            if (totalMin < OPEN_MIN) { h = 8; m = 30; }
+   808→            else if (totalMin > CLOSE_MIN) { h = 19; m = 30; }
+   809→            const clamped = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+   810→            if (clamped !== selectedTime) {
+   811→              setSelectedTime(clamped);
+   812→              // Show a toast so the cashier knows the time was adjusted.
+   813→              toast({
+   814→                title: "Đã điều chỉnh giờ",
+   815→                description: `Giờ ngoài khung làm việc, đã đặt lại thành ${clamped}`,
+   816→              });
+   817→            }
+   818→          }
+   819→        }
+   820→      }
+   821→
+   822→      // If the cashier didn't select both a staff AND a time, we do NOT create
+   823→      // or update a booking in Lịch hẹn. The service is just a line item on
+   824→      // the invoice. In this case we can add the item immediately and return
+   825→      // (no conflict check needed — there's no appointment to conflict with).
+   826→      if (!shouldSyncBooking) {
+   827→        // 1) Add the invoice item so the cashier sees the line immediately.
+   828→        //    staffName/date/time are passed through (may be empty when the
+   829→        //    cashier chose not to schedule — that's fine, the line still shows).
+   830→        handleAddItem(selectedService, {
+   831→          staffName,
+   832→          date: selectedDate,
+   833→          time: selectedTime,
+   834→        });
+   835→        setSelectedService(null);
+   836→        setSelectedStaffId("");
+   837→        setServiceDialogOpen(false);
+   838→        setAddingFromDialog(false);
+   839→        return;
+   840→      }
+   841→
+   842→      // --- Booking sync path: a Lịch hẹn entry WILL be created/updated. ---
+   843→      // Run the staff conflict check BEFORE adding the item to the invoice.
+   844→      // Previously the item was added first and the conflict check ran after —
+   845→      // so even when a conflict was detected (and the dialog stayed open with
+   846→      // an error), the service had already been added to the invoice. That was
+   847→      // a logic bug: the user saw "Không thể đặt lịch" but the line was there.
+   848→      // Now: if a conflict is found, return WITHOUT adding the item.
+   849→      const meta = tabMeta[activeTabId];
+   850→      // Compute the new service's start time in epoch ms.
+   851→      const m = selectedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   852→      const tm = selectedTime.match(/^(\d{1,2}):(\d{2})$/);
+   853→      if (!m || !tm) throw new Error("Ngày hoặc giờ không hợp lệ");
+   854→      // Compute the new service's start time in epoch ms. MUST use the +07:00
+   855→      // offset so the epoch represents the correct UTC instant for the VN
+   856→      // wall-clock time (see createBookingForTab for the full explanation).
+   857→      const isoDayForStart = `${m[3]}-${m[2]}-${m[1]}`;
+   858→      const newStartMs = new Date(`${isoDayForStart}T${tm[1].padStart(2, "0")}:${tm[2]}:00+07:00`).getTime();
+   859→      const durationMin = Number(selectedService.duration) || 60;
+   860→      const newEndMs = newStartMs + durationMin * 60 * 1000;
+   861→
+   862→      // Staff conflict check (client-side, mirrors the server-side check):
+   863→      // the TimePicker hides busy minutes, but the user can TYPE a time
+   864→      // directly and bypass the dropdown. This explicit check fires right
+   865→      // before the booking is created/updated, fetching the conflicting
+   866→      // booking's details so the cashier sees WHICH existing appointment is
+   867→      // blocking (code, customer, service, full time range, branch, status).
+   868→      // The server still rejects as a safety net; this just gives a richer
+   869→      // message without a round-trip to the 400 handler.
+   870→      if (selectedStaffId && selectedService) {
+   871→        try {
+   872→          const params = new URLSearchParams();
+   873→          params.set("page", "1");
+   874→          params.set("limit", "200");
+   875→          const dl = localDayToUtcRange(isoDayForStart);
+   876→          params.set("date_from", dl.from);
+   877→          params.set("date_to", dl.to);
+   878→          if (selectedBranchId) params.set("branch_id", selectedBranchId);
+   879→          const cfRes = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   880→          const cfJson = await cfRes.json();
+   881→          if (cfJson.ok) {
+   882→            const exList = (cfJson.data || []) as Array<Record<string, unknown>>;
+   883→            for (const ex of exList) {
+   884→              if (ex.status === "cancelled" || ex.status === "no_show") continue;
+   885→              // When editing a booking in this tab, skip that booking itself.
+   886→              if (meta?.bookingId && ex.id === meta.bookingId) continue;
+   887→              const exStart = new Date(String(ex.date_time || "")).getTime();
+   888→              if (isNaN(exStart)) continue;
+   889→              const exServices = (ex.services || []) as Array<{
+   890→                staff_id?: string | null;
+   891→                staff?: { name?: string } | null;
+   892→                service?: { duration?: number; name?: string } | null;
+   893→              }>;
+   894→              for (const exSvc of exServices) {
+   895→                if (exSvc.staff_id !== selectedStaffId) continue;
+   896→                const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+   897→                const exEnd = exStart + exDur;
+   898→                if (newStartMs < exEnd && exStart < newEndMs) {
+   899→                  const conflictStaffName = exSvc.staff?.name || (staffList.find((s) => s.id === selectedStaffId)?.name) || "nhân viên";
+   900→                  const svcName = exSvc.service?.name || "Dịch vụ";
+   901→                  const exDurationMin = Math.round(exDur / 60000);
+   902→                  const exTimeStr = toVietnamTime(exStart);
+   903→                  const exEndTimeStr = toVietnamTime(exEnd);
+   904→                  const nsTimeStr = toVietnamTime(newStartMs);
+   905→                  const nsEndTimeStr = toVietnamTime(newEndMs);
+   906→                  const exDateStr = isoDayForStart.split("-").reverse().join("/");
+   907→                  const exCode = (ex.code as string) || "";
+   908→                  const exCustName = (ex.customer as { name?: string } | null)?.name || "";
+   909→                  const exBranchName = (ex.branch as { name?: string } | null)?.name || "";
+   910→                  const statusLabel: Record<string, string> = {
+   911→                    pending: "Chờ xác nhận",
+   912→                    confirmed: "Đã xác nhận",
+   913→                    checkin: "Đang phục vụ",
+   914→                    checkout: "Đã thanh toán",
+   915→                    cancelled: "Đã huỷ",
+   916→                    no_show: "Không đến",
+   917→                  };
+   918→                  const exStatusLabel = ex.status
+   919→                    ? statusLabel[String(ex.status)] || String(ex.status)
+   920→                    : "";
+   921→                  const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+   922→                  const custLine = exCustName ? `• Khách: ${exCustName}\n` : "";
+   923→                  const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+   924→                  const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+   925→                  setDialogError(
+   926→                    `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+   927→                    `${codeLine}:\n` +
+   928→                    custLine +
+   929→                    `• Thợ: ${conflictStaffName}\n` +
+   930→                    `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+   931→                    `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
+   932→                    branchLine +
+   933→                    statusLine +
+   934→                    `→ Trùng với dịch vụ mới bạn đang đặt (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
+   935→                    `Vui lòng chọn khung giờ hoặc thợ khác.`
+   936→                  );
+   937→                  // IMPORTANT: return WITHOUT adding the item to the invoice.
+   938→                  // The conflict means the booking cannot be created — so the
+   939→                  // service must NOT be added to the order. The dialog stays
+   940→                  // open so the cashier can pick a different staff/time.
+   941→                  setAddingFromDialog(false);
+   942→                  return;
+   943→                }
+   944→              }
+   945→            }
+   946→          }
+   947→        } catch {
+   948→          /* best-effort — server still validates */
+   949→        }
+   950→      }
+   951→
+   952→      // No conflict (or check failed best-effort) → safe to add the item to
+   953→      // the invoice AND sync the booking. The server-side conflict check is
+   954→      // the final safety net; if it rejects, the catch block below rolls back
+   955→      // the item (removes it from the invoice) so the order doesn't end up
+   956→      // with a service that has no backing booking.
+   957→      // Track the just-added item's id so the catch block can remove it.
+   958→      const justAddedItemId = `${selectedService.id}-${crypto.randomUUID()}`;
+   959→      // Inline the handleAddItem logic here (instead of calling it) so we
+   960→      // control the item's id and can roll it back precisely.
+   961→      if (activeTabId) {
+   962→        const invoiceItem: InvoiceItem = {
+   963→          id: justAddedItemId,
+   964→          itemId: selectedService.id,
+   965→          name: selectedService.name,
+   966→          type: activeTab,
+   967→          price: Number(selectedService.price),
+   968→          quantity: 1,
+   969→          discount: 0,
+   970→          total: Number(selectedService.price),
+   971→          staffName,
+   972→          date: selectedDate,
+   973→          time: selectedTime,
+   974→        };
+   975→        addInvoiceItem(activeTabId, invoiceItem);
+   976→      }
+   977→
+   978→      if (meta && !meta.bookingCreated) {
+   979→        // First service on a draft tab → create a new booking.
+   980→        await createBookingForTab({
+   981→          tabId: activeTabId,
+   982→          meta,
+   983→          service: selectedService,
+   984→          staffId: selectedStaffId,
+   985→          date: selectedDate,
+   986→          time: selectedTime,
+   987→        });
+   988→        // createBookingForTab stores bookingId + bookingServices + lastServiceEndMs.
+   989→      } else if (meta && meta.bookingCreated && meta.bookingId) {
+   990→        // Second+ service: decide same-booking (PUT) vs new-booking (POST).
+   991→        // PARALLEL model: the gap is measured against the BOOKING's START time
+   992→        // (lastServiceStartMs), NOT the last service's end. All services in a
+   993→        // booking start at the same time — so if the new service's start is
+   994→        // within ±15 min of the booking's start, it joins the same booking.
+   995→        // A service 2+ hours later → separate booking (POST).
+   996→        const GAP_TOLERANCE_MS = 15 * 60 * 1000; // 15 minutes
+   997→        const bookingStart = meta.lastServiceStartMs || meta.lastServiceEndMs || 0;
+   998→        const gap = newStartMs - bookingStart;
+   999→        if (gap >= -GAP_TOLERANCE_MS && gap <= GAP_TOLERANCE_MS) {
+  1000→          // Gap ≤ 15 min → add to the SAME booking (PUT).
+  1001→          const newServiceEntry = {
+  1002→            service_id: selectedService.id,
+  1003→            staff_id: selectedStaffId,
+  1004→            service_category_id: selectedService.categoryId || null,
+  1005→          };
+  1006→          const updatedServices = [
+  1007→            ...(meta.bookingServices || []),
+  1008→            newServiceEntry,
+  1009→          ];
+  1010→          const putRes = await fetch(`/api/supabase/bookings/${meta.bookingId}`, {
+  1011→            method: "PUT",
+  1012→            headers: { "Content-Type": "application/json" },
+  1013→            body: JSON.stringify({ services: updatedServices }),
+  1014→          });
+  1015→          const putJson = await putRes.json();
+  1016→          if (!putJson.ok) {
+  1017→            throw new Error(putJson.error || "Không thể cập nhật lịch hẹn");
+  1018→          }
+  1019→          // Update tabMeta with the new service. Keep lastServiceStartMs
+  1020→          // pointing at the booking's start (all services share it in the
+  1021→          // parallel model); update lastServiceEndMs for the max-end tracking.
+  1022→          updateTabMeta(activeTabId, {
+  1023→            bookingServices: updatedServices,
+  1024→            lastServiceEndMs: Math.max(meta.lastServiceEndMs || 0, newEndMs),
+  1025→            // lastServiceStartMs stays the same (booking's start) — the new
+  1026→            // service runs in parallel, not consecutively.
+  1027→          });
+  1028→        } else {
+  1029→          // Gap > 15 min → create a SEPARATE booking (POST).
+  1030→          await createBookingForTab({
+  1031→            tabId: activeTabId,
+  1032→            meta,
+  1033→            service: selectedService,
+  1034→            staffId: selectedStaffId,
+  1035→            date: selectedDate,
+  1036→            time: selectedTime,
+  1037→            forceNew: true,
+  1038→          });
+  1039→        }
+  1040→      }
+  1041→      // For "booking" type tabs (opened from the day's list), the booking
+  1042→      // already exists. If bookingId is set, apply the same gap logic.
+  1043→      // (Handled by the meta.bookingCreated + meta.bookingId branch above
+  1044→      // since handlePickBooking sets bookingCreated=true + bookingId.)
+  1045→
+  1046→      queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+  1047→      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1048→      setServiceDialogOpen(false);
+  1049→      setSelectedService(null);
+  1050→    } catch (err: unknown) {
+  1051→      const msg = err instanceof Error ? err.message : "Không thể thêm dịch vụ";
+  1052→      setDialogError(msg);
+  1053→      // ROLLBACK: if the booking sync failed (e.g. server-side conflict check
+  1054→      // rejected it, or a network error), remove the just-added item from the
+  1055→      // invoice. Without this the order would carry a service that has no
+  1056→      // backing booking in Lịch hẹn — the exact "thông báo lỗi nhưng vẫn thêm
+  1057→      // được" bug the user reported. The `justAddedItemId` is in scope here
+  1058→      // (declared in the try block above). When the conflict was caught by the
+  1059→      // CLIENT-side check (the early return), the item was never added, so
+  1060→      // `justAddedItemId` is undefined → the rollback is a no-op. Safe either way.
+  1061→      if (typeof justAddedItemId !== "undefined" && activeTabId) {
+  1062→        removeInvoiceItem(activeTabId, justAddedItemId);
+  1063→      }
+  1064→    } finally {
+  1065→      setAddingFromDialog(false);
+  1066→    }
+  1067→  };
+  1068→
+  1069→  // Create a booking in Supabase for the current draft tab. Walk-in tabs get
+  1070→  // a guest customer; "new" tabs create the real customer record first; "old"
+  1071→  // tabs reuse the existing customer_id. After success, the tab's metadata is
+  1072→  // updated with bookingId + bookingServices + lastServiceEndMs so subsequent
+  1073→  // service adds can decide same-booking (PUT) vs new-booking (POST).
+  1074→  // When forceNew is true, the customer creation steps are skipped (the
+  1075→  // customer was already created for the first booking on this tab).
+  1076→  const createBookingForTab = async (args: {
+  1077→    tabId: string;
+  1078→    meta: NonNullable<typeof tabMeta[string]>;
+  1079→    service: ServiceItem;
+  1080→    staffId: string;
+  1081→    date: string; // "DD/MM/YYYY"
+  1082→    time: string; // "HH:MM"
+  1083→    forceNew?: boolean;
+  1084→  }) => {
+  1085→    const { tabId, meta, service, staffId, date, time, forceNew } = args;
+  1086→    let customerId = meta.customerId;
+  1087→    let sourceId = meta.customerInfo?.sourceId;
+  1088→    const channelId = meta.customerInfo?.channelId;
+  1089→    const numberOfCustomers = meta.customerInfo?.numberOfCustomers ?? 1;
+  1090→    const note = meta.customerInfo?.note ?? "";
+  1091→
+  1092→    // When forceNew (creating a 2nd+ booking for the same tab because the gap
+  1093→    // > 15 min), skip customer creation — the customer already exists from the
+  1094→    // first booking. For "booking" type tabs, also skip (booking already has
+  1095→    // a customer).
+  1096→    //
+  1097→    // ALSO skip when meta.customerId is already set — this happens when the
+  1098→    // cashier clicked "Thêm khách mới" (which creates the customer via
+  1099→    // handleAddNewCustomer and stores the id in tabMeta) but the tab's `type`
+  1100→    // is still "walkin" (handleAddNewCustomer doesn't change the type). Without
+  1101→    // this check, createBookingForTab would create a DUPLICATE "Khách vãng lai"
+  1102→    // guest customer, ignoring the real customer the cashier just created →
+  1103→    // the booking would be linked to the wrong customer and might not appear
+  1104→    // in Lịch hẹn correctly.
+  1105→    if (!forceNew && meta.type !== "booking" && !customerId) {
+  1106→      if (meta.type === "walkin") {
+  1107→        const custRes = await fetch("/api/supabase/customers", {
+  1108→          method: "POST",
+  1109→          headers: { "Content-Type": "application/json" },
+  1110→          body: JSON.stringify({
+  1111→            name: WALKIN_SOURCE_NAME,
+  1112→            phone: "",
+  1113→            source_id: WALKIN_SOURCE_ID,
+  1114→            branch_id: selectedBranchId || null,
+  1115→          }),
+  1116→        });
+  1117→        const custJson = await custRes.json();
+  1118→        if (!custJson.ok || !custJson.data?.id) {
+  1119→          throw new Error(custJson.error || "Không thể tạo khách vãng lai");
+  1120→        }
+  1121→        customerId = custJson.data.id;
+  1122→        sourceId = WALKIN_SOURCE_ID;
+  1123→      } else if (meta.type === "new") {
+  1124→        const custRes = await fetch("/api/supabase/customers", {
+  1125→          method: "POST",
+  1126→          headers: { "Content-Type": "application/json" },
+  1127→          body: JSON.stringify({
+  1128→            name: meta.customerInfo?.name || "Khách mới",
+  1129→            phone: meta.customerInfo?.phone || "",
+  1130→            source_id: sourceId || null,
+  1131→            branch_id: selectedBranchId || null,
+  1132→          }),
+  1133→        });
+  1134→        const custJson = await custRes.json();
+  1135→        if (!custRes.ok && custJson.existing_customer?.id) {
+  1136→          customerId = custJson.existing_customer.id;
+  1137→        } else if (custJson.ok && custJson.data?.id) {
+  1138→          customerId = custJson.data.id;
+  1139→        } else {
+  1140→          throw new Error(custJson.error || "Không thể tạo khách hàng");
+  1141→        }
+  1142→      } else if (meta.type === "old") {
+  1143→        if (!customerId) {
+  1144→          throw new Error("Không tìm thấy khách hàng");
+  1145→        }
+  1146→      }
+  1147→    }
+  1148→    // For "booking" tabs or forceNew: customerId must already be set.
+  1149→    if (!customerId) {
+  1150→      throw new Error("Không tìm thấy khách hàng");
+  1151→    }
+  1152→
+  1153→    // Convert "DD/MM/YYYY" + "HH:MM" → ISO with explicit +07:00 (Vietnam)
+  1154→    // offset. Without the offset, Postgres interprets the naive string as UTC,
+  1155→    // which shifts VN evening times (≥17:00) to the NEXT day — breaking the
+  1156→    // Lịch hẹn sync (the booking appears on the wrong day in /booking).
+  1157→    const m = date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  1158→    const tm = time.match(/^(\d{1,2}):(\d{2})$/);
+  1159→    if (!m || !tm) {
+  1160→      throw new Error("Ngày hoặc giờ không hợp lệ");
+  1161→    }
+  1162→    const isoDay = `${m[3]}-${m[2]}-${m[1]}`;
+  1163→    const hh = tm[1].padStart(2, "0");
+  1164→    const mm = tm[2];
+  1165→    const dateTime = `${isoDay}T${hh}:${mm}:00+07:00`;
+  1166→
+  1167→    const payload = {
+  1168→      date_time: dateTime,
+  1169→      customer_id: customerId,
+  1170→      customer_source_id: sourceId || null,
+  1171→      customer_channel_id: channelId || null,
+  1172→      number_of_customers: numberOfCustomers,
+  1173→      status: "confirmed",
+  1174→      note: note || null,
+  1175→      branch_id: selectedBranchId || null,
+  1176→      services: [
+  1177→        {
+  1178→          service_id: service.id,
+  1179→          service_category_id: service.categoryId || null,
+  1180→          staff_id: staffId,
+  1181→        },
+  1182→      ],
+  1183→    };
+  1184→    const res = await fetch("/api/supabase/bookings", {
+  1185→      method: "POST",
+  1186→      headers: { "Content-Type": "application/json" },
+  1187→      body: JSON.stringify(payload),
+  1188→    });
+  1189→    const json = await res.json();
+  1190→    if (!json.ok || !json.data?.id) {
+  1191→      throw new Error(json.error || "Không thể tạo lịch hẹn");
+  1192→    }
+  1193→    // Compute the service's start time (epoch ms) for gap checking + tab
+  1194→    // display. MUST use the +07:00 offset so the epoch represents the correct
+  1195→    // UTC instant for the VN wall-clock time. Using Date.UTC(...) treats VN
+  1196→    // hours as UTC hours → the epoch is 7 hours off → toVietnamTime() adds
+  1197→    // another 7 hours → the tab shows the wrong time (e.g. 18:00 selected →
+  1198→    // 01:00 displayed next day).
+  1199→    const startMs = new Date(`${isoDay}T${hh}:${mm}:00+07:00`).getTime();
+  1200→    const durationMin = Number(service.duration) || 60;
+  1201→    const endMs = startMs + durationMin * 60 * 1000;
+  1202→    // Mark the tab's booking as created + store the booking id, code, services
+  1203→    // array, and last service end time. These are used by subsequent service
+  1204→    // adds to decide same-booking (PUT, gap ≤ 15 min) vs new-booking (POST).
+  1205→    updateTabMeta(tabId, {
+  1206→      bookingCreated: true,
+  1207→      customerId,
+  1208→      // Flag that customerId is the SYNTHETIC guest customer (not a real one
+  1209→      // the cashier chose) so the walk-in tab keeps showing the inline
+  1210→      // customer search — letting the cashier link a real customer later,
+  1211→      // which PATCHes this booking's customer_id (handleSelectInlineResult).
+  1212→      isGuestCustomer: !meta.customerId,
+  1213→      bookingId: json.data.id,
+  1214→      bookingCode: (json.data.code as string) || undefined,
+  1215→      bookingServices: [
+  1216→        {
+  1217→          service_id: service.id,
+  1218→          staff_id: staffId,
+  1219→          service_category_id: service.categoryId || null,
+  1220→        },
+  1221→      ],
+  1222→      lastServiceEndMs: endMs,
+  1223→      // PARALLEL model: store the booking's start time so the 2nd service's
+  1224→      // dialog defaults to the SAME start (parallel), not the 1st service's
+  1225→      // end (consecutive).
+  1226→      lastServiceStartMs: startMs,
+  1227→    });
+  1228→    // Refresh both the cashier day-bookings cache (tab bar) and the Booking
+  1229→    // module's list so the new booking appears in both places.
+  1230→    queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+  1231→    queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1232→  };
+  1233→
+  1234→  const formatPrice = (price: number) =>
+  1235→    new Intl.NumberFormat("vi-VN").format(price);
+  1236→
+  1237→  return (
+  1238→    <div className="flex h-full flex-col bg-white">
+  1239→      {/* Search + Column toggle */}
+  1240→      <div className="flex items-center gap-2 border-b p-3">
+  1241→        <div className="relative flex-1">
+  1242→          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+  1243→          <Input
+  1244→            type="text"
+  1245→            value={search}
+  1246→            onChange={(e) => setSearch(e.target.value)}
+  1247→            placeholder="Tìm kiếm dịch vụ, sản phẩm hoặc gói..."
+  1248→            className="pl-9"
+  1249→          />
+  1250→        </div>
+  1251→        <DropdownMenu>
+  1252→          <DropdownMenuTrigger asChild>
+  1253→            <Button variant="outline" size="sm" className="h-9 shrink-0 gap-1.5">
+  1254→              <Columns3 className="h-4 w-4" />
+  1255→              Cột
+  1256→              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+  1257→            </Button>
+  1258→          </DropdownMenuTrigger>
+  1259→          <DropdownMenuContent align="end" className="w-48">
+  1260→            <div className="px-2 py-1.5 text-xs font-medium text-gray-500">
+  1261→              Hiển thị tab
+  1262→            </div>
+  1263→            {tabs.map((tab) => (
+  1264→              <DropdownMenuItem
+  1265→                key={tab.id}
+  1266→                onClick={(e) => {
+  1267→                  e.preventDefault();
+  1268→                  toggleTabVisible(tab.id);
+  1269→                }}
+  1270→                className="cursor-pointer"
+  1271→              >
+  1272→                <Checkbox
+  1273→                  checked={visibleTabs[tab.id] !== false}
+  1274→                  onCheckedChange={() => toggleTabVisible(tab.id)}
+  1275→                  className="mr-2 h-4 w-4"
+  1276→                />
+  1277→                <span className="text-sm">{tab.label}</span>
+  1278→              </DropdownMenuItem>
+  1279→            ))}
+  1280→          </DropdownMenuContent>
+  1281→        </DropdownMenu>
+  1282→      </div>
+  1283→
+  1284→      {/* Radio tabs — only show tabs that are visible (not unchecked via Cột).
+  1285→          Compact height (py-1.5 = half of the original py-3) + whitespace-nowrap
+  1286→          so "Gói dịch vụ" stays on one line. */}
+  1287→      <div className="flex border-b">
+  1288→        {tabs.filter((tab) => visibleTabs[tab.id] !== false).map((tab) => (
+  1289→          <label
+  1290→            key={tab.id}
+  1291→            className={`flex flex-1 cursor-pointer items-center justify-center border-r px-4 py-1.5 text-sm font-medium whitespace-nowrap transition-colors ${
+  1292→              activeTab === tab.id
+  1293→                ? "bg-emerald-50 text-emerald-600"
+  1294→                : "bg-white text-gray-600 hover:bg-gray-50"
+  1295→            }`}
+  1296→          >
+  1297→            <input
+  1298→              type="radio"
+  1299→              name="service-type"
+  1300→              value={tab.id}
+  1301→              checked={activeTab === tab.id}
+  1302→              onChange={() => {
+  1303→                setActiveTab(tab.id);
+  1304→                setSearch("");
+  1305→                setExpandedServiceCategoryId(null);
+  1306→                setExpandedProductCategoryId(null);
+  1307→              }}
+  1308→              className="sr-only"
+  1309→            />
+  1310→            {tab.label}
+  1311→          </label>
+  1312→        ))}
+  1313→      </div>
+  1314→
+  1315→      {/* Items list */}
+  1316→      <div className="flex-1 overflow-y-auto p-3">
+  1317→        {activeTab === "service" ? (
+  1318→          // Service tab: category drill-down. Show the list of service
+  1319→          // categories (for the selected store); clicking one reveals its
+  1320→          // services. A back button returns to the category list.
+  1321→          isLoading ? (
+  1322→            <div className="py-8 text-center text-sm text-gray-500">
+  1323→              Đang tải...
+  1324→            </div>
+  1325→          ) : expandedServiceCategoryId ? (
+  1326→            <div className="space-y-2">
+  1327→              <button
+  1328→                onClick={() => setExpandedServiceCategoryId(null)}
+  1329→                className="flex items-center gap-1 text-sm text-emerald-600 hover:text-emerald-700 mb-2"
+  1330→              >
+  1331→                <ChevronLeft className="h-4 w-4" />
+  1332→                Quay lại nhóm dịch vụ
+  1333→              </button>
+  1334→              {expandedCategoryServices.length === 0 ? (
+  1335→                <div className="py-8 text-center text-sm text-gray-500">
+  1336→                  Không có dịch vụ trong nhóm này.
+  1337→                </div>
+  1338→              ) : (
+  1339→                expandedCategoryServices.map((item) => (
+  1340→                  <button
+  1341→                    key={item.id}
+  1342→                    onClick={() => handleServiceClick(item)}
+  1343→                    className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
+  1344→                  >
+  1345→                    <div className="min-w-0 flex-1">
+  1346→                      <span className="text-sm font-medium text-gray-900 block truncate">
+  1347→                        {item.name}
+  1348→                      </span>
+  1349→                    </div>
+  1350→                    <div className="flex items-center gap-2 shrink-0 ml-2">
+  1351→                      <span className="text-sm font-semibold text-emerald-600">
+  1352→                        {formatPrice(item.price)}đ
+  1353→                      </span>
+  1354→                      <PlusCircle className="h-5 w-5 text-gray-400" />
+  1355→                    </div>
+  1356→                  </button>
+  1357→                ))
+  1358→              )}
+  1359→            </div>
+  1360→          ) : storeServiceCategories.length === 0 ? (
+  1361→            <div className="py-8 text-center text-sm text-gray-500">
+  1362→              Không có nhóm dịch vụ cho cửa hàng này.
+  1363→            </div>
+  1364→          ) : (
+  1365→            <div className="space-y-2">
+  1366→              {storeServiceCategories.map((cat) => (
+  1367→                <button
+  1368→                  key={cat.id}
+  1369→                  onClick={() => setExpandedServiceCategoryId(cat.id)}
+  1370→                  className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
+  1371→                >
+  1372→                  <span className="text-sm font-medium text-gray-900 block truncate">
+  1373→                    {cat.name}
+  1374→                  </span>
+  1375→                  <ChevronLeft className="h-4 w-4 rotate-180 text-gray-400" />
+  1376→                </button>
+  1377→              ))}
+  1378→            </div>
+  1379→          )
+  1380→        ) : activeTab === "product" ? (
+  1381→          // Product tab: group drill-down (mirrors the service tab).
+  1382→          // Show only product GROUPS that contain at least one product with
+  1383→          // price > 0. Clicking a group reveals its priced products; a back
+  1384→          // button returns to the group list. Products with price = 0 are
+  1385→          // hidden everywhere (they are accessories/consumables not for sale).
+  1386→          isLoading ? (
+  1387→            <div className="py-8 text-center text-sm text-gray-500">
+  1388→              Đang tải...
+  1389→            </div>
+  1390→          ) : expandedProductCategoryId ? (
+  1391→            <div className="space-y-2">
+  1392→              <button
+  1393→                onClick={() => setExpandedProductCategoryId(null)}
+  1394→                className="flex items-center gap-1 text-sm text-emerald-600 hover:text-emerald-700 mb-2"
+  1395→              >
+  1396→                <ChevronLeft className="h-4 w-4" />
+  1397→                Quay lại nhóm sản phẩm
+  1398→              </button>
+  1399→              {expandedCategoryProducts.length === 0 ? (
+  1400→                <div className="py-8 text-center text-sm text-gray-500">
+  1401→                  Không có sản phẩm trong nhóm này.
+  1402→                </div>
+  1403→              ) : (
+  1404→                expandedCategoryProducts.map((item) => (
+  1405→                  <button
+  1406→                    key={item.id}
+  1407→                    onClick={() => handleProductOrPackageClick(item)}
+  1408→                    className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
+  1409→                  >
+  1410→                    <div className="min-w-0 flex-1">
+  1411→                      <span className="text-sm font-medium text-gray-900 block truncate">
+  1412→                        {item.name}
+  1413→                      </span>
+  1414→                      {item.code && (
+  1415→                        <span className="text-xs text-gray-500">{item.code}</span>
+  1416→                      )}
+  1417→                    </div>
+  1418→                    <div className="flex items-center gap-2 shrink-0 ml-2">
+  1419→                      <span className="text-sm font-semibold text-emerald-600">
+  1420→                        {formatPrice(item.price)}đ
+  1421→                      </span>
+  1422→                      <PlusCircle className="h-5 w-5 text-gray-400" />
+  1423→                    </div>
+  1424→                  </button>
+  1425→                ))
+  1426→              )}
+  1427→            </div>
+  1428→          ) : pricedProductCategories.length === 0 ? (
+  1429→            <div className="py-8 text-center text-sm text-gray-500">
+  1430→              Không có nhóm sản phẩm nào có sản phẩm.
+  1431→            </div>
+  1432→          ) : (
+  1433→            <div className="space-y-2">
+  1434→              {pricedProductCategories.map((cat) => (
+  1435→                <button
+  1436→                  key={cat.id}
+  1437→                  onClick={() => setExpandedProductCategoryId(cat.id)}
+  1438→                  className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
+  1439→                >
+  1440→                  <span className="text-sm font-medium text-gray-900 block truncate">
+  1441→                    {cat.name}
+  1442→                  </span>
+  1443→                  <ChevronLeft className="h-4 w-4 rotate-180 text-gray-400" />
+  1444→                </button>
+  1445→              ))}
+  1446→            </div>
+  1447→          )
+  1448→        ) : isLoading ? (
+  1449→          <div className="py-8 text-center text-sm text-gray-500">
+  1450→            Đang tải...
+  1451→          </div>
+  1452→        ) : items.length === 0 ? (
+  1453→          <div className="py-8 text-center text-sm text-gray-500">
+  1454→            Không có dữ liệu
+  1455→          </div>
+  1456→        ) : (
+  1457→          <div className="space-y-2">
+  1458→            {items.map((item) => (
+  1459→              <button
+  1460→                key={item.id}
+  1461→                onClick={() => handleProductOrPackageClick(item)}
+  1462→                className="flex w-full items-center justify-between rounded-lg border bg-white p-3 text-left transition-colors hover:border-emerald-300 hover:shadow-sm"
+  1463→              >
+  1464→                <div className="min-w-0 flex-1">
+  1465→                  <span className="text-sm font-medium text-gray-900 block truncate">
+  1466→                    {item.name}
+  1467→                  </span>
+  1468→                  {item.category?.name && (
+  1469→                    <span className="text-xs text-gray-500">
+  1470→                      {item.category.name}
+  1471→                    </span>
+  1472→                  )}
+  1473→                </div>
+  1474→                <div className="flex items-center gap-2 shrink-0 ml-2">
+  1475→                  <span className="text-sm font-semibold text-emerald-600">
+  1476→                    {formatPrice(item.price)}đ
+  1477→                  </span>
+  1478→                  <PlusCircle className="h-5 w-5 text-gray-400" />
+  1479→                </div>
+  1480→              </button>
+  1481→            ))}
+  1482→          </div>
+  1483→        )}
+  1484→      </div>
+  1485→
+  1486→      {/* Service dialog: pick staff + date + time before adding the service.
+  1487→          COMPACT layout: tighter padding (p-3 gap-3), smaller fonts
+  1488→          (text-[11px] labels, text-xs inputs), equal-height controls (all
+  1489→          inputs/triggers/buttons = h-8). The date/time + staff fields share
+  1490→          the same height so the dialog looks tidy and narrow. */}
+  1491→      <Dialog
+  1492→        open={serviceDialogOpen}
+  1493→        onOpenChange={(v) => {
+  1494→          if (!addingFromDialog) setServiceDialogOpen(v);
+  1495→        }}
+  1496→      >
+  1497→        <DialogContent className="max-w-sm sm:max-w-sm p-3 gap-3 compact-add-dialog">
+  1498→          <DialogHeader className="space-y-0">
+  1499→            <DialogTitle className="text-sm font-semibold">Thêm dịch vụ</DialogTitle>
+  1500→          </DialogHeader>
+  1501→          <div className="space-y-2">
+  1502→            {selectedService && (
+  1503→              <div className="rounded-md border bg-gray-50 px-2.5 py-1.5 text-xs">
+  1504→                <span className="font-medium text-gray-900">
+  1505→                  {selectedService.name}
+  1506→                </span>
+  1507→                <span className="ml-2 font-semibold text-emerald-600">
+  1508→                  {formatPrice(selectedService.price)}đ
+  1509→                </span>
+  1510→              </div>
+  1511→            )}
+  1512→
+  1513→            {canAssignStaff && (
+  1514→            <div className="space-y-1">
+  1515→              <Label htmlFor="svc-staff" className="text-[11px] text-gray-600">
+  1516→                Nhân viên
+  1517→              </Label>
+  1518→              <Select
+  1519→                value={selectedStaffId}
+  1520→                onValueChange={(v) => setSelectedStaffId(v)}
+  1521→              >
+  1522→                <SelectTrigger id="svc-staff" className="w-full h-8 text-xs" size="sm">
+  1523→                  <SelectValue placeholder="Chọn nhân viên" />
+  1524→                </SelectTrigger>
+  1525→                <SelectContent>
+  1526→                  {staffList.length === 0 ? (
+  1527→                    <div className="px-3 py-2 text-xs text-gray-500">
+  1528→                      Không có nhân viên ở cửa hàng này
+  1529→                    </div>
+  1530→                  ) : (
+  1531→                    staffList.map((s) => (
+  1532→                      <SelectItem key={s.id} value={s.id} className="text-xs">
+  1533→                        {s.name}
+  1534→                      </SelectItem>
+  1535→                    ))
+  1536→                  )}
+  1537→                </SelectContent>
+  1538→              </Select>
+  1539→              {/* Staff is OPTIONAL — the cashier can leave it empty to add
+  1540→                  the service now and assign a staff later (the booking is
+  1541→                  still created in Lịch hẹn with a null staff_id, showing in the
+  1542→                  "Chưa xếp nhân viên" column). This soft hint tells the cashier
+  1543→                  it's optional so they don't think the field is missing a
+  1544→                  required value. */}
+  1545→              <p className="text-[11px] text-gray-400">
+  1546→                Để trống nếu chưa xếp nhân viên
+  1547→              </p>
+  1548→            </div>
+  1549→            )}
+  1550→
+  1551→            {isParallelService ? (
+  1552→              // Service 2+: date/time are derived from the BOOKING's start
+  1553→              // time (parallel — all services start simultaneously, each on a
+  1554→              // different staff). The date/time are set internally
+  1555→              // (selectedDate/selectedTime) but NOT shown — the cashier only
+  1556→              // picks the staff. No visible note per the user's request.
+  1557→              null
+  1558→            ) : (
+  1559→              // First service: date/time are pre-filled with the current
+  1560→              // date + time (set in handleServiceClick) and DISABLED — the
+  1561→              // cashier can't click into the DatePicker/TimePicker to change
+  1562→              // them. The `pointer-events-none opacity-60` wrapper makes the
+  1563→              // inputs visually read-only and non-interactive. The values are
+  1564→              // still sent in the booking payload as "now". Compact: grid
+  1565→              // gap-2, labels text-[11px], inputs forced to h-8 via the
+  1566→              // [&_input]:h-8 selector so DatePicker/TimePicker inputs match
+  1567→              // the staff Select's h-8 height.
+  1568→              <div className="grid grid-cols-2 gap-2">
+  1569→                <div className="space-y-1">
+  1570→                  <Label htmlFor="svc-date" className="text-[11px] text-gray-600">Ngày</Label>
+  1571→                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+  1572→                    <DatePicker
+  1573→                      id="svc-date"
+  1574→                      value={selectedDate}
+  1575→                      onChange={setSelectedDate}
+  1576→                    />
+  1577→                  </div>
+  1578→                </div>
+  1579→                <div className="space-y-1">
+  1580→                  <Label htmlFor="svc-time" className="text-[11px] text-gray-600">Giờ</Label>
+  1581→                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+  1582→                    <TimePicker
+  1583→                      id="svc-time"
+  1584→                      value={selectedTime}
+  1585→                      onChange={setSelectedTime}
+  1586→                      hiddenHours={timeFeasibility.hiddenHours}
+  1587→                      hiddenMinutes={timeFeasibility.hiddenMinutes}
+  1588→                    />
+  1589→                  </div>
+  1590→                </div>
+  1591→              </div>
+  1592→            )}
+  1593→
+  1594→            {dialogError && (
+  1595→              <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
+  1596→                {dialogError}
+  1597→              </div>
+  1598→            )}
+  1599→          </div>
+  1600→          <DialogFooter className="gap-2">
+  1601→            <Button
+  1602→              variant="outline"
+  1603→              size="sm"
+  1604→              onClick={() => setServiceDialogOpen(false)}
+  1605→              disabled={addingFromDialog}
+  1606→            >
+  1607→              Hủy
+  1608→            </Button>
+  1609→            <Button
+  1610→              size="sm"
+  1611→              onClick={handleDialogConfirm}
+  1612→              disabled={addingFromDialog}
+  1613→              className="bg-emerald-600 hover:bg-emerald-700"
+  1614→            >
+  1615→              {addingFromDialog ? "Đang lưu..." : "OK"}
+  1616→            </Button>
+  1617→          </DialogFooter>
+  1618→        </DialogContent>
+  1619→      </Dialog>
+  1620→
+  1621→      {/* Existing-booking confirmation — shown when adding the first service
+  1622→          to a draft tab and the customer (by phone) already has non-cancelled
+  1623→          bookings. Lists them and asks whether to continue. OK → re-run
+  1624→          handleDialogConfirm with skipExistingBookingsCheck; Hủy → dismiss. */}
+  1625→      <Dialog
+  1626→        open={pendingExistingBookings.length > 0}
+  1627→        onOpenChange={(v) => {
+  1628→          if (!v) {
+  1629→            setPendingExistingBookings([]);
+  1630→            setSkipExistingBookingsCheck(false);
+  1631→          }
+  1632→        }}
+  1633→      >
+  1634→        <DialogContent className="max-w-lg">
+  1635→          <DialogHeader>
+  1636→            <DialogTitle>Khách hàng có lịch hẹn chưa thanh toán</DialogTitle>
+  1637→          </DialogHeader>
+  1638→          <p className="text-sm text-gray-700">
+  1639→            Số điện thoại này có {pendingExistingBookings.length} lịch hẹn chưa thanh toán. Bạn có chắc muốn đặt lịch tiếp không?
+  1640→          </p>
+  1641→          <div className="max-h-[300px] space-y-2 overflow-y-auto">
+  1642→            {pendingExistingBookings.map((b) => (
+  1643→              <div key={b.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+  1644→                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+  1645→                  <span className="text-amber-700">Ngày giờ:</span>
+  1646→                  <span className="font-medium text-amber-900">{b.date} · {b.time}</span>
+  1647→                  <span className="text-amber-700">Chi nhánh:</span>
+  1648→                  <span className="font-medium text-amber-900">{b.branchName || "—"}</span>
+  1649→                  <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-800">
+  1650→                    {b.status}
+  1651→                  </span>
+  1652→                </div>
+  1653→                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+  1654→                  <span className="text-amber-700">Dịch vụ:</span>
+  1655→                  <span className="font-medium text-amber-900">
+  1656→                    {b.services.map((s) => s.name + (s.staffName ? ` (${s.staffName})` : "")).join(", ")}
+  1657→                  </span>
+  1658→                </div>
+  1659→              </div>
+  1660→            ))}
+  1661→          </div>
+  1662→          <DialogFooter>
+  1663→            <Button
+  1664→              type="button"
+  1665→              variant="outline"
+  1666→              onClick={() => {
+  1667→                setPendingExistingBookings([]);
+  1668→                setSkipExistingBookingsCheck(false);
+  1669→              }}
+  1670→            >
+  1671→              Hủy
+  1672→            </Button>
+  1673→            <Button
+  1674→              type="button"
+  1675→              className="bg-amber-600 text-white hover:bg-amber-700"
+  1676→              onClick={() => {
+  1677→                setPendingExistingBookings([]);
+  1678→                setSkipExistingBookingsCheck(true);
+  1679→                handleDialogConfirm();
+  1680→              }}
+  1681→            >
+  1682→              OK, đặt tiếp
+  1683→            </Button>
+  1684→          </DialogFooter>
+  1685→        </DialogContent>
+  1686→      </Dialog>
+  1687→
+  1688→      {/* Shared "Thêm sản phẩm / Thêm gói dịch vụ" dialog for PRODUCT and
+  1689→          PACKAGE items. COMPACT layout (mirrors the service dialog): tighter
+  1690→          padding (p-3 gap-3), smaller fonts (text-[11px] labels, text-xs
+  1691→          inputs), equal-height controls (all inputs/triggers/buttons = h-8).
+  1692→          Shows:
+  1693→            - Item name + price
+  1694→            - Date + Time (DISABLED, pre-filled with "now" — the cashier can't
+  1695→              change them; they're stamped to the moment the dialog opened)
+  1696→            - Staff Select — ONLY for packages (required, when canAssignStaff).
+  1697→              Products have NO staff field.
+  1698→          On OK: the item is added with the stamped date/time (+ staff name for
+  1699→          packages). On Cancel: nothing is added. */}
+  1700→      <Dialog
+  1701→        open={!!simpleStaffDialogItem}
+  1702→        onOpenChange={(v) => {
+  1703→          if (!v) {
+  1704→            setSimpleStaffDialogItem(null);
+  1705→            setSimpleStaffPickStaffId("");
+  1706→            setSimpleStaffDialogDate("");
+  1707→            setSimpleStaffDialogTime("");
+  1708→          }
+  1709→        }}
+  1710→      >
+  1711→        <DialogContent className="max-w-sm sm:max-w-sm p-3 gap-3 compact-add-dialog">
+  1712→          <DialogHeader className="space-y-0">
+  1713→            <DialogTitle className="text-sm font-semibold">
+  1714→              {activeTab === "package" ? "Thêm gói dịch vụ" : "Thêm sản phẩm"}
+  1715→            </DialogTitle>
+  1716→          </DialogHeader>
+  1717→          <div className="space-y-2">
+  1718→            {simpleStaffDialogItem && (
+  1719→              <div className="rounded-md border bg-gray-50 px-2.5 py-1.5 text-xs">
+  1720→                <span className="font-medium text-gray-900">
+  1721→                  {simpleStaffDialogItem.name}
+  1722→                </span>
+  1723→                <span className="ml-2 font-semibold text-emerald-600">
+  1724→                  {formatPrice(simpleStaffDialogItem.price)}đ
+  1725→                </span>
+  1726→              </div>
+  1727→            )}
+  1728→            {/* Date + Time — DISABLED, pre-filled with "now". Shown for BOTH
+  1729→                products and packages. The `pointer-events-none opacity-60`
+  1730→                wrapper makes the DatePicker/TimePicker read-only and
+  1731→                non-interactive. The `[&_input]:h-8 [&_input]:text-xs` forces
+  1732→                the inner inputs to h-8 so they match the staff Select's
+  1733→                height — all controls in the dialog share the same height. */}
+  1734→            <div className="grid grid-cols-2 gap-2">
+  1735→              <div className="space-y-1">
+  1736→                <Label htmlFor="simple-date" className="text-[11px] text-gray-600">Ngày</Label>
+  1737→                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+  1738→                  <DatePicker
+  1739→                    id="simple-date"
+  1740→                    value={simpleStaffDialogDate}
+  1741→                    onChange={setSimpleStaffDialogDate}
+  1742→                  />
+  1743→                </div>
+  1744→              </div>
+  1745→              <div className="space-y-1">
+  1746→                <Label htmlFor="simple-time" className="text-[11px] text-gray-600">Giờ</Label>
+  1747→                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
+  1748→                  <TimePicker
+  1749→                    id="simple-time"
+  1750→                    value={simpleStaffDialogTime}
+  1751→                    onChange={setSimpleStaffDialogTime}
+  1752→                  />
+  1753→                </div>
+  1754→              </div>
+  1755→            </div>
+  1756→            {/* Staff Select — ONLY for packages (when canAssignStaff). Products
+  1757→                have NO staff field. For packages, the cashier MUST pick a
+  1758→                staff before OK is enabled. h-8 + text-xs matches the date/time
+  1759→                inputs' height so all controls are equal. */}
+  1760→            {activeTab === "package" && canAssignStaff && (
+  1761→              <div className="space-y-1">
+  1762→                <Label htmlFor="simple-staff" className="text-[11px] text-gray-600">
+  1763→                  Nhân viên<span className="ml-0.5 text-red-500">*</span>
+  1764→                </Label>
+  1765→                <Select
+  1766→                  value={simpleStaffPickStaffId}
+  1767→                  onValueChange={setSimpleStaffPickStaffId}
+  1768→                >
+  1769→                  <SelectTrigger id="simple-staff" className="w-full h-8 text-xs" size="sm">
+  1770→                    <SelectValue placeholder="Chọn nhân viên" />
+  1771→                  </SelectTrigger>
+  1772→                  <SelectContent>
+  1773→                    {allStaff.length === 0 ? (
+  1774→                      <div className="px-3 py-2 text-xs text-gray-500">
+  1775→                        Không có nhân viên ở cửa hàng này
+  1776→                      </div>
+  1777→                    ) : (
+  1778→                      allStaff.map((s) => (
+  1779→                        <SelectItem key={s.id} value={s.id} className="text-xs">
+  1780→                          {s.name}
+  1781→                        </SelectItem>
+  1782→                      ))
+  1783→                    )}
+  1784→                  </SelectContent>
+  1785→                </Select>
+  1786→                {!simpleStaffPickStaffId && (
+  1787→                  <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+  1788→                )}
+  1789→              </div>
+  1790→            )}
+  1791→          </div>
+  1792→          <DialogFooter className="gap-2">
+  1793→            <Button
+  1794→              variant="outline"
+  1795→              size="sm"
+  1796→              onClick={() => {
+  1797→                setSimpleStaffDialogItem(null);
+  1798→                setSimpleStaffPickStaffId("");
+  1799→                setSimpleStaffDialogDate("");
+  1800→                setSimpleStaffDialogTime("");
+  1801→              }}
+  1802→            >
+  1803→              Hủy
+  1804→            </Button>
+  1805→            <Button
+  1806→              size="sm"
+  1807→              onClick={handleSimpleStaffDialogConfirm}
+  1808→              // OK is disabled ONLY for packages requiring a staff that hasn't
+  1809→              // been picked yet. Products (and packages without assign_staff
+  1810→              // permission) are always enabled — no staff required.
+  1811→              disabled={
+  1812→                activeTab === "package" &&
+  1813→                canAssignStaff &&
+  1814→                !simpleStaffPickStaffId
+  1815→              }
+  1816→              title={
+  1817→                activeTab === "package" &&
+  1818→                canAssignStaff &&
+  1819→                !simpleStaffPickStaffId
+  1820→                  ? "Vui lòng chọn nhân viên"
+  1821→                  : undefined
+  1822→              }
+  1823→              className="bg-emerald-600 hover:bg-emerald-700"
+  1824→            >
+  1825→              OK
+  1826→            </Button>
+  1827→          </DialogFooter>
+  1828→        </DialogContent>
+  1829→      </Dialog>
+  1830→    </div>
+  1831→  );
+  1832→}
+  1833→
