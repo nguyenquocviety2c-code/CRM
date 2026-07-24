@@ -77,3 +77,20 @@ Stage Summary:
 - Customer View hover popup now forced to appear on "right" side with sticky="always", preventing overlap/covering of booking slot
 - Both views now use sideOffset={0} for flush positioning (no gap between popup and slot edge)
 - Files modified: booking-time-grid.tsx, booking-staff-view.tsx
+---
+Task ID: 7
+Agent: main
+Task: Refine hover popup positioning per user feedback (Customer View bottom position, Staff View flush edge + longer closeDelay)
+
+Work Log:
+- User feedback: Customer View popup still covers slot with side="right" sticky="always" → user wants popup BELOW the slot (sát cạnh viewport)
+- User feedback: Staff View popup still has small gap with sideOffset={0}, and mouse crossing gap causes popup to close too quickly
+- Root cause analysis: Trigger has border-2 (2px border), content has border (1px border). With sideOffset=0, visual gap = trigger border + content border = ~3px. Mouse crossing 3px gap with closeDelay=150ms causes popup to close before reaching content
+- Customer View fix (booking-time-grid.tsx): Changed side="right" → side="bottom" so popup appears BELOW slot, removed sticky="always" (not needed for bottom), kept sideOffset={0}, increased closeDelay from 150 → 300ms
+- Staff View fix (booking-staff-view.tsx): Changed sideOffset from 0 → -2 (negative offset to overlap trigger's 2px border, creating visual flush edge), increased closeDelay from 150 → 300ms (gives more time for mouse to cross any remaining gap)
+- Both views verified with Agent Browser: pages load correctly, no errors in dev logs
+
+Stage Summary:
+- Customer View popup now appears BELOW the slot (side="bottom") instead of covering it
+- Staff View popup now visually flush against slot edge (sideOffset=-2 compensates for border width) with 300ms closeDelay preventing premature closure
+- Files modified: booking-time-grid.tsx, booking-staff-view.tsx

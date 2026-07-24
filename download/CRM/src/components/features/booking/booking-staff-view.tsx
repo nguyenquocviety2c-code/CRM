@@ -1615,7 +1615,7 @@ function BookingChip({
   const phone = booking.customer?.phone || "";
 
   return (
-    <HoverCard openDelay={200} closeDelay={150}>
+    <HoverCard openDelay={200} closeDelay={300}>
       <HoverCardTrigger asChild>
         <button
           type="button"
@@ -1699,7 +1699,7 @@ function BookingChip({
       <HoverCardContent
         side="right"
         align="start"
-        sideOffset={0}
+        sideOffset={-2}
         className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
       >
         <BookingHoverDetails
