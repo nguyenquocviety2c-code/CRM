@@ -29,7 +29,7 @@ import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { queryKeys } from "@/lib/query-keys";
 import { isPromotionActive, isPromotionForBranch } from "@/lib/promotion-utils";
-import { toVietnamTime } from "@/lib/utils";
+import { toVietnamTime, toVietnamDay, localDayStartUtc, localDayEndUtc } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -177,15 +177,21 @@ export function InvoiceSummary({ dateRange }: { dateRange: { from: Date; to: Dat
     number_of_customers: number | null;
     customer: { id: string; name: string; phone: string | null } | null;
   }
+  // Vietnam-timezone-aware UTC range for the selected date range.
+  const vnFromDay = toVietnamDay(dateRange.from);
+  const vnToDay = toVietnamDay(dateRange.to);
+  const vnUtcFrom = localDayStartUtc(vnFromDay);
+  const vnUtcTo = localDayEndUtc(vnToDay);
+
   const { data: dayBookings } = useQuery<DayBooking[]>({
-    queryKey: ["cashier-day-bookings", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
+    queryKey: ["cashier-day-bookings", vnFromDay, vnToDay, selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Use the date range's ISO strings for Supabase filtering.
-      params.set("date_from", dateRange.from.toISOString());
-      params.set("date_to", dateRange.to.toISOString());
+      // Use Vietnam-timezone-aware UTC bounds for Supabase filtering.
+      params.set("date_from", vnUtcFrom);
+      params.set("date_to", vnUtcTo);
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
       const json = await res.json();
@@ -206,14 +212,14 @@ export function InvoiceSummary({ dateRange }: { dateRange: { from: Date; to: Dat
     customer: { id: string; name: string; phone: string | null } | null;
   }
   const { data: dayStandaloneInvoices } = useQuery<StandaloneInvoiceRow[]>({
-    queryKey: ["cashier-day-standalone-invoices", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
+    queryKey: ["cashier-day-standalone-invoices", vnFromDay, vnToDay, selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Use the date range's ISO strings for Supabase filtering.
-      params.set("date_from", dateRange.from.toISOString());
-      params.set("date_to", dateRange.to.toISOString());
+      // Use Vietnam-timezone-aware UTC bounds for Supabase filtering.
+      params.set("date_from", vnUtcFrom);
+      params.set("date_to", vnUtcTo);
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
       const json = await res.json();
