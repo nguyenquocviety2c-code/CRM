@@ -73,6 +73,7 @@ interface TodayBooking {
   status: string;
   note: string | null;
   number_of_customers: number | null;
+  created_at: string | null;
   customer: { id: string; name: string; phone: string | null } | null;
   services: BookingServiceRow[];
 }
@@ -1228,7 +1229,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                   }}
                   className="text-xs font-medium text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
                 >
-                  Xem lịch hẹn: {activeMeta.bookingCode}
+                  Xem lịch hẹn
                 </button>
               )}
               {/* "Hóa đơn" link for walk-in tabs where the booking has
@@ -1250,12 +1251,15 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                   }}
                   className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
                 >
-                  Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
+                  Hóa đơn
                 </button>
               )}
               {/* Booking date + time for walk-in tabs with a booking.
                   Shows the appointment's date_time (dd/MM/yyyy HH:MM)
-                  so the cashier sees when the booking is scheduled. */}
+                  so the cashier sees when the booking is scheduled.
+                  Also shows "Tạo vào lúc" with the exact creation
+                  timestamp so the cashier knows when the booking was
+                  first created in the system. */}
               {activeBooking?.date_time && activeMeta?.bookingCode && (
                 <div className="flex items-center gap-1 text-gray-500">
                   <Calendar className="h-4 w-4" />
@@ -1264,9 +1268,22 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                       try {
                         const iso = toVietnamDay(activeBooking.date_time).split("-");
                         const t = toVietnamTime(activeBooking.date_time);
-                        return iso.length === 3
+                        const appointStr = iso.length === 3
                           ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
                           : "—";
+                        // "Tạo vào lúc" — the exact creation timestamp.
+                        // Supabase stores created_at as UTC; convert to VN
+                        // wall-clock for display.
+                        const createStr = activeBooking.created_at
+                          ? (() => {
+                              const cIso = toVietnamDay(activeBooking.created_at).split("-");
+                              const cTime = toVietnamTime(activeBooking.created_at);
+                              return cIso.length === 3
+                                ? ` • Tạo vào lúc ${cIso[2]}/${cIso[1]}/${cIso[0]} ${cTime}`
+                                : "";
+                            })()
+                          : "";
+                        return appointStr + createStr;
                       } catch {
                         return "—";
                       }
@@ -1317,9 +1334,9 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                 </>
               )}
 
-              {/* Booking/invoice code badge: shows "Xem lịch hẹn: LHxxx"
+              {/* Booking/invoice code badge: shows "Xem lịch hẹn"
                   (clickable → navigates to Booking > View nhân viên with flash)
-                  when unpaid, "Hóa đơn: HDxxx" (clickable → opens full invoice
+                  when unpaid, "Hóa đơn" (clickable → opens full invoice
                   view) when paid. */}
               {activeMeta?.bookingCode && (
                 <div className="flex items-center gap-2 text-emerald-700">
@@ -1338,7 +1355,7 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                       }}
                       className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
                     >
-                      Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
+                      Hóa đơn
                     </button>
                   ) : (
                     <button
@@ -1354,19 +1371,19 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                       }}
                       className="text-xs font-medium hover:underline cursor-pointer"
                     >
-                      Xem lịch hẹn: {activeMeta.bookingCode}
+                      Xem lịch hẹn
                     </button>
                   )}
                 </div>
               )}
 
               {/* Booking date + time — the appointment's full date_time
-                  (dd/MM/yyyy HH:MM). Shown alongside the booking code so the
-                  cashier sees EXACTLY when the appointment is for. Previously
-                  only the date was shown (no time), which left the cashier
-                  guessing the hour — especially for walk-in tabs auto-linked
-                  to a booking, where the booking's date_time is the only
-                  source of the appointment time. Now shows "dd/MM/yyyy HH:MM". */}
+                  (dd/MM/yyyy HH:MM). Shown alongside the booking link so the
+                  cashier sees EXACTLY when the appointment is for. Also shows
+                  "Tạo vào lúc" with the exact creation timestamp so the cashier
+                  knows when the booking was first created in the system.
+                  Previously only the date was shown (no time), which left the
+                  cashier guessing the hour. */}
               {activeBooking?.date_time && (
                 <div className="flex items-center gap-1 text-gray-500">
                   <Calendar className="h-4 w-4" />
@@ -1379,9 +1396,20 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                         // the epoch to the VN wall-clock values.
                         const iso = toVietnamDay(activeBooking.date_time).split("-");
                         const t = toVietnamTime(activeBooking.date_time);
-                        return iso.length === 3
+                        const appointStr = iso.length === 3
                           ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
                           : "—";
+                        // "Tạo vào lúc" — the exact creation timestamp.
+                        const createStr = activeBooking.created_at
+                          ? (() => {
+                              const cIso = toVietnamDay(activeBooking.created_at).split("-");
+                              const cTime = toVietnamTime(activeBooking.created_at);
+                              return cIso.length === 3
+                                ? ` • Tạo vào lúc ${cIso[2]}/${cIso[1]}/${cIso[0]} ${cTime}`
+                                : "";
+                            })()
+                          : "";
+                        return appointStr + createStr;
                       } catch {
                         return "—";
                       }
