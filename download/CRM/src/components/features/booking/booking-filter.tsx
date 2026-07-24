@@ -121,30 +121,36 @@ export function BookingFilter({
       {/* Top row: Date nav (Hôm nay + Ngày mai + from/to date pickers) on left, View toggle on right */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          <Button
-            variant={dateNav === "today" ? "default" : "outline"}
-            size="sm"
+          <button
             onClick={() => onDateNavChange("today")}
-            className={dateNav === "today" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-white"}
+            className={`h-8 rounded-md px-3 text-sm font-medium transition-colors ${
+              dateNav === "today"
+                ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                : "bg-white text-gray-700 border border-gray-300 shadow-xs hover:bg-gray-50"
+            }`}
           >
             Hôm nay
-          </Button>
-          <Button
-            variant={dateNav === "tomorrow" ? "default" : "outline"}
-            size="sm"
+          </button>
+          <button
             onClick={() => onDateNavChange("tomorrow")}
-            className={dateNav === "tomorrow" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-white"}
+            className={`h-8 rounded-md px-3 text-sm font-medium transition-colors ${
+              dateNav === "tomorrow"
+                ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                : "bg-white text-gray-700 border border-gray-300 shadow-xs hover:bg-gray-50"
+            }`}
           >
             Ngày mai
-          </Button>
-          <Button
-            variant={dateNav === "7days" ? "default" : "outline"}
-            size="sm"
+          </button>
+          <button
             onClick={() => onDateNavChange("7days")}
-            className={dateNav === "7days" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-white"}
+            className={`h-8 rounded-md px-3 text-sm font-medium transition-colors ${
+              dateNav === "7days"
+                ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                : "bg-white text-gray-700 border border-gray-300 shadow-xs hover:bg-gray-50"
+            }`}
           >
             7 ngày
-          </Button>
+          </button>
           {/* From/To date range — a single dual-calendar picker. The store works
               with Date objects (to = end-of-day), so convert dd/MM/yyyy ↔ Date. */}
           <DateRangePicker

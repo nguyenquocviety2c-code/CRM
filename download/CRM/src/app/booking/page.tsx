@@ -79,6 +79,7 @@ export default function BookingPage() {
   const {
     dialogOpen,
     selectedBooking,
+    dateNav,
     filterStaffId,
     statusFilter,
     viewMode,
@@ -395,7 +396,7 @@ export default function BookingPage() {
         onStaffChange={setFilterStaffId}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        dateNav="today"
+        dateNav={dateNav}
         onDateNavChange={setDateNav}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
