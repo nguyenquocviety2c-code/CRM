@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DraggableHoverPopup } from "@/components/features/booking/draggable-hover-popup";
+import { Pencil, LogIn, Trash2 } from "lucide-react";
 
 interface Staff {
   id: string;
