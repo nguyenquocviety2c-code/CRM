@@ -1606,7 +1606,7 @@ function CustomerGridChip({
           {totalDuration > 0 && <div className="mt-0.5 text-[10px] font-medium text-gray-500">Tổng: {totalDuration} phút</div>}
         </button>
       </HoverCardTrigger>
-      <HoverCardContent side="right" align="start" className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl">
+      <HoverCardContent side="right" align="start" sideOffset={0} sticky="always" className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl">
         <BookingHoverDetails
           booking={booking}
           canViewCustomerPhone={canViewCustomerPhone}

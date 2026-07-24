@@ -1699,6 +1699,7 @@ function BookingChip({
       <HoverCardContent
         side="right"
         align="start"
+        sideOffset={0}
         className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
       >
         <BookingHoverDetails
