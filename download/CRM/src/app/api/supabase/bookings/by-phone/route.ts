@@ -80,16 +80,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 4. Build the response list — only UNPAID bookings (not checkout, not
-    //    cancelled, not no_show). The confirmation dialog is meant to warn
-    //    about existing appointments that haven't been paid yet. If all prior
-    //    bookings are paid, the customer can book again without a prompt.
+    // 4. Build the response list — only UN-CHECKED-IN bookings (not checkout,
+    //    not cancelled, not no_show, not checkin). The confirmation dialog is
+    //    meant to warn about existing appointments that haven't been checked in
+    //    yet (status new/confirmed). If all prior bookings are checked in,
+    //    checked out, or cancelled, the customer can book again without a prompt.
     const result = (bookings || [])
       .filter(
         (b: { id: string; status?: string }) =>
           b.status !== "checkout" &&
           b.status !== "cancelled" &&
           b.status !== "no_show" &&
+          b.status !== "checkin" &&
           (excludeBookingId ? b.id !== excludeBookingId : true)
       )
       .map((b: {

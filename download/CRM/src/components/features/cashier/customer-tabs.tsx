@@ -16,7 +16,7 @@ import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useBookingStore } from "@/stores/booking-store";
 import { maskPhone } from "@/lib/phone-mask";
-import { localDayToUtcRange, toVietnamDay, toVietnamTime } from "@/lib/utils";
+import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 import {
   BookingStatusLabel,
   BookingStatusBadgeColors,
@@ -101,10 +101,10 @@ interface StandaloneInvoice {
 }
 
 interface CustomerTabsProps {
-  selectedDate: string; // "YYYY-MM-DD" — the date whose bookings are shown in the tab bar.
+  dateRange: { from: Date; to: Date }; // Date range for bookings shown in the tab bar.
 }
 
-export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
+export function CustomerTabs({ dateRange }: CustomerTabsProps) {
   const {
     activeCustomers,
     activeTabId,
@@ -184,18 +184,16 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     (c) => c.customerId === activeTabId
   );
 
-  // Fetch the selected date's bookings (shown as buttons in the tab bar).
+  // Fetch the selected date range's bookings (shown as buttons in the tab bar).
   const { data: dayBookings } = useQuery<TodayBooking[]>({
-    queryKey: ["cashier-day-bookings", selectedDate, selectedBranchId],
+    queryKey: ["cashier-day-bookings", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Timezone-safe: convert the selected Vietnam day to its UTC range so
-      // Supabase filters by the correct UTC window (no 7-hour shift).
-      const dayRange = localDayToUtcRange(selectedDate);
-      params.set("date_from", dayRange.from);
-      params.set("date_to", dayRange.to);
+      // Use the date range's ISO strings for Supabase filtering.
+      params.set("date_from", dateRange.from.toISOString());
+      params.set("date_to", dateRange.to.toISOString());
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
       const json = await res.json();
@@ -211,15 +209,14 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
   // rule, both completed (paid) and cancelled standalone invoices stay in the
   // list for the day.
   const { data: dayStandaloneInvoices } = useQuery<StandaloneInvoice[]>({
-    queryKey: ["cashier-day-standalone-invoices", selectedDate, selectedBranchId],
+    queryKey: ["cashier-day-standalone-invoices", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Timezone-safe: same Vietnam-day → UTC range conversion as bookings.
-      const invDayRange = localDayToUtcRange(selectedDate);
-      params.set("date_from", invDayRange.from);
-      params.set("date_to", invDayRange.to);
+      // Use the date range's ISO strings for Supabase filtering.
+      params.set("date_from", dateRange.from.toISOString());
+      params.set("date_to", dateRange.to.toISOString());
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
       const json = await res.json();

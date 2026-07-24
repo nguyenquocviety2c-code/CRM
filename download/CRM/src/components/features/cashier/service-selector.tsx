@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuthStore } from "@/stores/auth-store";
+import { BookingStatusLabel } from "@/lib/constants";
 
 interface ServiceItem {
   id: string;
@@ -1063,6 +1064,10 @@ export function ServiceSelector() {
       }
     } finally {
       setAddingFromDialog(false);
+      // Reset the skip flag so future tabs/customers get the existing-booking
+      // check again. Without this, once a user confirms "OK, đặt tiếp", all
+      // subsequent tabs would bypass the check entirely.
+      setSkipExistingBookingsCheck(false);
     }
   };
 
@@ -1633,10 +1638,10 @@ export function ServiceSelector() {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Khách hàng có lịch hẹn chưa thanh toán</DialogTitle>
+            <DialogTitle>Khách hàng có lịch hẹn chưa checkin</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-gray-700">
-            Số điện thoại này có {pendingExistingBookings.length} lịch hẹn chưa thanh toán. Bạn có chắc muốn đặt lịch tiếp không?
+            Số điện thoại này có {pendingExistingBookings.length} lịch hẹn chưa checkin. Bạn có chắc muốn đặt lịch tiếp không?
           </p>
           <div className="max-h-[300px] space-y-2 overflow-y-auto">
             {pendingExistingBookings.map((b) => (
@@ -1647,7 +1652,7 @@ export function ServiceSelector() {
                   <span className="text-amber-700">Chi nhánh:</span>
                   <span className="font-medium text-amber-900">{b.branchName || "—"}</span>
                   <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-800">
-                    {b.status}
+                    {BookingStatusLabel[b.status] || b.status}
                   </span>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">

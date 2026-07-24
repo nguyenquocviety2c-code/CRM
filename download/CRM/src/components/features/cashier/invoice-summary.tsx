@@ -29,7 +29,7 @@ import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { queryKeys } from "@/lib/query-keys";
 import { isPromotionActive, isPromotionForBranch } from "@/lib/promotion-utils";
-import { localDayToUtcRange, toVietnamTime } from "@/lib/utils";
+import { toVietnamTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -62,7 +62,7 @@ const fileToDataUrl = (file: File): Promise<string> => {
   });
 };
 
-export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
+export function InvoiceSummary({ dateRange }: { dateRange: { from: Date; to: Date } }) {
   const {
     activeTabId,
     activeCustomers,
@@ -178,16 +178,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     customer: { id: string; name: string; phone: string | null } | null;
   }
   const { data: dayBookings } = useQuery<DayBooking[]>({
-    queryKey: ["cashier-day-bookings", selectedDate, selectedBranchId],
+    queryKey: ["cashier-day-bookings", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Timezone-safe: convert the selected Vietnam day to its UTC range so
-      // Supabase filters by the correct UTC window (no 7-hour shift).
-      const dayRange = localDayToUtcRange(selectedDate);
-      params.set("date_from", dayRange.from);
-      params.set("date_to", dayRange.to);
+      // Use the date range's ISO strings for Supabase filtering.
+      params.set("date_from", dateRange.from.toISOString());
+      params.set("date_to", dateRange.to.toISOString());
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
       const json = await res.json();
@@ -208,15 +206,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     customer: { id: string; name: string; phone: string | null } | null;
   }
   const { data: dayStandaloneInvoices } = useQuery<StandaloneInvoiceRow[]>({
-    queryKey: ["cashier-day-standalone-invoices", selectedDate, selectedBranchId],
+    queryKey: ["cashier-day-standalone-invoices", dateRange.from.toISOString(), dateRange.to.toISOString(), selectedBranchId],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("limit", "100");
-      // Timezone-safe: same Vietnam-day → UTC range conversion as bookings.
-      const invDayRange = localDayToUtcRange(selectedDate);
-      params.set("date_from", invDayRange.from);
-      params.set("date_to", invDayRange.to);
+      // Use the date range's ISO strings for Supabase filtering.
+      params.set("date_from", dateRange.from.toISOString());
+      params.set("date_to", dateRange.to.toISOString());
       if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
       const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
       const json = await res.json();
@@ -1440,9 +1437,11 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       // ---- Path 0: walk-in tab with an existing pending invoice ----
       // Walk-in tabs create a pending standalone invoice as soon as the first
       // item is added. Cancelling such a tab PUTs the EXISTING invoice to
-      // "cancelled" — we do NOT create a second (cancelled) invoice, and we do
-      // NOT touch any booking (walk-in invoices are standalone). This keeps a
-      // single invoice per walk-in tab, consistent with the checkout path.
+      // "cancelled" — we do NOT create a second (cancelled) invoice. This keeps
+      // a single invoice per walk-in tab, consistent with the checkout path.
+      // IMPORTANT: if the walk-in tab also has a bookingId (auto-linked to an
+      // existing booking), we must cancel the booking too. Otherwise the booking
+      // would remain active while its linked invoice is cancelled.
       if (meta?.type === "walkin" && meta?.invoiceId) {
         const res = await fetch(
           `/api/supabase/invoices/${encodeURIComponent(meta.invoiceId)}`,
@@ -1475,10 +1474,23 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         );
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || "Không thể hủy đơn hàng");
+
+        // Also cancel the linked booking if one exists (walk-in tab auto-linked
+        // to an existing booking has both invoiceId AND bookingId).
+        if (bookingId) {
+          const bkRes = await fetch(`/api/supabase/bookings/${bookingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "cancelled" }),
+          });
+          const bkJson = await bkRes.json();
+          if (!bkJson.ok) throw new Error(bkJson.error || "Không thể hủy lịch hẹn");
+        }
+
         return {
           code: (json.data as { code?: string })?.code || "",
           id: (json.data as { id?: string })?.id,
-          productOnly: true,
+          productOnly: !bookingId,
           capturedTabId,
         } as { code: string; id?: string; productOnly: boolean; capturedTabId: string };
       }

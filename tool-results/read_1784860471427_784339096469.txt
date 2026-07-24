@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→import { useEffect, useMemo, useState } from "react";
+     4→import { useForm, useFieldArray, useWatch } from "react-hook-form";
+     5→import { zodResolver } from "@hookform/resolvers/zod";
+     6→import { z } from "zod";
+     7→import { useQuery, useMutation, useQueryClient, keepPreviousData, useQueries } from "@tanstack/react-query";
+     8→import { Plus, Trash2, UserPlus, Loader2, ChevronDown, ChevronUp, X } from "lucide-react";
+     9→import {
+    10→  Dialog,
+    11→  DialogContent,
+    12→  DialogHeader,
+    13→  DialogTitle,
+    14→  DialogFooter,
+    15→} from "@/components/ui/dialog";
+    16→import { Button } from "@/components/ui/button";
+    17→import { Input } from "@/components/ui/input";
+    18→import { Label } from "@/components/ui/label";
+    19→import { Textarea } from "@/components/ui/textarea";
+    20→import { DatePicker } from "@/components/ui/date-picker";
+    21→import { TimePicker } from "@/components/ui/time-picker";
+    22→import {
+    23→  Select,
+    24→  SelectContent,
+    25→  SelectItem,
+    26→  SelectTrigger,
+    27→  SelectValue,
+    28→} from "@/components/ui/select";
+    29→import { Booking } from "@/stores/booking-store";
+    30→import { BookingStatusLabel } from "@/lib/constants";
+    31→import { queryKeys } from "@/lib/query-keys";
+    32→import { localDayToUtcRange, localDayStartUtc, toVietnamDay, toVietnamTime } from "@/lib/utils";
+    33→import { bookingSchema } from "@/lib/validations";
+    34→import { buildMultiCustomerNote, parseMultiCustomerNote } from "@/lib/multi-customer";
+    35→import { useBranchStore } from "@/stores/branch-store";
+    36→import { useAuthStore } from "@/stores/auth-store";
+    37→
+    38→const bookingFormSchema = bookingSchema;
+    39→
+    40→type BookingFormValues = z.infer<typeof bookingFormSchema>;
+    41→
+    42→interface BookingDialogProps {
+    43→  open: boolean;
+    44→  onClose: () => void;
+    45→  booking: Booking | null;
+    46→  /**
+    47→   * Pre-filled slot data (used when the dialog is opened by clicking an empty
+    48→   * time slot in the "Khung giờ" / staff-view timeline). When provided AND
+    49→   * booking is null (new booking), the first service entry's date/time (and
+    50→   * optionally staffId) are pre-set so the user only needs to pick a service.
+    51→   * Format: { date: "DD/MM/YYYY", time: "HH:mm", staffId?: string | null }
+    52→   */
+    53→  prefillSlot?: { date: string; time: string; staffId?: string | null } | null;
+    54→  /**
+    55→   * Default date/time for a NEW booking (booking === null) when no prefillSlot
+    56→   * is provided. When set, the dialog's Ngày/Giờ fields pre-fill with this
+    57→   * value so creating a 2nd+ booking on a day defaults to the earliest existing
+    58→   * booking's start — the salon's parallel-booking workflow. Each service's
+    59→   * staff is still validated for uniqueness vs other bookings at that slot.
+    60→   */
+    61→  defaultNewSlot?: { date: string; time: string } | null;
+    62→}
+    63→
+    64→interface Customer {
+    65→  id: string;
+    66→  name: string;
+    67→  phone: string;
+    68→  code: string;
+    69→}
+    70→
+    71→interface SupabaseCustomer {
+    72→  id: string;
+    73→  code: string;
+    74→  name: string;
+    75→  phone: string;
+    76→  source?: { id: string; name: string } | null;
+    77→  channel?: { id: string; name: string } | null;
+    78→}
+    79→
+    80→interface ServiceCategory {
+    81→  id: string;
+    82→  name: string;
+    83→}
+    84→
+    85→interface Service {
+    86→  id: string;
+    87→  name: string;
+    88→  duration: number;
+    89→  price: number;
+    90→  category_id: string | null;
+    91→}
+    92→
+    93→interface Staff {
+    94→  id: string;
+    95→  name: string;
+    96→  groupName?: string;
+    97→}
+    98→
+    99→interface CustomerSource {
+   100→  id: string;
+   101→  name: string;
+   102→}
+   103→
+   104→interface CustomerChannel {
+   105→  id: string;
+   106→  name: string;
+   107→}
+   108→
+   109→export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewSlot }: BookingDialogProps) {
+   110→  const queryClient = useQueryClient();
+   111→  const selectedBranchId = useBranchStore((s) => s.selectedBranchId);
+   112→  // Minimize/expand state — when true the dialog collapses to a thin bar at
+   113→  // the bottom of the screen (only the title + expand button visible). Resets
+   114→  // to expanded every time the dialog opens.
+   115→  const [minimized, setMinimized] = useState(false);
+   116→  useEffect(() => {
+   117→    if (!open) {
+   118→      setMinimized(false);
+   119→      // Reset multi-customer state when the dialog closes so the next open
+   120→      // starts fresh (default "Cùng lịch", no active slot dropdown).
+   121→      setScheduleMode("same");
+   122→      setActiveSlotDropdown(null);
+   123→      setIsMultiSubmitting(false);
+   124→    }
+   125→  }, [open]);
+   126→  // Permission: can the logged-in staff assign employees to services?
+   127→  // If false, the per-service "Chọn nhân viên" dropdown is hidden and services
+   128→  // are booked without a specific staff assignment (staffId left empty).
+   129→  const { hasPermission, user } = useAuthStore();
+   130→  const canAssignStaff = hasPermission("assign_staff");
+   131→  const canBookPastDate = hasPermission("book_past_date");
+   132→
+   133→  // Fetch customers from Supabase (server-side search)
+   134→  const [phoneSearch, setPhoneSearch] = useState("");
+   135→  const [nameSearch, setNameSearch] = useState("");
+   136→  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+   137→
+   138→  // Quick-add customer dialog state
+   139→  const [quickAddOpen, setQuickAddOpen] = useState(false);
+   140→  const [quickAddName, setQuickAddName] = useState("");
+   141→  const [quickAddPhone, setQuickAddPhone] = useState("");
+   142→  const [quickAddError, setQuickAddError] = useState("");
+   143→  const [quickAddChecking, setQuickAddChecking] = useState(false);
+   144→
+   145→  // ------------------------------------------------------------------
+   146→  // Multi-customer mode (numberOfCustomers >= 2, CREATE only).
+   147→  // When active, each service row becomes a "customer slot" with its own
+   148→  // phone/name inputs + the 3 selects. A "Cùng lịch / Khác lịch" toggle
+   149→  // next to the DỊCH VỤ heading controls whether all slots share ONE
+   150→  // booking (parallel staff) or each slot gets its OWN separate booking.
+   151→  // ------------------------------------------------------------------
+   152→  // scheduleMode: "same" = 1 booking with N services (parallel staff);
+   153→  //               "different" = N separate bookings, 1 service each.
+   154→  const [scheduleMode, setScheduleMode] = useState<"same" | "different">("same");
+   155→  // Which slot index's autocomplete dropdown is currently open. Only one
+   156→  // slot's dropdown shows at a time (the one the user is actively typing in).
+   157→  const [activeSlotDropdown, setActiveSlotDropdown] = useState<number | null>(null);
+   158→  // Which field of the active slot is currently focused ("phone" | "name").
+   159→  // The autocomplete query searches ONLY by the focused field's value, so the
+   160→  // other field's text doesn't get combined into the search term (which would
+   161→  // cause zero results + one API call per keystroke).
+   162→  const [activeSlotField, setActiveSlotField] = useState<"phone" | "name">("phone");
+   163→  // Submit-in-flight flag for the multi-customer path (which does inline
+   164→  // fetches instead of useMutation, so createMutation.isPending doesn't cover it).
+   165→  const [isMultiSubmitting, setIsMultiSubmitting] = useState(false);
+   166→
+   167→  // ID of the "Khách vãng lai" customer source. When this source is selected,
+   168→  // the booking is treated as a walk-in: no phone/name required, the customer
+   169→  // name defaults to "Khách vãng lai", and a lightweight guest customer record
+   170→  // (customer_type="guest") is created on submit. Guest customers are hidden
+   171→  // from the Customers module and only promoted to a real customer when an
+   172→  // invoice is paid.
+   173→  const WALKIN_SOURCE_ID = "779ddad6-01fa-4887-8647-134ce699d643";
+   174→  const WALKIN_SOURCE_NAME = "Khách vãng lai";
+   175→
+   176→  const { data: customersData } = useQuery({
+   177→    queryKey: [queryKeys.customers.all, phoneSearch, nameSearch],
+   178→    queryFn: async () => {
+   179→      const params = new URLSearchParams();
+   180→      params.set("limit", "20");
+   181→      // Suggest ALL customers who registered with a phone number (both "khách
+   182→      // cũ" with paid invoices AND "khách mới" who only registered name+phone).
+   183→      // Walk-in guests (no phone) are excluded by the API's default behavior.
+   184→      const combined = [phoneSearch, nameSearch].filter(Boolean).join(" ");
+   185→      if (combined) params.set("search", combined);
+   186→      const res = await fetch(`/api/supabase/customers?${params.toString()}`);
+   187→      const json = await res.json();
+   188→      if (!json.ok) return [];
+   189→      return (json.data as SupabaseCustomer[]).map((c) => ({
+   190→        id: c.id,
+   191→        name: c.name,
+   192→        phone: c.phone,
+   193→        code: c.code,
+   194→        source: c.source ?? null,
+   195→        channel: c.channel ?? null,
+   196→      }));
+   197→    },
+   198→    enabled: open && (!!phoneSearch || !!nameSearch),
+   199→    // Keep previous results visible while the new query loads so the
+   200→    // autocomplete feels real-time (no flicker/disappear between keystrokes).
+   201→    placeholderData: keepPreviousData,
+   202→    staleTime: 10_000,
+   203→  });
+   204→
+   205→  // Check if a phone number belongs to a customer who already exists.
+   206→  // Returns the existing customer if found (so caller can pre-fill), or null.
+   207→  const checkPhoneUsedService = async (
+   208→    phone: string
+   209→  ): Promise<{ blocked: boolean; customer: Customer | null; reason: string }> => {
+   210→    const trimmed = phone.trim();
+   211→    if (!trimmed) return { blocked: false, customer: null, reason: "" };
+   212→    // Find customers whose phone exactly matches — regardless of whether they
+   213→    // have a paid invoice yet. A match means this phone is already registered,
+   214→    // so the caller should pick the existing customer instead of creating a new one.
+   215→    const params = new URLSearchParams();
+   216→    params.set("limit", "20");
+   217→    params.set("search", trimmed);
+   218→    const res = await fetch(`/api/supabase/customers?${params.toString()}`);
+   219→    const json = await res.json();
+   220→    if (!json.ok) return { blocked: false, customer: null, reason: "" };
+   221→    const matches: SupabaseCustomer[] = (json.data || []).filter(
+   222→      (c: SupabaseCustomer) => (c.phone || "") === trimmed
+   223→    );
+   224→    if (matches.length === 0) return { blocked: false, customer: null, reason: "" };
+   225→    // A matching old customer (with a paid invoice) blocks new-customer creation.
+   226→    const m = matches[0];
+   227→    return {
+   228→      blocked: true,
+   229→      customer: { id: m.id, name: m.name, phone: m.phone || "", code: m.code || "" },
+   230→      reason: "Số điện thoại đã tồn tại, không phải khách mới",
+   231→    };
+   232→  };
+   233→
+   234→  // Submit handler for the quick-add customer dialog.
+   235→  const handleQuickAddSubmit = async () => {
+   236→    setQuickAddError("");
+   237→    const name = quickAddName.trim();
+   238→    const phone = quickAddPhone.trim();
+   239→    if (!name) {
+   240→      setQuickAddError("Vui lòng nhập tên khách hàng");
+   241→      return;
+   242→    }
+   243→    if (!phone) {
+   244→      setQuickAddError("Vui lòng nhập số điện thoại");
+   245→      return;
+   246→    }
+   247→    setQuickAddChecking(true);
+   248→    try {
+   249→      const dup = await checkPhoneUsedService(phone);
+   250→      if (dup.blocked) {
+   251→        setQuickAddError(dup.reason);
+   252→        return;
+   253→      }
+   254→      // No matching old customer — create a new customer record.
+   255→      const res = await fetch("/api/supabase/customers", {
+   256→        method: "POST",
+   257→        headers: { "Content-Type": "application/json" },
+   258→        body: JSON.stringify({
+   259→          name,
+   260→          phone,
+   261→          branch_id: selectedBranchId || null,
+   262→        }),
+   263→      });
+   264→      const json = await res.json();
+   265→      if (!json.ok) {
+   266→        setQuickAddError(json.error || "Không thể tạo khách hàng");
+   267→        return;
+   268→      }
+   269→      const created: Customer = {
+   270→        id: json.data.id,
+   271→        name: json.data.name,
+   272→        phone: json.data.phone || "",
+   273→        code: json.data.code || "",
+   274→      };
+   275→      queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+   276→      // Select the customer in the booking form.
+   277→      setValue("customerId", created.id);
+   278→      setPhoneSearch(created.phone);
+   279→      setNameSearch(created.name);
+   280→      setShowCustomerDropdown(false);
+   281→      setQuickAddOpen(false);
+   282→      setQuickAddName("");
+   283→      setQuickAddPhone("");
+   284→    } catch (e) {
+   285→      setQuickAddError(e instanceof Error ? e.message : "Lỗi không xác định");
+   286→    } finally {
+   287→      setQuickAddChecking(false);
+   288→    }
+   289→  };
+   290→
+   291→  const { data: serviceCategoriesData } = useQuery({
+   292→    queryKey: ["serviceCategories"],
+   293→    queryFn: async () => {
+   294→      const res = await fetch("/api/supabase/service-categories");
+   295→      const json = await res.json();
+   296→      return json.data || [];
+   297→    },
+   298→    // Only fetch when the dialog is open — avoids 5 unnecessary API calls on
+   299→    // every /booking page mount when the dialog is closed.
+   300→    enabled: open,
+   301→    staleTime: 60_000,
+   302→  });
+   303→
+   304→  const { data: servicesData } = useQuery({
+   305→    queryKey: queryKeys.services.all,
+   306→    queryFn: async () => {
+   307→      const res = await fetch("/api/supabase/services?limit=200");
+   308→      const json = await res.json();
+   309→      return json.data || [];
+   310→    },
+   311→    enabled: open,
+   312→    staleTime: 60_000,
+   313→  });
+   314→
+   315→  const { data: staffData } = useQuery({
+   316→    queryKey: ["booking-dialog-staff", selectedBranchId],
+   317→    queryFn: async () => {
+   318→      if (!selectedBranchId) return [];
+   319→      const res = await fetch(
+   320→        `/api/supabase/staff?branch_id=${selectedBranchId}&active=true&limit=200`
+   321→      );
+   322→      const json = await res.json();
+   323→      if (!json.ok) return [];
+   324→      // Only show hairdresser groups: Artist, Creative Director, Master, Junior
+   325→      const hairdresserGroups = ["Artist", "Creative Director", "Master", "Junior"];
+   326→      return (json.data as Array<Record<string, unknown>>)
+   327→        .filter((s) => {
+   328→          const groupName = (s.group as { name?: string } | null)?.name;
+   329→          return groupName && hairdresserGroups.includes(groupName);
+   330→        })
+   331→        .map((s) => ({
+   332→          id: s.id as string,
+   333→          name: s.name as string,
+   334→          groupName: (s.group as { name?: string } | null)?.name,
+   335→        }));
+   336→    },
+   337→    enabled: open,
+   338→    staleTime: 60_000,
+   339→  });
+   340→
+   341→  const { data: sourcesData } = useQuery({
+   342→    queryKey: ["customerSources"],
+   343→    queryFn: async () => {
+   344→      const res = await fetch("/api/supabase/customer-sources");
+   345→      const json = await res.json();
+   346→      return json.data || [];
+   347→    },
+   348→    enabled: open,
+   349→    staleTime: 60_000,
+   350→  });
+   351→
+   352→  const { data: channelsData } = useQuery({
+   353→    queryKey: ["bookingChannels"],
+   354→    queryFn: async () => {
+   355→      const res = await fetch("/api/supabase/booking-channels");
+   356→      const json = await res.json();
+   357→      return (json.data || []).filter((c: { active?: boolean }) => c.active !== false);
+   358→    },
+   359→    enabled: open,
+   360→    staleTime: 60_000,
+   361→  });
+   362→
+   363→  const customers: Customer[] = customersData || [];
+   364→  const serviceCategories: ServiceCategory[] = serviceCategoriesData || [];
+   365→  const services: Service[] = (servicesData || []).map((s: { id: string; name: string; duration: number; price?: number; category_id: string | null }) => ({
+   366→    id: s.id,
+   367→    name: s.name,
+   368→    duration: s.duration,
+   369→    price: Number(s.price) || 0,
+   370→    categoryId: s.category_id,
+   371→  }));
+   372→  const allStaffList: Staff[] = staffData || [];
+   373→  // Filter staff per service entry based on the service name:
+   374→  // - "Artist" in name → only Artist group.
+   375→  // - "Creative Director" in name → only Creative Director group.
+   376→  // - Otherwise → all hairdresser groups.
+   377→  const staffList: Staff[] = allStaffList; // kept for backward-compat references
+   378→  // Returns the staff eligible for a service entry. Excludes:
+   379→  //   - staff already assigned to ANOTHER booking at the SAME (date, time)
+   380→  //     slot (one staff can't serve two bookings in the same slot);
+   381→  //   - staff already picked by a SIBLING service entry in THIS booking (so
+   382→  //     the 2nd+ service must use a different staff).
+   383→  // `entryIndex` (when provided) is the calling entry's index — its own
+   384→  // staffId is NOT excluded (so re-opening the Select keeps the current value).
+   385→  const getStaffForService = (
+   386→    serviceId: string | undefined,
+   387→    entryIndex?: number
+   388→  ): Staff[] => {
+   389→    let list = allStaffList;
+   390→    if (serviceId) {
+   391→      const svc = services.find((s) => s.id === serviceId);
+   392→      if (svc) {
+   393→        const svcName = (svc.name || "").toLowerCase();
+   394→        if (svcName.includes("creative director")) {
+   395→          list = allStaffList.filter((s) => s.groupName === "Creative Director");
+   396→        } else if (svcName.includes("artist")) {
+   397→          list = allStaffList.filter((s) => s.groupName === "Artist");
+   398→        }
+   399→      }
+   400→    }
+   401→    // Exclude staff blocked by other bookings at the same slot.
+   402→    const afterBlocked = list.filter((s) => !staffBlockedAtSameSlot.has(s.id));
+   403→    // Exclude staff already chosen by sibling entries in THIS booking.
+   404→    let result = afterBlocked;
+   405→    if (typeof entryIndex === "number") {
+   406→      const siblings = (watchedServicesForFeasibility || watchedServices) || [];
+   407→      const takenBySiblings = new Set<string>();
+   408→      siblings.forEach((s, i) => {
+   409→        if (i !== entryIndex && s.staffId) takenBySiblings.add(s.staffId);
+   410→      });
+   411→      result = afterBlocked.filter((s) => !takenBySiblings.has(s.id));
+   412→    }
+   413→    // FALLBACK: if the sibling-exclusion filter empties the list (e.g. the only
+   414→    // Artist-group staff was already picked by a sibling service), DON'T show
+   415→    // an empty dropdown — that's confusing. Instead, show the group-filtered
+   416→    // staff (minus blocked-by-other-bookings) so the user can SEE who's
+   417→    // available and choose. The server-side conflict check will still reject
+   418→    // a true double-booking. This handles the common case: a salon with only
+   419→    // 1 Artist-group staff, where the cashier wants Artist Cut + another
+   420→    // service that already used that same staff.
+   421→    if (result.length === 0 && afterBlocked.length > 0) {
+   422→      result = afterBlocked;
+   423→    }
+   424→    return result;
+   425→  };
+   426→  const sources: CustomerSource[] = sourcesData || [];
+   427→  const channels: CustomerChannel[] = channelsData || [];
+   428→
+   429→  const {
+   430→    register,
+   431→    handleSubmit,
+   432→    setValue,
+   433→    watch,
+   434→    reset,
+   435→    control,
+   436→    formState: { errors },
+   437→  } = useForm<BookingFormValues>({
+   438→    resolver: zodResolver(bookingFormSchema),
+   439→    defaultValues: {
+   440→      customerId: "",
+   441→      customerSourceId: "",
+   442→      customerChannelId: "",
+   443→      numberOfCustomers: 1,
+   444→      status: "confirmed",
+   445→      note: "",
+   446→      // Booking-level start date/time (set in the "Thông tin lịch hẹn" section).
+   447→      date: "",
+   448→      time: "",
+   449→      services: [
+   450→        {
+   451→          serviceCategoryId: "",
+   452→          serviceId: "",
+   453→          staffId: "",
+   454→          showNote: false,
+   455→        },
+   456→      ],
+   457→    } as BookingFormValues,
+   458→  });
+   459→
+   460→  const { fields, append, remove } = useFieldArray({
+   461→    control,
+   462→    name: "services",
+   463→  });
+   464→
+   465→  // ------------------------------------------------------------------
+   466→  // Multi-customer mode detection.
+   467→  // Active ONLY in CREATE mode (booking === null) when numberOfCustomers >= 2.
+   468→  // In edit mode the multi-customer UI is never shown (existing bookings were
+   469→  // created as single records and the per-slot fields don't apply).
+   470→  // ------------------------------------------------------------------
+   471→  const watchedNumberOfCustomers = useWatch({ control, name: "numberOfCustomers" }) as number;
+   472→  const isMultiCustomerMode = !booking && Number(watchedNumberOfCustomers) >= 2;
+   473→
+   474→  // Auto-adjust the services field array to match numberOfCustomers.
+   475→  // When numberOfCustomers changes to N (>= 2) in CREATE mode, append/remove
+   476→  // rows so fields.length === N. When numberOfCustomers === 1, ensure at
+   477→  // least 1 row remains (the default). This effect ONLY runs in CREATE mode.
+   478→  useEffect(() => {
+   479→    if (!open || booking) return; // CREATE mode only
+   480→    const n = Number(watchedNumberOfCustomers) || 1;
+   481→    if (n < 2) {
+   482→      // Single-customer mode: keep at least 1 row. If the user previously had
+   483→      // N rows (multi mode) and dropped back to 1, trim to 1 row.
+   484→      if (fields.length > 1) {
+   485→        for (let i = fields.length - 1; i >= 1; i--) {
+   486→          remove(i);
+   487→        }
+   488→      }
+   489→      // Clear per-slot customer fields on the remaining row (they're unused
+   490→      // in single mode and could leak into the payload otherwise).
+   491→      setValue("services.0.customerPhone", "");
+   492→      setValue("services.0.customerName", "");
+   493→      setValue("services.0.customerId", "");
+   494→      setActiveSlotDropdown(null);
+   495→      return;
+   496→    }
+   497→    // Multi-customer mode: ensure fields.length === n.
+   498→    const currentCount = fields.length;
+   499→    if (currentCount < n) {
+   500→      for (let i = currentCount; i < n; i++) {
+   501→        append({
+   502→          serviceCategoryId: "",
+   503→          serviceId: "",
+   504→          staffId: "",
+   505→          showNote: false,
+   506→          customerPhone: "",
+   507→          customerName: "",
+   508→          customerId: "",
+   509→        });
+   510→      }
+   511→    } else if (currentCount > n) {
+   512→      for (let i = currentCount - 1; i >= n; i--) {
+   513→        remove(i);
+   514→      }
+   515→    }
+   516→  }, [watchedNumberOfCustomers, open, booking]);
+   517→
+   518→  // ------------------------------------------------------------------
+   519→  // Per-slot customer autocomplete (multi-customer mode).
+   520→  // A single useQuery fetches /api/supabase/customers?search=... based on
+   521→  // the ACTIVE slot's phone+name. Only the active slot's dropdown is shown
+   522→  // at a time (controlled by activeSlotDropdown), so one query suffices.
+   523→  // ------------------------------------------------------------------
+   524→  const watchedServicesForSlots = useWatch({ control, name: "services" }) as
+   525→    | BookingFormValues["services"]
+   526→    | undefined;
+   527→  const activeSlotEntry =
+   528→    activeSlotDropdown !== null && watchedServicesForSlots
+   529→      ? watchedServicesForSlots[activeSlotDropdown]
+   530→      : null;
+   531→  const activeSlotPhone = (activeSlotEntry?.customerPhone || "").trim();
+   532→  const activeSlotName = (activeSlotEntry?.customerName || "").trim();
+   533→  // Search term = ONLY the value of the field the user is currently typing
+   534→  // into. Searching by combined "phone name" returns zero results and fires
+   535→  // one API call per keystroke. By restricting the search to the focused
+   536→  // field, the dropdown stays useful and API calls are minimized.
+   537→  const activeSlotSearchTerm = activeSlotField === "phone" ? activeSlotPhone : activeSlotName;
+   538→
+   539→  const { data: slotCustomersData } = useQuery({
+   540→    queryKey: [
+   541→      "booking-dialog-slot-customers",
+   542→      activeSlotDropdown,
+   543→      activeSlotField,
+   544→      activeSlotSearchTerm,
+   545→    ],
+   546→    queryFn: async () => {
+   547→      const params = new URLSearchParams();
+   548→      params.set("limit", "20");
+   549→      if (activeSlotSearchTerm) params.set("search", activeSlotSearchTerm);
+   550→      const res = await fetch(`/api/supabase/customers?${params.toString()}`);
+   551→      const json = await res.json();
+   552→      if (!json.ok) return [];
+   553→      return (json.data as SupabaseCustomer[]).map((c) => ({
+   554→        id: c.id,
+   555→        name: c.name,
+   556→        phone: c.phone,
+   557→        code: c.code,
+   558→        source: c.source ?? null,
+   559→        channel: c.channel ?? null,
+   560→      }));
+   561→    },
+   562→    enabled:
+   563→      open &&
+   564→      isMultiCustomerMode &&
+   565→      activeSlotDropdown !== null &&
+   566→      !!activeSlotSearchTerm,
+   567→    placeholderData: keepPreviousData,
+   568→    staleTime: 10_000,
+   569→  });
+   570→
+   571→  const slotCustomers: Customer[] = slotCustomersData || [];
+   572→  // Filter slot customers by phone-prefix when only phone is typed (mirrors
+   573→  // the top-level filteredCustomers logic).
+   574→  const filteredSlotCustomers = useMemo(() => {
+   575→    if (!activeSlotSearchTerm) return slotCustomers;
+   576→    // When the user is typing in the phone field, filter results by
+   577→    // phone-prefix (mirrors the top-level filteredCustomers logic). When
+   578→    // typing in the name field, show all API results (the API already
+   579→    // searched by name).
+   580→    if (activeSlotField === "phone") {
+   581→      return slotCustomers.filter((c) =>
+   582→        (c.phone || "").startsWith(activeSlotPhone)
+   583→      );
+   584→    }
+   585→    return slotCustomers;
+   586→  }, [slotCustomers, activeSlotSearchTerm, activeSlotField, activeSlotPhone]);
+   587→
+   588→  // Walk-in detection: when the customer source is "Khách vãng lai", the
+   589→  // phone/name fields are hidden and a guest customer record is created on
+   590→  // submit instead of requiring an existing customer.
+   591→  const watchedCustomerSourceId = watch("customerSourceId");
+   592→  const isWalkIn = watchedCustomerSourceId === WALKIN_SOURCE_ID;
+   593→
+   594→  // Customer autocomplete.
+   595→  // Phone field shows customers whose phone STARTS WITH the typed prefix
+   596→  // (for old-customer lookups). Name field shows all matches.
+   597→  const filteredCustomers = useMemo(() => {
+   598→    if (!phoneSearch && !nameSearch) return customers;
+   599→    // When only phone is being typed, filter to phone-prefix matches.
+   600→    if (phoneSearch && !nameSearch) {
+   601→      return customers.filter((c) =>
+   602→        (c.phone || "").startsWith(phoneSearch.trim())
+   603→      );
+   604→    }
+   605→    return customers;
+   606→  }, [customers, phoneSearch, nameSearch]);
+   607→
+   608→  // Duration calculation
+   609→  const watchedServices = watch("services");
+   610→  const totalDuration = useMemo(() => {
+   611→    return watchedServices.reduce((sum, entry) => {
+   612→      const service = services.find((s) => s.id === entry.serviceId);
+   613→      return sum + (service?.duration || 0);
+   614→    }, 0);
+   615→  }, [watchedServices, services]);
+   616→
+   617→  const formatDuration = (minutes: number) => {
+   618→    const days = Math.floor(minutes / 1440);
+   619→    const remainingMinutes = minutes % 1440;
+   620→    return `${days} d | ${remainingMinutes} Phút`;
+   621→  };
+   622→
+   623→  const formatPrice = (price: number) =>
+   624→    new Intl.NumberFormat("vi-VN").format(price) + "đ";
+   625→
+   626→  // ------------------------------------------------------------------
+   627→  // Feasible-time computation for a service entry.
+   628→  // We fetch the bookings for the FIRST entry's selected staff+date (single
+   629→  // useQuery) and compute which HH:MM start times would overlap with that
+   630→  // staff's existing bookings. For multi-entry forms, each entry fetches its
+   631→  // own day's bookings via the dayBookingsByEntry map below.
+   632→  // Hours with NO feasible minute are hidden entirely; otherwise only
+   633→  // infeasible minutes within an hour are hidden.
+   634→  // ------------------------------------------------------------------
+   635→  // useWatch gives a reactive snapshot of the services array (watch() returns
+   636→  // a value but doesn't reliably trigger re-renders for nested field updates
+   637→  // under the React Compiler). This is used for the feasibility computation.
+   638→  const watchedServicesForFeasibility = useWatch({
+   639→    control,
+   640→    name: "services",
+   641→  }) as BookingFormValues["services"] | undefined;
+   642→
+   643→  // Fetch the day's bookings (for the booking-level date) so we can block
+   644→  // staff who are already assigned to ANOTHER booking that starts at the SAME
+   645→  // (date, time) — one staff can't serve two bookings in the same slot. The
+   646→  // existing `busyIntervals` map (per staff/day) is for OVERLAP feasibility on
+   647→  // the TimePicker; this set is for SAME-SLOT uniqueness on the staff Select.
+   648→  const watchedDateForSlot = watch("date");
+   649→  const watchedTimeForSlot = watch("time");
+   650→  const { data: dayBookingsForSlot } = useQuery<Array<{
+   651→    id: string;
+   652→    date_time: string;
+   653→    status: string;
+   654→    services: Array<{ staff_id?: string | null }>;
+   655→  }>>({
+   656→    queryKey: ["booking-dialog-day-bookings", watchedDateForSlot, selectedBranchId],
+   657→    queryFn: async () => {
+   658→      if (!watchedDateForSlot) return [];
+   659→      const m = watchedDateForSlot.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   660→      if (!m) return [];
+   661→      const isoDay = `${m[3]}-${m[2]}-${m[1]}`;
+   662→      const bd = localDayToUtcRange(isoDay);
+   663→      const params = new URLSearchParams();
+   664→      params.set("page", "1");
+   665→      params.set("limit", "200");
+   666→      params.set("date_from", bd.from);
+   667→      params.set("date_to", bd.to);
+   668→      if (selectedBranchId) params.set("branch_id", selectedBranchId);
+   669→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   670→      const json = await res.json();
+   671→      return (json.data || []) as Array<{
+   672→        id: string;
+   673→        date_time: string;
+   674→        status: string;
+   675→        services: Array<{ staff_id?: string | null }>;
+   676→      }>;
+   677→    },
+   678→    enabled: open && !!watchedDateForSlot,
+   679→    staleTime: 15_000,
+   680→  });
+   681→  // Staff IDs already assigned to ANOTHER booking that starts at the SAME
+   682→  // (date, time) as the current form. These staff are BLOCKED in every service
+   683→  // entry's staff Select. The current editing booking is excluded.
+   684→  const staffBlockedAtSameSlot = useMemo(() => {
+   685→    const blocked = new Set<string>();
+   686→    if (!watchedDateForSlot || !watchedTimeForSlot) return blocked;
+   687→    const m = watchedDateForSlot.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   688→    if (!m) return blocked;
+   689→    const dayKey = `${m[3]}-${m[2]}-${m[1]}`;
+   690→    const tm = watchedTimeForSlot.match(/^(\d{1,2}):(\d{2})$/);
+   691→    if (!tm) return blocked;
+   692→    const timeKey = `${tm[1].padStart(2, "0")}:${tm[2]}`;
+   693→    for (const b of dayBookingsForSlot || []) {
+   694→      if (b.status === "cancelled" || b.status === "no_show") continue;
+   695→      if (booking && b.id === booking.id) continue; // exclude self when editing
+   696→      if (!b.date_time) continue;
+   697→      // Compare the booking's VIETNAM day + time (timezone-safe) to the form's
+   698→      // (date, time). Supabase stores date_time with +00:00 offset, so the ISO
+   699→      // segments are UTC — naively matching them to the form's VN time missed
+   700→      // every booking (offset by 7 hours).
+   701→      const bDay = toVietnamDay(b.date_time);
+   702→      const bTime = toVietnamTime(b.date_time);
+   703→      if (bDay !== dayKey) continue;
+   704→      if (bTime !== timeKey) continue;
+   705→      for (const s of b.services || []) {
+   706→        if (s.staff_id) blocked.add(s.staff_id);
+   707→      }
+   708→    }
+   709→    return blocked;
+   710→  }, [watchedDateForSlot, watchedTimeForSlot, dayBookingsForSlot, booking]);
+   711→
+   712→  // Collect the unique (staffId|isoDay) keys referenced by the form entries.
+   713→  const staffDayKeys = useMemo(() => {
+   714→    const set = new Set<string>();
+   715→    const entries = watchedServicesForFeasibility || watchedServices;
+   716→    for (const entry of entries) {
+   717→      if (!entry.staffId || !entry.date) continue;
+   718→      const m = entry.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   719→      if (!m) continue;
+   720→      set.add(`${entry.staffId}|${m[3]}-${m[2]}-${m[1]}`);
+   721→    }
+   722→    return [...set];
+   723→  }, [watchedServicesForFeasibility, watchedServices]);
+   724→
+   725→  // Fetch bookings for each unique staff+day. Use a single useQuery per key
+   726→  // via a small custom hook pattern: store results in a ref map keyed by
+   727→  // staffDayKey, fetched on demand.
+   728→  const [busyIntervals, setBusyIntervals] = useState<
+   729→    Record<string, { startMs: number; endMs: number }[]>
+   730→  >({});
+   731→  useEffect(() => {
+   732→    let cancelled = false;
+   733→    (async () => {
+   734→      // Group keys by isoDay so we fetch a day's bookings once.
+   735→      const byDay = new Map<string, string[]>(); // isoDay -> staffIds
+   736→      for (const key of staffDayKeys) {
+   737→        const [staffId, isoDay] = key.split("|");
+   738→        if (!byDay.has(isoDay)) byDay.set(isoDay, []);
+   739→        byDay.get(isoDay)!.push(staffId);
+   740→      }
+   741→      const updates: Record<string, { startMs: number; endMs: number }[]> = {};
+   742→      for (const [isoDay, staffIds] of byDay) {
+   743→        // Skip if all staff for this day are already loaded.
+   744→        const allLoaded = staffIds.every((sid) => busyIntervals[`${sid}|${isoDay}`] !== undefined);
+   745→        if (allLoaded) continue;
+   746→        const params = new URLSearchParams();
+   747→        params.set("page", "1");
+   748→        params.set("limit", "200");
+   749→        // Timezone-safe: isoDay is a Vietnam calendar day; convert to its
+   750→        // UTC range so Supabase filters the correct window (no 7-hour shift).
+   751→        const bd = localDayToUtcRange(isoDay);
+   752→        params.set("date_from", bd.from);
+   753→        params.set("date_to", bd.to);
+   754→        if (selectedBranchId) params.set("branch_id", selectedBranchId);
+   755→        try {
+   756→          const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   757→          const json = await res.json();
+   758→          if (!json.ok) continue;
+   759→          const bookings = json.data || [];
+   760→          for (const sid of staffIds) {
+   761→            if (busyIntervals[`${sid}|${isoDay}`] !== undefined) continue;
+   762→            const intervals: { startMs: number; endMs: number }[] = [];
+   763→            for (const b of bookings) {
+   764→              if (b.status === "cancelled" || b.status === "no_show") continue;
+   765→              if (booking && b.id === booking.id) continue;
+   766→              const exStart = new Date(b.date_time as string).getTime();
+   767→              if (isNaN(exStart)) continue;
+   768→              for (const s of (b.services as Array<Record<string, unknown>>) || []) {
+   769→                if (s.staff_id !== sid) continue;
+   770→                const dur = (Number(s.duration) || Number((s.service as { duration?: number } | null)?.duration) || 60) * 60 * 1000;
+   771→                intervals.push({ startMs: exStart, endMs: exStart + dur });
+   772→              }
+   773→            }
+   774→            updates[`${sid}|${isoDay}`] = intervals;
+   775→          }
+   776→        } catch {
+   777→          /* ignore */
+   778→        }
+   779→      }
+   780→      if (cancelled || Object.keys(updates).length === 0) return;
+   781→      setBusyIntervals((prev) => ({ ...prev, ...updates }));
+   782→    })();
+   783→    return () => {
+   784→      cancelled = true;
+   785→    };
+   786→  }, [staffDayKeys, selectedBranchId, booking, busyIntervals]);
+   787→
+   788→  // Compute hiddenHours + hiddenMinutes for a given entry.
+   789→  const computeFeasible = (
+   790→    entry: { staffId?: string; date?: string; serviceId?: string }
+   791→  ): { hiddenHours: Set<string>; hiddenMinutes: Record<string, Set<string>> } => {
+   792→    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} };
+   793→    if (!entry.staffId || !entry.date || !entry.serviceId) return empty;
+   794→    const m = entry.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   795→    if (!m) return empty;
+   796→    const isoDay = `${m[3]}-${m[2]}-${m[1]}`;
+   797→    const intervals = busyIntervals[`${entry.staffId}|${isoDay}`];
+   798→    if (!intervals || intervals.length === 0) return empty;
+   799→    const svc = services.find((s) => s.id === entry.serviceId);
+   800→    const durationMs = (svc?.duration || 60) * 60 * 1000;
+   801→    if (durationMs <= 0) return empty;
+   802→    // dayBase = Vietnam midnight (00:00 VN) as a UTC ms epoch. The loop below
+   803→    // advances `min` minutes from dayBase to enumerate every VN wall-clock
+   804→    // minute of the day; min=540 → 09:00 VN (epoch). The busy intervals are
+   805→    // also UTC-ms epochs (from `new Date(b.date_time).getTime()`), so the
+   806→    // overlap comparison is apples-to-apples. Previously dayBase used
+   807→    // Date.UTC(...,0,0,0) which is UTC midnight — that mapped min=540 to
+   808→    // 09:00 UTC (= 16:00 VN), so a 16:00-VN booking (stored as 09:00 UTC)
+   809→    // collided with the user's intended 09:00 VN slot. Fixed to VN midnight.
+   810→    const dayBase = new Date(localDayStartUtc(isoDay)).getTime();
+   811→    if (isNaN(dayBase)) return empty;
+   812→    const hiddenHours = new Set<string>();
+   813→    const hiddenMinutes: Record<string, Set<string>> = {};
+   814→    const hourHasFeasible: Record<string, boolean> = {};
+   815→    for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
+   816→    for (let min = 0; min < 60 * 24; min++) {
+   817→      const startMs = dayBase + min * 60 * 1000;
+   818→      const endMs = startMs + durationMs;
+   819→      const overlaps = intervals.some(
+   820→        (iv) => startMs < iv.endMs && iv.startMs < endMs
+   821→      );
+   822→      const hStr = String(Math.floor(min / 60)).padStart(2, "0");
+   823→      const mStr = String(min % 60).padStart(2, "0");
+   824→      if (overlaps) {
+   825→        if (!hiddenMinutes[hStr]) hiddenMinutes[hStr] = new Set<string>();
+   826→        hiddenMinutes[hStr].add(mStr);
+   827→      } else {
+   828→        hourHasFeasible[hStr] = true;
+   829→      }
+   830→    }
+   831→    for (let h = 0; h < 24; h++) {
+   832→      const hStr = String(h).padStart(2, "0");
+   833→      if (!hourHasFeasible[hStr]) hiddenHours.add(hStr);
+   834→    }
+   835→    return { hiddenHours, hiddenMinutes };
+   836→  };
+   837→
+   838→  // Determine the selected customer's "Khách cũ" status. A customer is "old"
+   839→  // when they have at least one completed invoice OR belong to a customer
+   840→  // group whose name contains "khách cũ". Drives which service categories are
+   841→  // visible. Mirrors the cashier module's determination so both modules stay
+   842→  // consistent.
+   843→  const watchedCustomerId = watch("customerId");
+   844→
+   845→  // --- Past-time blocking for the booking-level TimePicker ---
+   846→  // When the staff lacks book_past_date AND the selected date is today,
+   847→  // compute hiddenHours + hiddenMinutes for all times already passed so the
+   848→  // TimePicker hides them (same mechanism used for staff-busy intervals).
+   849→  const watchedDate = watch("date");
+   850→  const pastTimeHidden = useMemo(() => {
+   851→    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>> };
+   852→    if (canBookPastDate || !watchedDate) return empty;
+   853→    const m = watchedDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+   854→    if (!m) return empty;
+   855→    const selectedDay = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+   856→    selectedDay.setHours(0, 0, 0, 0);
+   857→    const today = new Date();
+   858→    today.setHours(0, 0, 0, 0);
+   859→    // Only block past times when the selected date IS today. Past dates are
+   860→    // already blocked by the DatePicker (minDate); future dates have no past
+   861→    // times to block.
+   862→    if (selectedDay.getTime() !== today.getTime()) return empty;
+   863→    const now = new Date();
+   864→    const curHour = now.getHours();
+   865→    const curMinute = now.getMinutes();
+   866→    const hiddenHours = new Set<string>();
+   867→    const hiddenMinutes: Record<string, Set<string>> = {};
+   868→    // Business hours: 08:30–19:30 (mirror time-picker constants).
+   869→    for (let h = 8; h <= 19; h++) {
+   870→      const hStr = String(h).padStart(2, "0");
+   871→      if (h < curHour) {
+   872→        // Whole hour already passed → hide entirely.
+   873→        hiddenHours.add(hStr);
+   874→      } else if (h === curHour) {
+   875→        // Current hour → hide minutes already passed (and business-rule ones).
+   876→        const mins = new Set<string>();
+   877→        for (let mi = 0; mi <= 59; mi++) {
+   878→          // Hide if before now (same hour, earlier minute) OR outside business
+   879→          // hours (08:30 open, 19:30 last booking).
+   880→          if (h === 8 && mi < 30) mins.add(String(mi).padStart(2, "0"));
+   881→          if (h === 19 && mi > 30) mins.add(String(mi).padStart(2, "0"));
+   882→          if (mi < curMinute) mins.add(String(mi).padStart(2, "0"));
+   883→        }
+   884→        if (mins.size > 0) hiddenMinutes[hStr] = mins;
+   885→      }
+   886→    }
+   887→    return { hiddenHours, hiddenMinutes };
+   888→  }, [canBookPastDate, watchedDate]);
+   889→
+   890→  const { data: selectedCustomerDetail } = useQuery({
+   891→    queryKey: ["booking-customer-type", watchedCustomerId],
+   892→    queryFn: async () => {
+   893→      if (!watchedCustomerId) return null;
+   894→      const res = await fetch(
+   895→        `/api/supabase/customers/${encodeURIComponent(watchedCustomerId)}`
+   896→      );
+   897→      const json = await res.json();
+   898→      if (!json.ok) return null;
+   899→      const groupName = (json.data.group?.name || "").toLowerCase();
+   900→      const isOld =
+   901→        json.data.customer_type === "old" || groupName.includes("khách cũ");
+   902→      return {
+   903→        id: json.data.id,
+   904→        customer_type: isOld ? "old" : ("new" as "old" | "new"),
+   905→      };
+   906→    },
+   907→    enabled: !!watchedCustomerId,
+   908→  });
+   909→  const selectedCustomerType: "old" | "new" =
+   910→    selectedCustomerDetail?.customer_type === "old" ? "old" : "new";
+   911→
+   912→  // Filter service categories based on customer type:
+   913→  // - New customer: hide "Dịch Vụ Cắt" (only the "Dành cho khách hàng mới" cut is offered).
+   914→  // - Old customer: hide "Dành cho khách hàng mới - DV Cắt" (new-customer-only cut).
+   915→  // When editing, always include the currently-selected category so the existing
+   916→  // booking's category remains visible/selectable even if it would be filtered out.
+   917→  // In multi-customer mode, show ALL categories — each slot has its own customer
+   918→  // so the booking-level customer-type filter doesn't apply.
+   919→  const visibleServiceCategories = useMemo(() => {
+   920→    if (isMultiCustomerMode) return serviceCategories;
+   921→    // Collect category IDs already selected in the form (edit mode pre-fill).
+   922→    const selectedCatIds = new Set(
+   923→      (watchedServices || [])
+   924→        .map((s) => s.serviceCategoryId)
+   925→        .filter(Boolean) as string[]
+   926→    );
+   927→    return serviceCategories.filter((cat) => {
+   928→      // Always show a category that's already selected (edit mode).
+   929→      if (selectedCatIds.has(cat.id)) return true;
+   930→      const name = cat.name.toLowerCase();
+   931→      const isNewCustomerCut = name.includes("dành cho khách hàng mới");
+   932→      // "Dịch Vụ Cắt" = the regular cut category. Must NOT be the new-customer
+   933→      // cut (which also contains "cắt" in its name). We check isNewCustomerCut
+   934→      // FIRST and exclude it, so a category name containing both phrases is
+   935→      // classified as new-customer-cut only (not both).
+   936→      const isRegularCut = !isNewCustomerCut && (name.includes("dịch vụ cắt") || name === "dịch vụ cắt");
+   937→      if (selectedCustomerType === "new") {
+   938→        // New customer: hide regular "Dịch Vụ Cắt", keep new-customer cut.
+   939→        if (isRegularCut) return false;
+   940→      } else {
+   941→        // Old customer: hide new-customer-only cut, keep regular.
+   942→        if (isNewCustomerCut) return false;
+   943→      }
+   944→      return true;
+   945→    });
+   946→  }, [serviceCategories, selectedCustomerType, watchedServices, isMultiCustomerMode]);
+   947→
+   948→  // ------------------------------------------------------------------
+   949→  // Per-slot customer-type determination (multi-customer mode).
+   950→  // For each slot, we fetch the customer's "old/new" type via the customer
+   951→  // detail API (only when the slot has a resolved customerId from the
+   952→  // autocomplete dropdown). The type controls which service categories are
+   953→  // visible for that slot:
+   954→  //   - Old customer → show "Dịch Vụ Cắt", hide "Dành cho khách hàng mới - DV Cắt"
+   955→  //   - New customer (or no customerId, or no phone+name) → hide "Dịch Vụ Cắt",
+   956→  //     show "Dành cho khách hàng mới - DV Cắt"
+   957→  // ------------------------------------------------------------------
+   958→  const slotCustomerIds = (watchedServicesForSlots || []).map(
+   959→    (s) => s?.customerId || ""
+   960→  );
+   961→  const slotCustomerTypes = useQueries({
+   962→    queries: slotCustomerIds.map((cid) => ({
+   963→      queryKey: ["booking-slot-customer-type", cid],
+   964→      queryFn: async () => {
+   965→        if (!cid) return null;
+   966→        const res = await fetch(
+   967→          `/api/supabase/customers/${encodeURIComponent(cid)}`
+   968→        );
+   969→        const json = await res.json();
+   970→        if (!json.ok) return null;
+   971→        const groupName = (json.data.group?.name || "").toLowerCase();
+   972→        const isOld =
+   973→          json.data.customer_type === "old" ||
+   974→          groupName.includes("khách cũ");
+   975→        return { cid, type: isOld ? ("old" as const) : ("new" as const) };
+   976→      },
+   977→      enabled: !!cid && isMultiCustomerMode && open,
+   978→      staleTime: 30_000,
+   979→    })),
+   980→  });
+   981→  // Map: slotIndex → "old" | "new". Default "new" for slots with no
+   982→  // customerId, no phone, or no name (per the spec: "chưa nhập SĐT và tên
+   983→  // khách → hide Dịch Vụ Cắt", i.e. treat as new customer).
+   984→  const slotTypeMap = new Map<number, "old" | "new">();
+   985→  // Leading semicolon prevents ASI from merging this expression with the
+   986→  // const declaration above (new Map()(arr).forEach — a call on the Map).
+   987→  ;(watchedServicesForSlots || []).forEach((entry, idx) => {
+   988→    const phone = (entry?.customerPhone || "").trim();
+   989→    const name = (entry?.customerName || "").trim();
+   990→    const cid = entry?.customerId || "";
+   991→    // No info entered at all → new customer (show new-customer cut).
+   992→    if (!phone && !name) {
+   993→      slotTypeMap.set(idx, "new");
+   994→      return;
+   995→    }
+   996→    // Has phone/name but no resolved customerId (typed free text, not picked
+   997→    // from dropdown) → new customer.
+   998→    if (!cid) {
+   999→      slotTypeMap.set(idx, "new");
+  1000→      return;
+  1001→    }
+  1002→    // Has a resolved customerId → use the fetched customer type.
+  1003→    const q = slotCustomerTypes[idx];
+  1004→    slotTypeMap.set(idx, q?.data?.type === "old" ? "old" : "new");
+  1005→  });
+  1006→
+  1007→  // Returns the filtered service categories for a given slot, applying the
+  1008→  // same name-based rules as visibleServiceCategories but with the slot's
+  1009→  // own customer type. Always keeps the currently-selected category so
+  1010→  // editing doesn't hide the selected value.
+  1011→  const getSlotVisibleCategories = (slotIndex: number) => {
+  1012→    if (!isMultiCustomerMode) return visibleServiceCategories;
+  1013→    const slotType = slotTypeMap.get(slotIndex) || "new";
+  1014→    const selectedCatId =
+  1015→      (watchedServicesForSlots?.[slotIndex]?.serviceCategoryId || "").trim();
+  1016→    return serviceCategories.filter((cat) => {
+  1017→      // Always show the currently-selected category (edit mode / pre-fill).
+  1018→      if (selectedCatId && cat.id === selectedCatId) return true;
+  1019→      const name = cat.name.toLowerCase();
+  1020→      const isNewCustomerCut = name.includes("dành cho khách hàng mới");
+  1021→      const isRegularCut = !isNewCustomerCut &&
+  1022→        (name.includes("dịch vụ cắt") || name === "dịch vụ cắt");
+  1023→      if (slotType === "new") {
+  1024→        // New customer: hide regular "Dịch Vụ Cắt", keep new-customer cut.
+  1025→        if (isRegularCut) return false;
+  1026→      } else {
+  1027→        // Old customer: hide new-customer-only cut, keep regular.
+  1028→        if (isNewCustomerCut) return false;
+  1029→      }
+  1030→      return true;
+  1031→    });
+  1032→  };
+  1033→
+  1034→  // Pre-fill form when editing
+  1035→  useEffect(() => {
+  1036→    if (booking) {
+  1037→      // API returns snake_case top-level fields + nested booking_services.
+  1038→      const b = booking as unknown as {
+  1039→        customer_id?: string;
+  1040→        customer_source_id?: string | null;
+  1041→        customer_channel_id?: string | null;
+  1042→        number_of_customers?: number;
+  1043→        date_time?: string;
+  1044→        note?: string | null;
+  1045→      };
+  1046→      // Derive the booking-level start date/time from booking.date_time (ISO).
+  1047→      // IMPORTANT: use the timezone-safe Vietnam helpers (toVietnamDay /
+  1048→      // toVietnamTime). Supabase stores date_time normalized to +00:00 (UTC),
+  1049→      // so the raw "THH:MM" segment of the ISO string is the UTC time — NOT
+  1050→      // the Vietnam wall-clock time the user entered. Parsing the raw segment
+  1051→      // directly would display "03:30" for a 10:30 VN booking (off by 7h).
+  1052→      // The epoch (new Date(...).getTime()) is the correct UTC instant;
+  1053→      // converting via +7h gives the user's original VN time.
+  1054→      let startDate = booking.date || "";
+  1055→      let startTime = booking.time || "";
+  1056→      if (b.date_time) {
+  1057→        if (!startDate) {
+  1058→          const isoDay = toVietnamDay(b.date_time).split("-");
+  1059→          if (isoDay.length === 3) {
+  1060→            startDate = `${isoDay[2]}/${isoDay[1]}/${isoDay[0]}`;
+  1061→          }
+  1062→        }
+  1063→        if (!startTime) {
+  1064→          startTime = toVietnamTime(b.date_time);
+  1065→        }
+  1066→      }
+  1067→      // Map booking services to form shape. Per-service date/time are no longer
+  1068→      // user-edited — they are derived on submit from the booking-level start.
+  1069→      const mapService = (s: Record<string, unknown>) => {
+  1070→        const row = s as {
+  1071→          service_id?: string;
+  1072→          serviceId?: string;
+  1073→          staff_id?: string | null;
+  1074→          staffId?: string;
+  1075→          service_category_id?: string | null;
+  1076→          serviceCategoryId?: string;
+  1077→        };
+  1078→        return {
+  1079→          serviceCategoryId: row.service_category_id || row.serviceCategoryId || "",
+  1080→          serviceId: row.service_id || row.serviceId || "",
+  1081→          staffId: row.staff_id || row.staffId || "",
+  1082→          showNote: false,
+  1083→        };
+  1084→      };
+  1085→      reset({
+  1086→        customerId:
+  1087→          (booking.customer as unknown as { id?: string })?.id ||
+  1088→          b.customer_id ||
+  1089→          "",
+  1090→        customerSourceId: booking.customerSourceId || b.customer_source_id || "",
+  1091→        customerChannelId: booking.customerChannelId || b.customer_channel_id || "",
+  1092→        numberOfCustomers: booking.numberOfCustomers || b.number_of_customers || 1,
+  1093→        status: booking.status || "confirmed",
+  1094→        // When editing a multi-customer "Cùng lịch" booking, the `note` field
+  1095→        // carries a `[[MULTI]]` JSON block (per-slot customer map). Show only
+  1096→        // the cashier's own typed note in the textarea — the structured block
+  1097→        // is parsed by display sites, never edited directly.
+  1098→        note: (() => {
+  1099→          const rawNote = booking.note || "";
+  1100→          const parsed = parseMultiCustomerNote(rawNote);
+  1101→          return parsed ? parsed.userNote : rawNote;
+  1102→        })(),
+  1103→        date: startDate,
+  1104→        time: startTime,
+  1105→        services:
+  1106→          booking.services && booking.services.length > 0
+  1107→            ? (booking.services as unknown as Array<Record<string, unknown>>).map(mapService)
+  1108→            : [
+  1109→                {
+  1110→                  serviceCategoryId: "",
+  1111→                  serviceId: "",
+  1112→                  staffId: "",
+  1113→                  showNote: false,
+  1114→                },
+  1115→              ],
+  1116→      });
+  1117→    } else {
+  1118→      // New booking. Precedence for the default date/time:
+  1119→      //   1. prefillSlot (opened by clicking an empty time slot in the
+  1120→      //      "Khung giờ" / staff-view timeline) → date/time (+ staffId) filled.
+  1121→      //   2. defaultNewSlot (opened via "Tạo mới" when there's already ≥1
+  1122→      //      booking on the viewed day) → default to the EARLIEST existing
+  1123→      //      booking's start so a 2nd+ appointment shares the same slot.
+  1124→      //   3. "" (blank) — no default.
+  1125→      // Permission guard: if the staff lacks book_past_date, a past-date slot
+  1126→      // is replaced with today's date (the slot click itself should already be
+  1127→      // blocked upstream, but this is a safety net).
+  1128→      let preDate = prefillSlot?.date || defaultNewSlot?.date || "";
+  1129→      let preTime = prefillSlot?.time || defaultNewSlot?.time || "";
+  1130→      if (!canBookPastDate && preDate) {
+  1131→        const m = preDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  1132→        if (m) {
+  1133→          // Use the +07:00 offset so slotMs is the correct UTC instant for VN
+  1134→          // midnight. Date.UTC treats VN midnight as UTC midnight → 7-hour
+  1135→          // offset → today's VN date would be considered "past" when the UTC
+  1136→          // time is already past VN midnight.
+  1137→          const slotMs = new Date(`${m[3]}-${m[2]}-${m[1]}T00:00:00+07:00`).getTime();
+  1138→          if (slotMs < Date.now()) {
+  1139→            // Past slot + no permission → fall back to today.
+  1140→            const now = new Date();
+  1141→            preDate = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
+  1142→            preTime = "";
+  1143→          }
+  1144→        }
+  1145→      }
+  1146→      const preStaffId = prefillSlot?.staffId || "";
+  1147→      reset({
+  1148→        customerId: "",
+  1149→        customerSourceId: "",
+  1150→        customerChannelId: "",
+  1151→        numberOfCustomers: 1,
+  1152→        status: "confirmed",
+  1153→        note: "",
+  1154→        date: preDate,
+  1155→        time: preTime,
+  1156→        services: [
+  1157→          {
+  1158→            serviceCategoryId: "",
+  1159→            serviceId: "",
+  1160→            staffId: preStaffId,
+  1161→            showNote: false,
+  1162→            customerPhone: "",
+  1163→            customerName: "",
+  1164→            customerId: "",
+  1165→          },
+  1166→        ],
+  1167→      });
+  1168→    }
+  1169→  }, [booking, reset, prefillSlot, defaultNewSlot, canBookPastDate]);
+  1170→
+  1171→  // When editing, pre-fill the phone/name search fields so the customer is visible.
+  1172→  useEffect(() => {
+  1173→    if (booking?.customer) {
+  1174→      setPhoneSearch(booking.customer.phone || "");
+  1175→      setNameSearch(booking.customer.name || "");
+  1176→      setShowCustomerDropdown(false);
+  1177→    } else {
+  1178→      setPhoneSearch("");
+  1179→      setNameSearch("");
+  1180→    }
+  1181→  }, [booking]);
+  1182→
+  1183→  const createMutation = useMutation({
+  1184→    mutationFn: async (data: BookingFormValues) => {
+  1185→      // Services no longer carry their own date/time. The booking-level
+  1186→      // (date, time) is the START of the FIRST service; each subsequent
+  1187→      // service starts right after the previous one ends (consecutive). All
+  1188→      // services therefore form a SINGLE booking (no more time-gap grouping).
+  1189→      const validServices = data.services.filter((s) => s.serviceId);
+  1190→      if (validServices.length === 0) {
+  1191→        throw new Error("Vui lòng chọn ít nhất 1 dịch vụ");
+  1192→      }
+  1193→      if (!data.date || !data.time) {
+  1194→        throw new Error("Vui lòng chọn ngày và giờ bắt đầu");
+  1195→      }
+  1196→
+  1197→      // Parse the booking-level start (dd/MM/yyyy + HH:mm) into ms (UTC, to
+  1198→      // match how the API stores date_time).
+  1199→      const m = data.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  1200→      const tm = data.time.match(/^(\d{1,2}):(\d{2})$/);
+  1201→      if (!m || !tm) {
+  1202→        throw new Error("Định dạng ngày/giờ không hợp lệ");
+  1203→      }
+  1204→      // Compute the booking's start time in epoch ms for client-side conflict
+  1205→      // checking. MUST use the +07:00 offset so the epoch matches the VN
+  1206→      // wall-clock time (Date.UTC treats VN hours as UTC → 7-hour offset).
+  1207→      const firstDateForMs = data.date.split("/").reverse().join("-");
+  1208→      const bookingStart = new Date(
+  1209→        `${firstDateForMs}T${data.time.padStart(5, "0")}:00+07:00`
+  1210→      ).getTime();
+  1211→      const parsed = validServices.map((entry) => {
+  1212→        const svc = services.find((s) => s.id === entry.serviceId);
+  1213→        const duration = (svc?.duration || 60) * 60 * 1000;
+  1214→        const start = bookingStart;
+  1215→        const end = start + duration;
+  1216→        return { start, end, entry };
+  1217→      });
+  1218→
+  1219→      // All services start at the same time → ONE booking (parallel staff).
+  1220→      const firstEntry = parsed[0].entry;
+  1221→      const firstDate = data.date.split("/").reverse().join("-");
+  1222→      // +07:00 offset so Postgres stores the VN time correctly (not as UTC).
+  1223→      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+  1224→      const payload = {
+  1225→        date_time: dateTime,
+  1226→        customer_id: data.customerId,
+  1227→        customer_source_id: data.customerSourceId || null,
+  1228→        customer_channel_id: data.customerChannelId || null,
+  1229→        number_of_customers: data.numberOfCustomers,
+  1230→        status: data.status,
+  1231→        note: data.note || null,
+  1232→        branch_id: selectedBranchId || null,
+  1233→        // Explicitly send the logged-in staff's id so the server records who
+  1234→        // created this booking — don't rely solely on the httpOnly cookie (which
+  1235→        // may not be forwarded through the preview gateway proxy). The server
+  1236→        // still falls back to getCurrentStaffId(request) when this is absent
+  1237→        // (e.g. kiosk /dat-lich has no logged-in user).
+  1238→        created_by: user?.id || null,
+  1239→        services: parsed.map((g) => ({
+  1240→          service_id: g.entry.serviceId,
+  1241→          service_category_id: g.entry.serviceCategoryId || null,
+  1242→          staff_id: g.entry.staffId || null,
+  1243→        })),
+  1244→      };
+  1245→      // Suppress unused-warning for firstEntry (kept for clarity / future use).
+  1246→      void firstEntry;
+  1247→      const res = await fetch("/api/supabase/bookings", {
+  1248→        method: "POST",
+  1249→        headers: { "Content-Type": "application/json" },
+  1250→        body: JSON.stringify(payload),
+  1251→      });
+  1252→      const json = await res.json();
+  1253→      if (!json.ok) {
+  1254→        throw new Error(json.error || "Không thể tạo lịch hẹn");
+  1255→      }
+  1256→      return { ok: true, data: [json.data] };
+  1257→    },
+  1258→    onSuccess: () => {
+  1259→      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1260→      // Invalidate the Cashier module's day-bookings + standalone-invoices
+  1261→      // caches so a newly created booking appears in the cashier sidebar
+  1262→      // instantly (no manual refresh needed).
+  1263→      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+  1264→      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+  1265→      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1266→      onClose();
+  1267→    },
+  1268→    onError: (error: Error) => {
+  1269→      // Server-side conflict validation returns a 400 with a conflict message.
+  1270→      // Show it in the conflict dialog instead of a plain alert.
+  1271→      setConflictMessage(error.message || "Không thể tạo lịch hẹn");
+  1272→    },
+  1273→  });
+  1274→
+  1275→  // Update mutation for edit mode — PUT the single booking with all services
+  1276→  // running consecutively from the booking-level start (date, time). There is
+  1277→  // no more time-gap splitting: every service follows the previous one.
+  1278→  const updateMutation = useMutation({
+  1279→    mutationFn: async (data: BookingFormValues) => {
+  1280→      if (!booking) throw new Error("Không tìm thấy lịch hẹn để cập nhật");
+  1281→
+  1282→      const validServices = data.services.filter((s) => s.serviceId);
+  1283→      if (validServices.length === 0) {
+  1284→        throw new Error("Vui lòng chọn ít nhất 1 dịch vụ");
+  1285→      }
+  1286→      if (!data.date || !data.time) {
+  1287→        throw new Error("Vui lòng chọn ngày và giờ bắt đầu");
+  1288→      }
+  1289→
+  1290→      // Parse the booking-level start into ms (UTC).
+  1291→      const m = data.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  1292→      const tm = data.time.match(/^(\d{1,2}):(\d{2})$/);
+  1293→      if (!m || !tm) {
+  1294→        throw new Error("Định dạng ngày/giờ không hợp lệ");
+  1295→      }
+  1296→      // Compute the booking's start time in epoch ms for client-side conflict
+  1297→      // checking (same +07:00 offset as createMutation — see above).
+  1298→      const firstDateForMs = data.date.split("/").reverse().join("-");
+  1299→      const bookingStart = new Date(
+  1300→        `${firstDateForMs}T${data.time.padStart(5, "0")}:00+07:00`
+  1301→      ).getTime();
+  1302→
+  1303→      // PARALLEL model: every service starts at the SAME booking-level start
+  1304→      // time (parallel staff). See createMutation for the rationale.
+  1305→      const parsed = validServices.map((entry) => {
+  1306→        const svc = services.find((s) => s.id === entry.serviceId);
+  1307→        const duration = (svc?.duration || 60) * 60 * 1000;
+  1308→        const start = bookingStart;
+  1309→        const end = start + duration;
+  1310→        return { start, end, entry };
+  1311→      });
+  1312→
+  1313→      const firstDate = data.date.split("/").reverse().join("-");
+  1314→      // +07:00 offset so Postgres stores the VN time correctly (not as UTC).
+  1315→      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+  1316→      const putPayload = {
+  1317→        date_time: dateTime,
+  1318→        customer_id: data.customerId,
+  1319→        customer_source_id: data.customerSourceId || null,
+  1320→        customer_channel_id: data.customerChannelId || null,
+  1321→        number_of_customers: data.numberOfCustomers,
+  1322→        status: data.status,
+  1323→        note: data.note || null,
+  1324→        branch_id: selectedBranchId || null,
+  1325→        // Send the logged-in staff's id so the server can attribute the
+  1326→        // "Chỉnh sửa" activity to them even when the auth cookie isn't sent
+  1327→        // (Preview Panel iframe third-party cookie blocking).
+  1328→        actor_staff_id: user?.id,
+  1329→        services: parsed.map((g) => ({
+  1330→          service_id: g.entry.serviceId,
+  1331→          service_category_id: g.entry.serviceCategoryId || null,
+  1332→          staff_id: g.entry.staffId || null,
+  1333→        })),
+  1334→      };
+  1335→      const putRes = await fetch(`/api/supabase/bookings/${booking.id}`, {
+  1336→        method: "PUT",
+  1337→        headers: { "Content-Type": "application/json" },
+  1338→        body: JSON.stringify(putPayload),
+  1339→      });
+  1340→      const putJson = await putRes.json();
+  1341→      if (!putJson.ok) {
+  1342→        throw new Error(putJson.error || "Không thể cập nhật lịch hẹn");
+  1343→      }
+  1344→      return { ok: true, data: [putJson.data] };
+  1345→    },
+  1346→    onSuccess: () => {
+  1347→      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1348→      // Keep the Cashier module in sync when a booking is edited (services,
+  1349→      // staff, date/time, or customer may have changed).
+  1350→      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+  1351→      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+  1352→      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1353→      onClose();
+  1354→    },
+  1355→    onError: (error: Error) => {
+  1356→      // Server-side conflict validation returns a 400 with a conflict message.
+  1357→      // Show it in the conflict dialog instead of a plain alert.
+  1358→      setConflictMessage(error.message || "Không thể cập nhật lịch hẹn");
+  1359→    },
+  1360→  });
+  1361→
+  1362→  const [conflictMessage, setConflictMessage] = useState<string>("");
+  1363→  // Existing-booking confirmation: when the customer (by phone) already has
+  1364→  // non-cancelled bookings, show a confirmation prompt listing them before
+  1365→  // actually creating/updating. `pendingExistingBookings` holds the list;
+  1366→  // `skipExistingCheck` is set true after the user confirms so the re-submit
+  1367→  // skips the check. `lastValidatedData` holds the form data between the
+  1368→  // initial submit and the confirmed re-submit.
+  1369→  const [pendingExistingBookings, setPendingExistingBookings] = useState<
+  1370→    Array<{ id: string; date: string; time: string; status: string; branchName: string; services: Array<{ name: string; staffName: string }> }>
+  1371→  >([]);
+  1372→  const [skipExistingCheck, setSkipExistingCheck] = useState(false);
+  1373→  const [lastValidatedData, setLastValidatedData] = useState<BookingFormValues | null>(null);
+  1374→
+  1375→  /**
+  1376→   * Validate the booking before submitting:
+  1377→   * 1. No service may be scheduled in the past.
+  1378→   * 2. A staff member cannot have overlapping bookings — each service entry
+  1379→   *    occupies [start, start + duration], where start is derived from the
+  1380→   *    booking-level (date, time) running CONSECUTIVELY across services. It
+  1381→   *    must not overlap with another existing (non-cancelled) booking's
+  1382→   *    service for the same staff on the same day. It also must not overlap
+  1383→   *    with another service entry in THIS same form (same staff, same day).
+  1384→   *
+  1385→   * Returns an error message string, or "" if everything is valid.
+  1386→   */
+  1387→  const validateBooking = async (data: BookingFormValues): Promise<string> => {
+  1388→    const now = Date.now();
+  1389→    if (!data.date || !data.time) {
+  1390→      return "Vui lòng chọn ngày và giờ bắt đầu";
+  1391→    }
+  1392→    const entries = data.services.filter((s) => s.serviceId && s.staffId);
+  1393→
+  1394→    // 0. One-time offer check: "Dành cho khách hàng mới - DV Cắt" can only be
+  1395→    //    booked ONCE per phone. If any service entry's category is the new-
+  1396→    //    customer cut, check the customer's phone against existing bookings.
+  1397→    //    Skip when editing the same booking (excludeBookingId) so editing the
+  1398→    //    existing cut booking (e.g. change time) doesn't block itself.
+  1399→    const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
+  1400→    const hasNewCustomerCut = entries.some(
+  1401→      (e) => e.serviceCategoryId === newCustomerCutCategoryId
+  1402→    );
+  1403→    const phone = phoneSearch.trim();
+  1404→    if (hasNewCustomerCut && phone) {
+  1405→      try {
+  1406→        const excludeParam = booking ? `&excludeBookingId=${encodeURIComponent(booking.id)}` : "";
+  1407→        const checkRes = await fetch(
+  1408→          `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(phone)}${excludeParam}`
+  1409→        );
+  1410→        const checkJson = await checkRes.json();
+  1411→        if (checkJson.ok && checkJson.data?.exists) {
+  1412→          const d = checkJson.data;
+  1413→          // Build a detailed "cannot book" message that identifies the
+  1414→          // blocking booking precisely: which customer, which service, which
+  1415→          // staff, exact date + time, branch, and status. Without these the
+  1416→          // staff cannot tell which existing appointment is blocking the new
+  1417→          // one (especially when the existing booking is already "checkout"
+  1418→          // — paid/done — so it no longer shows in the active booking list).
+  1419→          const custName = d.existingCustomerName || "(khách không rõ)";
+  1420→          const svcName = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
+  1421→          const staffName = d.existingStaffName || "(chưa phân thợ)";
+  1422→          const dateStr = d.existingDate || "—";
+  1423→          const timeStr = d.existingTime || "—";
+  1424→          const branchStr = d.existingBranchName ? `\n• Chi nhánh: ${d.existingBranchName}` : "";
+  1425→          // Translate the raw booking status into a human-readable VN label so
+  1426→          // the staff understands whether the existing booking is pending,
+  1427→          // confirmed, or already paid/checkout.
+  1428→          const statusLabel: Record<string, string> = {
+  1429→            pending: "Chờ xác nhận",
+  1430→            confirmed: "Đã xác nhận",
+  1431→            checkout: "Đã thanh toán",
+  1432→            cancelled: "Đã huỷ",
+  1433→            no_show: "Không đến",
+  1434→          };
+  1435→          const statusStr = d.existingStatus
+  1436→            ? `\n• Trạng thái: ${statusLabel[d.existingStatus] || d.existingStatus}`
+  1437→            : "";
+  1438→          return (
+  1439→            `Không thể đặt lịch vì khách hàng "${custName}" đã có một lịch "${svcName}" đã đặt trước đó.\n` +
+  1440→            `• Thợ: ${staffName}\n` +
+  1441→            `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}${statusStr}\n` +
+  1442→            `Lưu ý: ưu đãi "Dành cho khách hàng mới" chỉ được đặt 1 lần. Vui lòng huỷ/chỉnh sửa lịch cũ hoặc chọn nhóm dịch vụ khác.`
+  1443→          );
+  1444→        }
+  1445→      } catch {
+  1446→        /* best-effort — don't block on network errors */
+  1447→      }
+  1448→    }
+  1449→
+  1450→    // Parse the booking-level start (dd/MM/yyyy + HH:mm) into ms (UTC).
+  1451→    const startM = data.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  1452→    const startTm = data.time.match(/^(\d{1,2}):(\d{2})$/);
+  1453→    if (!startM || !startTm) {
+  1454→      return "Định dạng ngày/giờ không hợp lệ";
+  1455→    }
+  1456→    // Parse the booking-level start (dd/MM/yyyy + HH:mm VN) into a UTC ms epoch.
+  1457→    // The form's date/time is a VIETNAM wall-clock value (the user enters 09:00
+  1458→    // meaning 09:00 VN). `Date.UTC(...,9,0,0)` would parse it as 09:00 UTC (= 16:00
+  1459→    // VN), causing false conflicts with bookings stored at 09:00 UTC (= 16:00 VN).
+  1460→    // Correct: build the epoch for the VN instant, i.e. UTC midnight of the VN
+  1461→    // day + the VN hour/minute, then SUBTRACT 7h so the epoch is the true UTC
+  1462→    // instant of that VN wall-clock time.
+  1463→    const vnMidnightUtc = new Date(localDayStartUtc(`${startM[3]}-${startM[2]}-${startM[1]}`)).getTime();
+  1464→    const cursor = vnMidnightUtc
+  1465→      + Number(startTm[1]) * 60 * 60 * 1000
+  1466→      + Number(startTm[2]) * 60 * 1000;
+  1467→    if (isNaN(cursor)) {
+  1468→      return "Định dạng ngày/giờ không hợp lệ";
+  1469→    }
+  1470→
+  1471→    // Build the list of "slots" the user is trying to book now (same-form),
+  1472→    // running consecutively from the booking-level start.
+  1473→    type Slot = {
+  1474→      staffId: string;
+  1475→      staffName: string;
+  1476→      start: number; // epoch ms
+  1477→      end: number; // epoch ms
+  1478→      serviceName: string;
+  1479→      timeLabel: string;
+  1480→      dateLabel: string;
+  1481→    };
+  1482→    const newSlots: Slot[] = [];
+  1483→    // PARALLEL model (matches Task 18's submit + server): every service starts
+  1484→    // at the SAME booking-level start time. `cursor` here is just the booking
+  1485→    // start (constant); each slot's start = cursor.
+  1486→    for (const entry of entries) {
+  1487→      const svc = services.find((s) => s.id === entry.serviceId);
+  1488→      const stf = staffList.find((st) => st.id === entry.staffId);
+  1489→      const start = cursor;
+  1490→      const duration = (svc?.duration || 60) * 60 * 1000; // ms
+  1491→      const end = start + duration;
+  1492→
+  1493→      // 1. Past-time check — skipped when the staff has the book_past_date
+  1494→      //    permission (lets them back-date a booking + pay for it).
+  1495→      if (!canBookPastDate && start < now) {
+  1496→        return `Không thể đặt lịch vào thời điểm đã qua (${data.time} ${data.date}). Vui lòng chọn thời gian trong tương lai.`;
+  1497→      }
+  1498→      // Format this slot's time label in VIETNAM time (the user entered a VN
+  1499→      // time; `start` is the true UTC epoch of that VN instant, so convert back
+  1500→      // to VN wall-clock for display).
+  1501→      const slotDate = data.date;
+  1502→      const slotTime = toVietnamTime(start);
+  1503→      newSlots.push({
+  1504→        staffId: entry.staffId,
+  1505→        staffName: stf?.name || entry.staffId,
+  1506→        start,
+  1507→        end,
+  1508→        serviceName: svc?.name || "Dịch vụ",
+  1509→        timeLabel: slotTime,
+  1510→        dateLabel: slotDate,
+  1511→      });
+  1512→    }
+  1513→
+  1514→    // 2a. Within-form conflict: two new entries for the same staff overlapping.
+  1515→    // (Consecutive services for the SAME staff touch end-to-start but don't
+  1516→    // overlap, so this only fires for genuinely overlapping same-staff slots.)
+  1517→    for (let i = 0; i < newSlots.length; i++) {
+  1518→      for (let j = i + 1; j < newSlots.length; j++) {
+  1519→        const a = newSlots[i];
+  1520→        const b = newSlots[j];
+  1521→        if (a.staffId === b.staffId && a.start < b.end && b.start < a.end) {
+  1522→          return (
+  1523→            `Không thể đặt lịch vì trùng thời gian trong cùng phiếu.\n` +
+  1524→            `• Thợ: ${a.staffName}\n` +
+  1525→            `• Dịch vụ 1: ${a.serviceName} (${toVietnamTime(a.start)} - ${toVietnamTime(a.end)} ngày ${a.dateLabel})\n` +
+  1526→            `• Dịch vụ 2: ${b.serviceName} (${toVietnamTime(b.start)} - ${toVietnamTime(b.end)} ngày ${b.dateLabel})\n` +
+  1527→            `Trong một lịch hẹn, mỗi dịch vụ phải dùng một thợ khác nhau. Vui lòng chọn thợ khác cho 1 trong 2 dịch vụ.`
+  1528→          );
+  1529→        }
+  1530→      }
+  1531→    }
+  1532→
+  1533→    // 2b. Conflict with existing bookings in Supabase.
+  1534→    // All services share the booking-level date, so fetch that one day.
+  1535→    const isoDay = `${startM[3]}-${startM[2]}-${startM[1]}`;
+  1536→    const params = new URLSearchParams();
+  1537→    params.set("page", "1");
+  1538→    params.set("limit", "200");
+  1539→    // Timezone-safe: isoDay is a Vietnam calendar day (parsed from the form's
+  1540→    // DD/MM/YYYY date). Convert to its UTC range so Supabase filters by the
+  1541→    // correct window (no 7-hour shift).
+  1542→    const vd = localDayToUtcRange(isoDay);
+  1543→    params.set("date_from", vd.from);
+  1544→    params.set("date_to", vd.to);
+  1545→    if (selectedBranchId) params.set("branch_id", selectedBranchId);
+  1546→    try {
+  1547→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+  1548→      const json = await res.json();
+  1549→      if (json.ok) {
+  1550→        const existingBookings = json.data || [];
+  1551→        for (const existing of existingBookings) {
+  1552→          // Skip cancelled / no_show bookings.
+  1553→          const status = existing.status as string;
+  1554→          if (status === "cancelled" || status === "no_show") continue;
+  1555→          // When editing, skip the booking being edited itself.
+  1556→          if (booking && existing.id === booking.id) continue;
+  1557→          const exDateTime = existing.date_time as string;
+  1558→          if (!exDateTime) continue;
+  1559→          const exStart = new Date(exDateTime).getTime();
+  1560→          if (isNaN(exStart)) continue;
+  1561→          const exServices = (existing.services || []) as Array<{
+  1562→            staff_id?: string | null;
+  1563→            staff?: { name?: string } | null;
+  1564→            service?: { duration?: number; name?: string } | null;
+  1565→            service_id?: string;
+  1566→          }>;
+  1567→          for (const exSvc of exServices) {
+  1568→            const exStaffId = exSvc.staff_id;
+  1569→            if (!exStaffId) continue;
+  1570→            const exDuration = (exSvc.service?.duration || 60) * 60 * 1000;
+  1571→            const exEnd = exStart + exDuration;
+  1572→            // Check overlap against each new slot for the same staff.
+  1573→            for (const ns of newSlots) {
+  1574→              if (ns.staffId === exStaffId && ns.start < exEnd && exStart < ns.end) {
+  1575→                // Build a detailed conflict message that identifies the
+  1576→                // blocking booking precisely — booking code, customer,
+  1577→                // service, staff, the FULL time range (start → end) of the
+  1578→                // existing booking, branch, status, AND the new service's
+  1579→                // time range that overlaps it. Without the end time + duration
+  1580→                // the staff can't tell how long the existing appointment runs,
+  1581→                // which is the exact scenario the user described (a 9:30 90-min
+  1582→                // service would overlap a 10:30-12:00 booking).
+  1583→                const stf = staffList.find((s) => s.id === exStaffId);
+  1584→                const staffName = stf?.name || exSvc.staff?.name || exStaffId;
+  1585→                const svcName = exSvc.service?.name || "Dịch vụ";
+  1586→                const exDurationMin = Math.round(exDuration / 60000);
+  1587→                const exTimeStr = toVietnamTime(exStart);
+  1588→                const exEndTimeStr = toVietnamTime(exEnd);
+  1589→                const nsTimeStr = toVietnamTime(ns.start);
+  1590→                const nsEndTimeStr = toVietnamTime(ns.end);
+  1591→                const exDateStr = isoDay.split("-").reverse().join("/");
+  1592→                const exCode = (existing.code as string) || "";
+  1593→                const exCustName = (existing.customer as { name?: string } | null)?.name || "";
+  1594→                const exBranchName = (existing.branch as { name?: string } | null)?.name || "";
+  1595→                const statusLabel: Record<string, string> = {
+  1596→                  pending: "Chờ xác nhận",
+  1597→                  confirmed: "Đã xác nhận",
+  1598→                  checkin: "Đang phục vụ",
+  1599→                  checkout: "Đã thanh toán",
+  1600→                  cancelled: "Đã huỷ",
+  1601→                  no_show: "Không đến",
+  1602→                };
+  1603→                const exStatusLabel = status
+  1604→                  ? statusLabel[status] || status
+  1605→                  : "";
+  1606→                const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+  1607→                const custLine = exCustName ? `• Khách: ${exCustName}\n` : "";
+  1608→                const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+  1609→                const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+  1610→                return (
+  1611→                  `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+  1612→                  `${codeLine}:\n` +
+  1613→                  custLine +
+  1614→                  `• Thợ: ${staffName}\n` +
+  1615→                  `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+  1616→                  `• Thời gian: ${exTimeStr} - ${exEndTimeStr} ngày ${exDateStr}\n` +
+  1617→                  branchLine +
+  1618→                  statusLine +
+  1619→                  `→ Trùng với dịch vụ mới bạn đang đặt (${nsTimeStr} - ${nsEndTimeStr} ngày ${exDateStr}). ` +
+  1620→                  `Vui lòng chọn khung giờ hoặc thợ khác.`
+  1621→                );
+  1622→              }
+  1623→            }
+  1624→          }
+  1625→        }
+  1626→      }
+  1627→    } catch {
+  1628→      // Network/parse error — don't block the submit; the server may still reject.
+  1629→    }
+  1630→
+  1631→    return "";
+  1632→  };
+  1633→
+  1634→  // A booking is LOCKED (read-only) when it's in a terminal state:
+  1635→  // - checkin: customer is currently being served → locked until checkout.
+  1636→  // - checkout: already paid → immutable historical record.
+  1637→  // - cancelled: the appointment was cancelled → view-only, no edits.
+  1638→  // - no_show: the customer didn't show up → view-only, no edits.
+  1639→  // The dialog still opens so the user can review the details, but every
+  1640→  // field becomes read-only and the Save button is disabled.
+  1641→  // (Terminal statuses also free up the time slot — a NEW booking can be
+  1642→  // created at the same time, since validateBooking skips cancelled/no_show
+  1643→  // bookings in the conflict check.)
+  1644→  const isLocked =
+  1645→    booking?.status === "checkin" ||
+  1646→    booking?.status === "checkout" ||
+  1647→    booking?.status === "cancelled" ||
+  1648→    booking?.status === "no_show";
+  1649→  const lockReason =
+  1650→    booking?.status === "checkin"
+  1651→      ? "Lịch hẹn đã checkin không thể chỉnh sửa. Vui lòng checkout trước khi thay đổi thông tin."
+  1652→      : booking?.status === "checkout"
+  1653→        ? "Lịch hẹn đã thanh toán không thể chỉnh sửa."
+  1654→        : booking?.status === "cancelled"
+  1655→          ? "Lịch hẹn đã hủy không thể chỉnh sửa. Bạn có thể tạo lịch hẹn mới cho khung giờ này vì slot đã được giải phóng."
+  1656→          : booking?.status === "no_show"
+  1657→            ? "Lịch hẹn đánh dấu 'Không đến' không thể chỉnh sửa. Bạn có thể tạo lịch hẹn mới cho khung giờ này vì slot đã được giải phóng."
+  1658→            : "";
+  1659→
+  1660→  // ------------------------------------------------------------------
+  1661→  // resolveCustomerId — shared customer-resolution logic used by BOTH the
+  1662→  // single-customer flow (top-level phone/name) and the multi-customer flow
+  1663→  // (per-slot phone/name). Returns the resolved customer_id, or an error.
+  1664→  //   1. If both phone+name empty → create a "Khách vãng lai" guest record.
+  1665→  //   2. If phone (or name) typed → match an existing customer by exact
+  1666→  //      phone (or exact name when no phone), else create a new customer.
+  1667→  // ------------------------------------------------------------------
+  1668→  const resolveCustomerId = async (
+  1669→    phone: string,
+  1670→    name: string
+  1671→  ): Promise<{ ok: boolean; customerId?: string; error?: string }> => {
+  1672→    const typedPhone = phone.trim();
+  1673→    const typedName = name.trim();
+  1674→    if (!typedPhone && !typedName) {
+  1675→      // Create a guest record (same as the walk-in flow).
+  1676→      try {
+  1677→        const res = await fetch("/api/supabase/customers", {
+  1678→          method: "POST",
+  1679→          headers: { "Content-Type": "application/json" },
+  1680→          body: JSON.stringify({
+  1681→            name: WALKIN_SOURCE_NAME,
+  1682→            phone: "",
+  1683→            customer_type: "guest",
+  1684→            source_id: WALKIN_SOURCE_ID,
+  1685→            branch_id: selectedBranchId || null,
+  1686→          }),
+  1687→        });
+  1688→        const json = await res.json();
+  1689→        if (json.ok && json.data?.id) {
+  1690→          return { ok: true, customerId: json.data.id };
+  1691→        }
+  1692→        return { ok: false, error: json.error || "Không thể tạo khách vãng lai" };
+  1693→      } catch {
+  1694→        return { ok: false, error: "Không thể tạo khách vãng lai" };
+  1695→      }
+  1696→    }
+  1697→    try {
+  1698→      const params = new URLSearchParams();
+  1699→      params.set("limit", "20");
+  1700→      if (typedPhone) params.set("search", typedPhone);
+  1701→      else params.set("search", typedName);
+  1702→      const matchRes = await fetch(`/api/supabase/customers?${params.toString()}`);
+  1703→      const matchJson = await matchRes.json();
+  1704→      let matchedId: string | null = null;
+  1705→      let matchedName: string | null = null;
+  1706→      if (matchJson.ok && Array.isArray(matchJson.data)) {
+  1707→        const exact = (matchJson.data as Array<{ id: string; phone?: string | null; name?: string }>).find(
+  1708→          (c) =>
+  1709→            typedPhone
+  1710→              ? (c.phone || "") === typedPhone
+  1711→              : (c.name || "") === typedName
+  1712→        );
+  1713→        if (exact) {
+  1714→          matchedId = exact.id;
+  1715→          matchedName = (exact.name as string) || "";
+  1716→        }
+  1717→      }
+  1718→      if (matchedId) {
+  1719→        // If the cashier typed a name that differs from the existing
+  1720→        // customer's current name (and the typed name is non-empty), update
+  1721→        // the customer profile so it reflects the latest info. This fulfils
+  1722→        // the requirement that entered info is saved to the customer profile.
+  1723→        if (typedName && typedName !== matchedName) {
+  1724→          try {
+  1725→            await fetch(`/api/supabase/customers/${matchedId}`, {
+  1726→              method: "PUT",
+  1727→              headers: { "Content-Type": "application/json" },
+  1728→              body: JSON.stringify({ name: typedName }),
+  1729→            });
+  1730→            queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+  1731→          } catch {
+  1732→            // Best-effort — the booking still proceeds with the matched id.
+  1733→          }
+  1734→        }
+  1735→        return { ok: true, customerId: matchedId };
+  1736→      }
+  1737→      // No match → create a new customer with the typed phone + name.
+  1738→      const createRes = await fetch("/api/supabase/customers", {
+  1739→        method: "POST",
+  1740→        headers: { "Content-Type": "application/json" },
+  1741→        body: JSON.stringify({
+  1742→          name: typedName || typedPhone,
+  1743→          phone: typedPhone || undefined,
+  1744→          branch_id: selectedBranchId || null,
+  1745→        }),
+  1746→      });
+  1747→      const createJson = await createRes.json();
+  1748→      if (createJson.ok && createJson.data?.id) {
+  1749→        queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+  1750→        return { ok: true, customerId: createJson.data.id };
+  1751→      }
+  1752→      // Edge case: the POST returned 409 because a customer with the same
+  1753→      // phone was created in the meantime (race condition or the search
+  1754→      // missed it). Use the existing customer returned in the 409 body.
+  1755→      if (createJson.existing_customer?.id) {
+  1756→        // Update the name if a different name was typed.
+  1757→        if (typedName && typedName !== (createJson.existing_customer.name || "")) {
+  1758→          try {
+  1759→            await fetch(`/api/supabase/customers/${createJson.existing_customer.id}`, {
+  1760→              method: "PUT",
+  1761→              headers: { "Content-Type": "application/json" },
+  1762→              body: JSON.stringify({ name: typedName }),
+  1763→            });
+  1764→          } catch {
+  1765→            // best-effort
+  1766→          }
+  1767→        }
+  1768→        queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
+  1769→        return { ok: true, customerId: createJson.existing_customer.id };
+  1770→      }
+  1771→      return { ok: false, error: createJson.error || "Không thể tạo khách hàng" };
+  1772→    } catch {
+  1773→      return { ok: false, error: "Không thể tạo khách hàng" };
+  1774→    }
+  1775→  };
+  1776→
+  1777→  // ------------------------------------------------------------------
+  1778→  // Multi-customer submit handler (CREATE mode, numberOfCustomers >= 2).
+  1779→  //   - scheduleMode "same": 1 POST with all N services, customer_id =
+  1780→  //     slot 0's resolved id. The other slots' customer info is NOT sent
+  1781→  //     to the API (the booking API only accepts one customer_id per
+  1782→  //     booking — a documented limitation).
+  1783→  //   - scheduleMode "different": N separate POSTs, each with 1 service
+  1784→  //     and that slot's resolved customer_id. All N bookings share the
+  1785→  //     same date_time + branch_id + status. Failures are reported but
+  1786→  //     already-created bookings stay.
+  1787→  // ------------------------------------------------------------------
+  1788→  const handleMultiCustomerSubmit = async (data: BookingFormValues) => {
+  1789→    setIsMultiSubmitting(true);
+  1790→    try {
+  1791→      // 1. Resolve customer_id for each slot.
+  1792→      const resolvedIds: string[] = [];
+  1793→      for (let i = 0; i < data.services.length; i++) {
+  1794→        const svc = data.services[i];
+  1795→        const result = await resolveCustomerId(
+  1796→          svc.customerPhone || "",
+  1797→          svc.customerName || ""
+  1798→        );
+  1799→        if (!result.ok || !result.customerId) {
+  1800→          setConflictMessage(
+  1801→            `Khách #${i + 1}: ${result.error || "Không thể xác định khách hàng"}`
+  1802→          );
+  1803→          return;
+  1804→        }
+  1805→        resolvedIds.push(result.customerId);
+  1806→      }
+  1807→
+  1808→      // 2. Validate the booking (conflict check). Works for both modes —
+  1809→      //    within-form staff uniqueness + existing-booking overlap.
+  1810→      const error = await validateBooking(data);
+  1811→      if (error) {
+  1812→        setConflictMessage(error);
+  1813→        return;
+  1814→      }
+  1815→
+  1816→      // 3. Build the shared date_time + booking-level fields.
+  1817→      const firstDate = data.date.split("/").reverse().join("-");
+  1818→      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+  1819→
+  1820→      if (scheduleMode === "same") {
+  1821→        // --- Cùng lịch: 1 POST with all services ---
+  1822→        // The booking API stores only ONE customer_id per booking (slot 0's
+  1823→        // resolved id). To preserve the per-slot customer mapping so display
+  1824→        // sites (Staff View, Cashier) can show each service's own customer,
+  1825→        // we persist a structured `[[MULTI]]` JSON block in the booking's
+  1826→        // `note` field. Slots with no phone/name → walkin:true (rendered as
+  1827→        // "Khách vãng lai"). The cashier's own typed note is kept inside the
+  1828→        // same block as `userNote` (parsed back out by display sites, so the
+  1829→        // "Ghi chú & dịch vụ" column never shows the raw JSON).
+  1830→        const slotEntries = data.services.filter((s) => s.serviceId);
+  1831→        const slots = slotEntries.map((g, i) => {
+  1832→          const name = (g.customerName || "").trim();
+  1833→          const phone = (g.customerPhone || "").trim();
+  1834→          const walkin = !name && !phone;
+  1835→          return {
+  1836→            id: resolvedIds[i] || "",
+  1837→            name: walkin ? "Khách vãng lai" : name,
+  1838→            phone: walkin ? "" : phone,
+  1839→            walkin,
+  1840→          };
+  1841→        });
+  1842→        const combinedNote = buildMultiCustomerNote(
+  1843→          slots,
+  1844→          (data.note || "").trim()
+  1845→        );
+  1846→        const payload = {
+  1847→          date_time: dateTime,
+  1848→          customer_id: resolvedIds[0],
+  1849→          customer_source_id: data.customerSourceId || null,
+  1850→          customer_channel_id: data.customerChannelId || null,
+  1851→          number_of_customers: data.numberOfCustomers,
+  1852→          status: data.status,
+  1853→          note: combinedNote,
+  1854→          branch_id: selectedBranchId || null,
+  1855→          created_by: user?.id || null,
+  1856→          services: slotEntries.map((g) => ({
+  1857→            service_id: g.serviceId,
+  1858→            service_category_id: g.serviceCategoryId || null,
+  1859→            staff_id: g.staffId || null,
+  1860→          })),
+  1861→        };
+  1862→        try {
+  1863→          const res = await fetch("/api/supabase/bookings", {
+  1864→            method: "POST",
+  1865→            headers: { "Content-Type": "application/json" },
+  1866→            body: JSON.stringify(payload),
+  1867→          });
+  1868→          const json = await res.json();
+  1869→          if (!json.ok) {
+  1870→            setConflictMessage(json.error || "Không thể tạo lịch hẹn");
+  1871→            return;
+  1872→          }
+  1873→          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1874→          // Sync the Cashier module so the new multi-customer booking appears
+  1875→          // in the sidebar immediately.
+  1876→          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+  1877→          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+  1878→          queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1879→          onClose();
+  1880→        } catch (e) {
+  1881→          setConflictMessage(
+  1882→            e instanceof Error ? e.message : "Không thể tạo lịch hẹn"
+  1883→          );
+  1884→        }
+  1885→      } else {
+  1886→        // --- Khác lịch: N separate POSTs, 1 service each ---
+  1887→        const results: Array<{ slot: number; ok: boolean; error?: string }> = [];
+  1888→        for (let i = 0; i < data.services.length; i++) {
+  1889→          const svc = data.services[i];
+  1890→          const payload = {
+  1891→            date_time: dateTime,
+  1892→            customer_id: resolvedIds[i],
+  1893→            customer_source_id: data.customerSourceId || null,
+  1894→            customer_channel_id: data.customerChannelId || null,
+  1895→            number_of_customers: 1,
+  1896→            status: data.status,
+  1897→            note: data.note || null,
+  1898→            branch_id: selectedBranchId || null,
+  1899→            created_by: user?.id || null,
+  1900→            services: [
+  1901→              {
+  1902→                service_id: svc.serviceId,
+  1903→                service_category_id: svc.serviceCategoryId || null,
+  1904→                staff_id: svc.staffId || null,
+  1905→              },
+  1906→            ],
+  1907→          };
+  1908→          try {
+  1909→            const res = await fetch("/api/supabase/bookings", {
+  1910→              method: "POST",
+  1911→              headers: { "Content-Type": "application/json" },
+  1912→              body: JSON.stringify(payload),
+  1913→            });
+  1914→            const json = await res.json();
+  1915→            if (!json.ok) {
+  1916→              results.push({
+  1917→                slot: i,
+  1918→                ok: false,
+  1919→                error: json.error || "Lỗi không xác định",
+  1920→              });
+  1921→            } else {
+  1922→              results.push({ slot: i, ok: true });
+  1923→            }
+  1924→          } catch (e) {
+  1925→            results.push({
+  1926→              slot: i,
+  1927→              ok: false,
+  1928→              error: e instanceof Error ? e.message : "Lỗi mạng",
+  1929→            });
+  1930→          }
+  1931→        }
+  1932→        const failed = results.filter((r) => !r.ok);
+  1933→        const successCount = results.length - failed.length;
+  1934→        if (failed.length > 0) {
+  1935→          const errorMsg = failed
+  1936→            .map((f) => `Khách #${f.slot + 1}: ${f.error}`)
+  1937→            .join("\n");
+  1938→          setConflictMessage(
+  1939→            `Đã tạo ${successCount}/${results.length} lịch hẹn. ` +
+  1940→              (successCount > 0
+  1941→                ? "Các lịch còn lại lỗi:\n"
+  1942→                : "Tất cả đều lỗi:\n") +
+  1943→              errorMsg
+  1944→          );
+  1945→        } else {
+  1946→          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1947→          // Sync the Cashier module so the new bookings appear immediately.
+  1948→          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+  1949→          queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+  1950→          queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1951→          onClose();
+  1952→        }
+  1953→      }
+  1954→    } finally {
+  1955→      setIsMultiSubmitting(false);
+  1956→    }
+  1957→  };
+  1958→
+  1959→  const onSubmit = async (data: BookingFormValues) => {
+  1960→    if (isLocked) {
+  1961→      setConflictMessage(lockReason);
+  1962→      return;
+  1963→    }
+  1964→    // Permission guard: only staff with `assign_staff` may pick an employee.
+  1965→    // When granted, each service MUST have a staff assigned (enforced here
+  1966→    // since the schema-level staffId is optional to allow no-staff bookings).
+  1967→    // When NOT granted, staffId is left empty (booking has no specific employee).
+  1968→    if (canAssignStaff) {
+  1969→      const missing = data.services.some((s) => !s.staffId);
+  1970→      if (missing) {
+  1971→        setConflictMessage("Vui lòng chọn nhân viên cho tất cả dịch vụ");
+  1972→        return;
+  1973→      }
+  1974→    }
+  1975→    // Multi-customer mode (CREATE only, numberOfCustomers >= 2): delegate to
+  1976→    // the dedicated handler which resolves per-slot customer_ids and creates
+  1977→    // either 1 booking (Cùng lịch) or N bookings (Khác lịch).
+  1978→    if (isMultiCustomerMode) {
+  1979→      await handleMultiCustomerSubmit(data);
+  1980→      return;
+  1981→    }
+  1982→    // Walk-in booking: ensure a guest customer record exists. Guest records
+  1983→    // (customer_type="guest") are hidden from the Customers module until an
+  1984→    // invoice is paid. We create one per walk-in booking so the booking has a
+  1985→    // valid customer_id (required by the API) without polluting Customers.
+  1986→    if (isWalkIn && !data.customerId) {
+  1987→      try {
+  1988→        const res = await fetch("/api/supabase/customers", {
+  1989→          method: "POST",
+  1990→          headers: { "Content-Type": "application/json" },
+  1991→          body: JSON.stringify({
+  1992→            name: WALKIN_SOURCE_NAME,
+  1993→            phone: "",
+  1994→            customer_type: "guest",
+  1995→            source_id: WALKIN_SOURCE_ID,
+  1996→            branch_id: selectedBranchId || null,
+  1997→          }),
+  1998→        });
+  1999→        const json = await res.json();
+  2000→        if (json.ok && json.data?.id) {
+
+[showing lines 1-2000 of 3275; use offset=2001 with limit to continue reading]
