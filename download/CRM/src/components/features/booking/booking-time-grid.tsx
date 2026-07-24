@@ -1529,7 +1529,7 @@ function CustomerGridChip({
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
   // Draggable popup: click-hold anywhere (except buttons) → reposition, double-click → reset
   const [hoverOpen, setHoverOpen] = useState(false);
-  const { isDragging, isDraggingRef, style: dragStyle, onContentMouseDown, resetPosition } = useDraggablePopup();
+  const { isDragging, isDraggingRef, style: dragStyle, onContentPointerDown, resetPosition } = useDraggablePopup();
 
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1628,16 +1628,18 @@ function CustomerGridChip({
         className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl"
         style={dragStyle}
       >
-        {/* Draggable wrapper — click-hold on any non-button area to reposition */}
+        {/* Draggable wrapper — click-hold on drag handle to reposition */}
         <div
-          onMouseDown={onContentMouseDown}
+          onPointerDown={onContentPointerDown}
           onDoubleClick={resetPosition}
-          className={`relative ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
-          title="Kéo để thay đổi vị trí · Nhấp đúp để trở về mặc định"
+          className={`relative ${isDragging ? "cursor-grabbing select-none" : ""}`}
         >
-          {/* Visual drag indicator at the top */}
-          <div className="flex items-center justify-center py-1 bg-gray-50/60 border-b border-gray-100 select-none">
-            <GripVertical className="h-3.5 w-3.5 text-gray-300" />
+          {/* Visual drag handle at the top — clear affordance for dragging */}
+          <div
+            className="flex items-center justify-center h-7 cursor-grab active:cursor-grabbing bg-muted/60 border-b select-none rounded-t-md"
+            title="Kéo để di chuyển · Nhấp đúp để trở về mặc định"
+          >
+            <GripVertical className="h-4 w-4 text-muted-foreground/60" />
           </div>
           <BookingHoverDetails
             booking={booking}

@@ -5,9 +5,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const STORAGE_KEY = "booking-popup-offset";
 const DRAG_THRESHOLD = 3; // px before considering it a real drag vs click
 
-// Interactive elements that should NOT trigger a drag
-const INTERACTIVE_SELECTOR = 'button, a, select, input, [role="button"], [data-slot="select-trigger"], [data-slot="select-value"]';
-
 interface PopupOffset {
   dx: number;
   dy: number;
@@ -40,11 +37,14 @@ function clearStoredOffset() {
 }
 
 /**
- * Hook that makes a HoverCard popup draggable from ANY non-interactive area.
- * - Click-hold on any non-button/non-link area → drag to reposition
- * - Double-click on non-interactive area → reset to default position
- * - Position offset is persisted in localStorage so all future
- *   popup appearances (on any slot) use the same relative offset
+ * Hook that makes a popup draggable via pointer events.
+ * - Click-hold on the drag handle (or any non-interactive area) → drag to reposition
+ * - Double-click → reset to default position
+ * - Offset is persisted in localStorage and applied to ALL future popup appearances
+ *
+ * KEY DESIGN: The offset transform MUST be applied to an INNER div (not the
+ * Radix HoverCardContent) because Radix uses CSS transform for open/close
+ * animations which would override our translate().
  */
 export function useDraggablePopup() {
   const [storedOffset, setStoredOffset] = useState<PopupOffset | null>(loadStoredOffset);
@@ -71,24 +71,33 @@ export function useDraggablePopup() {
     : storedOffset || { dx: 0, dy: 0 };
 
   /**
-   * MouseDown handler for the popup content wrapper.
-   * Checks if the click target is an interactive element (button, link, etc.)
-   * — if so, lets the normal click happen (no drag).
-   * — if NOT interactive, starts a drag operation.
+   * PointerDown handler for the popup content wrapper.
+   * Uses pointer events (not mouse events) for compatibility with Radix UI,
+   * which uses pointer events internally for its DismissableLayer.
    *
-   * IMPORTANT: We do NOT call e.stopPropagation() because Radix HoverCard
-   * needs to receive pointer events to keep the popup open. We DO call
-   * e.preventDefault() to prevent text selection during drag.
+   * IMPORTANT: We call e.stopPropagation() to prevent Radix from processing
+   * this pointerDown as a "pointerDownOutside" event that could close the popup.
+   * We also call e.preventDefault() to prevent text selection during drag.
    */
-  const onContentMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const onContentPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      // Only handle primary button (left click)
+      if (e.button !== 0) return;
+
       // Skip if clicking on interactive elements (buttons, links, selects, etc.)
       const target = e.target as HTMLElement;
-      if (target.closest(INTERACTIVE_SELECTOR)) {
+      if (
+        target.closest(
+          'button, a, select, input, [role="button"], [data-slot="select-trigger"], [data-slot="select-value"], textarea'
+        )
+      ) {
         return; // Let the normal click happen — no drag
       }
 
-      e.preventDefault(); // Prevent text selection during drag
+      // Stop Radix from handling this pointer event (prevent dismiss on outside click)
+      e.stopPropagation();
+      // Prevent text selection during drag
+      e.preventDefault();
 
       const baseDx = storedOffset?.dx || 0;
       const baseDy = storedOffset?.dy || 0;
@@ -110,7 +119,7 @@ export function useDraggablePopup() {
   useEffect(() => {
     if (!isDragging) return;
 
-    const onMouseMove = (e: MouseEvent) => {
+    const onPointerMove = (e: PointerEvent) => {
       if (!dragStartRef.current) return;
       e.preventDefault(); // Prevent text selection during drag
       const dx = e.clientX - dragStartRef.current.mouseX;
@@ -123,7 +132,7 @@ export function useDraggablePopup() {
       setDragDelta({ dx, dy });
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = () => {
       if (!dragStartRef.current) return;
 
       if (hasMovedRef.current) {
@@ -145,11 +154,12 @@ export function useDraggablePopup() {
       hasMovedRef.current = false;
     };
 
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    // Use pointer events for consistency with onContentPointerDown
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
     return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
     };
   }, [isDragging]);
 
@@ -159,17 +169,21 @@ export function useDraggablePopup() {
     setDragDelta({ dx: 0, dy: 0 });
   }, []);
 
-  // CSS transform style to apply on HoverCardContent
+  // Use the CSS `translate` property (Transforms Level 2) which works
+  // INDEPENDENTLY from `transform`. Radix HoverCard uses `transform` for
+  // open/close animations (zoom-in-95, slide-in-from-*), and those animations
+  // with fill-mode:forwards would override our `transform: translate()`.
+  // The separate `translate` property is NOT affected by those animations.
   const style: React.CSSProperties =
     totalOffset.dx !== 0 || totalOffset.dy !== 0
-      ? { transform: `translate(${totalOffset.dx}px, ${totalOffset.dy}px)` }
+      ? { translate: `${totalOffset.dx}px ${totalOffset.dy}px` }
       : {};
 
   return {
     isDragging,
     isDraggingRef,
     style,
-    onContentMouseDown,
+    onContentPointerDown,
     resetPosition,
     hasStoredPosition: !!storedOffset,
     totalOffset,

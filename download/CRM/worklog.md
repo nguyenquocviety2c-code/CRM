@@ -1962,3 +1962,21 @@ Stage Summary:
 - Part 2a (Chưa xếp column): verified "Chưa xếp nhân viên" column appears with "1 lịch hẹn" in View nhân viên after booking created without staff.
 - Part 2b (View khách hàng Xếp nhân viên): verified blue "Xếp nhân viên" clickable link (count:1) for no-staff booking. VLM confirmed.
 - Part 3 (walk-in sync): verified full flow — walk-in tab → add service (isGuestCustomer:true, search visible) → link "Trung Kiên" (isGuestCustomer:false, customerId:d9f26eff) → booking API confirms customer_id synced from guest to d9f26eff (Trung Kiên), staffId still "". Booking shows "Trung Kiên" + "LH000088" in /booking page.
+---
+Task ID: 4
+Agent: Main (Z.ai Code)
+Task: Fix draggable popup feature in booking views (Staff View and Customer View Khung giờ)
+
+Work Log:
+- Analyzed the root cause of drag not working: CSS `transform: translate()` on HoverCardContent was being overridden by Radix HoverCard's animation transforms (`zoom-in-95`, `slide-in-from-*`) which use `transform` with `fill-mode:forwards`. After animation completes, `transform: scale(1)` from the animation overrides our `transform: translate(dx,dy)`, making the popup appear at default position.
+- Changed approach to use the CSS `translate` property (Transforms Level 2) instead of `transform: translate()`. The `translate` property works INDEPENDENTLY from `transform` and is NOT overridden by Radix's animation transforms.
+- Changed event handling from `onMouseDown` to `onPointerDown` (renamed to `onContentPointerDown`) for compatibility with Radix UI's pointer event system. Added `e.stopPropagation()` to prevent Radix from processing the pointer event as a "pointerDownOutside" dismiss.
+- Made the drag handle more prominent: h-7 (28px) instead of py-1, larger GripVertical icon (h-4 w-4 instead of h-3.5 w-3.5), cursor-grab/active:cursor-grabbing, bg-muted/60 with rounded-t-md.
+- Updated both booking-time-grid.tsx (Customer View CustomerGridChip) and booking-staff-view.tsx (Staff View BookingChip) to use the new API.
+- Verified: no TypeScript compilation errors, no browser console errors, app running correctly on port 3000.
+
+Stage Summary:
+- Root cause: Radix HoverCard animation `transform` overrides our `transform: translate()`
+- Fix: Use CSS `translate` property (independent from `transform`) for popup offset
+- Fix: Use `onPointerDown` instead of `onMouseDown` for Radix compatibility
+- Both Customer View (Khung giờ) and Staff View popup now support drag-to-reposition with localStorage persistence
