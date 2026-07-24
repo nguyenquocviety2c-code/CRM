@@ -1425,10 +1425,16 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   //     order remains in the list so the cashier can review what was cancelled.
   const cancelBookingMutation = useMutation({
     mutationFn: async () => {
-      if (!activeTabId || !activeCustomer || !invoice) {
+      // Capture the tabId at mutation START — NOT from the current
+      // activeTabId which may change if the user switches tabs while
+      // the PATCH/PUT request is in flight. Without this, onSuccess
+      // would set cancelled=true on the WRONG tab (the one the user
+      // switched to), making unrelated orders appear cancelled.
+      const capturedTabId = activeTabId;
+      if (!capturedTabId || !activeCustomer || !invoice) {
         throw new Error("Chưa chọn đơn hàng");
       }
-      const meta = tabMeta[activeTabId];
+      const meta = tabMeta[capturedTabId];
       const bookingId = meta?.bookingId;
 
       // ---- Path 0: walk-in tab with an existing pending invoice ----
@@ -1473,7 +1479,8 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           code: (json.data as { code?: string })?.code || "",
           id: (json.data as { id?: string })?.id,
           productOnly: true,
-        } as { code: string; id?: string; productOnly: boolean };
+          capturedTabId,
+        } as { code: string; id?: string; productOnly: boolean; capturedTabId: string };
       }
 
       // ---- Path 1: order has a booking (contains services) ----
@@ -1485,7 +1492,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || "Không thể hủy đơn hàng");
-        return { code: (json.data as { code?: string })?.code || "", productOnly: false };
+        return { code: (json.data as { code?: string })?.code || "", productOnly: false, capturedTabId };
       }
 
       // ---- Path 2: product-only order (no booking) ----
@@ -1559,11 +1566,18 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         code: (json.data as { code?: string; id?: string })?.code || "",
         id: (json.data as { id?: string })?.id,
         productOnly: true,
-      } as { code: string; id?: string; productOnly: boolean };
+        capturedTabId,
+      } as { code: string; id?: string; productOnly: boolean; capturedTabId: string };
     },
     onSuccess: (data) => {
-      // Set cancelled flag in the persisted store so it survives page navigation.
-      if (activeTabId) updateTabMeta(activeTabId, { cancelled: true });
+      // Use the capturedTabId (the tab that was active when the mutation
+      // started), NOT the current activeTabId which may have changed if
+      // the user switched tabs while the cancel request was in flight.
+      // Without this, cancelling Tab A then switching to Tab B before the
+      // response arrives would mark Tab B as cancelled — even though only
+      // Tab A's booking was actually cancelled in the database.
+      const tabId = data.capturedTabId;
+      if (tabId) updateTabMeta(tabId, { cancelled: true });
       // Refresh both modules so the cancelled status shows everywhere.
       queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
@@ -1574,9 +1588,9 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
 
       // For product-only cancellations, link the tab to the created cancelled
       // invoice so the InvoiceSummary shows the "Đơn hàng đã hủy" banner and
-      // the saved items.
-      if (activeTabId && data.productOnly && data.id) {
-        updateTabMeta(activeTabId, {
+      // the saved items. Use capturedTabId for the same race-condition reason.
+      if (tabId && data.productOnly && data.id) {
+        updateTabMeta(tabId, {
           invoiceId: data.id,
           bookingCode: data.code || undefined,
         });

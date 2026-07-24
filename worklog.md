@@ -1,19 +1,20 @@
 ---
-Task ID: 2
+Task ID: 3
 Agent: main
-Task: Update "Xem lịch hẹn" display and add "Tạo vào lúc" creation timestamp
+Task: Fix cancel race condition bug and extend existing booking confirmation dialog logic
 
 Work Log:
-- Removed booking code from "Xem lịch hẹn" text in both walk-in branch and booking branch (was "Xem lịch hẹn: LHxxx", now just "Xem lịch hẹn")
-- Removed booking code from "Hóa đơn" text in both branches (was "Hóa đơn: HDxxx", now just "Hóa đơn")
-- Added "Tạo vào lúc" + creation timestamp after appointment date/time in both walk-in branch and booking branch
-- Format: "24/07/2026 08:30 • Tạo vào lúc 24/07/2026 07:48"
-- Added `created_at: string | null` to TodayBooking interface since Supabase already returns this field
-- Used toVietnamDay/toVietnamTime for timezone-safe conversion of created_at (UTC → VN wall-clock)
-- Verified with Agent Browser: both walk-in and booking tabs show updated format correctly
+- Found root cause of cancel bug: invoice-summary.tsx onSuccess callback reads activeTabId from CURRENT Zustand state, not from when the mutation was triggered. If user switches tabs while PATCH is in flight, cancelled=true gets set on wrong tab.
+- Fixed by capturing tabId at mutationFn start (capturedTabId), returning it in mutation result, and using it in onSuccess instead of activeTabId.
+- Also fixed the second activeTabId reference in onSuccess for product-only cancellations (updateTabMeta for invoiceId/bookingCode).
+- Extended by-phone API to support customerId parameter ( alongside phone). Now accepts phone OR customerId OR both.
+- Updated service-selector.tsx existing booking check: uses phone OR customerId (excluding walkin- synthetic IDs), passes excludeBookingId, uses URLSearchParams for cleaner URL construction.
+- Updated booking-dialog.tsx existing booking check: uses phone OR customerId, passes excludeBookingId via URLSearchParams.
+- Verified by-phone API: customerId lookup returns bookings correctly, excludeBookingId excludes specified booking.
+- Lint passed with only pre-existing warnings.
 
 Stage Summary:
-- "Xem lịch hẹn" now displays without booking code suffix
-- "Hóa đơn" now displays without invoice code suffix
-- Appointment date/time now includes "Tạo vào lúc" with exact creation timestamp
-- All changes are in src/components/features/cashier/customer-tabs.tsx
+- Cancel race condition fixed: capturedTabId ensures cancelled flag only set on the correct tab
+- Existing booking confirmation dialog now works by customerId (when phone unavailable)
+- excludeBookingId parameter properly passed to avoid showing current tab's own booking in the confirmation dialog
+- Files modified: invoice-summary.tsx, service-selector.tsx, booking-dialog.tsx, by-phone/route.ts

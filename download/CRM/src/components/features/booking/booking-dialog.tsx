@@ -2097,16 +2097,23 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       setConflictMessage(error);
       return;
     }
-    // Existing-booking confirmation: if the customer (by phone) already has
-    // non-cancelled bookings (excluding the one being edited), show a
-    // confirmation prompt listing them. Only proceed when the user confirms.
+    // Existing-booking confirmation: if the customer (by phone OR customerId)
+    // already has non-cancelled bookings (excluding the one being edited), show
+    // a confirmation prompt listing them. Only proceed when the user confirms.
     // Skipped on the re-submit after confirmation (skipExistingCheck).
+    // Uses phone when available (preferred), falls back to customerId when
+    // phone is empty (e.g. customer selected by name only).
     const phone = phoneSearch.trim();
-    if (!skipExistingCheck && phone) {
+    const cid = watchedCustomerId || "";
+    if (!skipExistingCheck && (phone || cid)) {
       try {
         const excludeParam = booking ? `&excludeBookingId=${encodeURIComponent(booking.id)}` : "";
+        const params = new URLSearchParams();
+        if (phone) params.set("phone", phone);
+        else if (cid) params.set("customerId", cid);
+        if (excludeParam) params.set("excludeBookingId", booking!.id);
         const existRes = await fetch(
-          `/api/supabase/bookings/by-phone?phone=${encodeURIComponent(phone)}${excludeParam}`
+          `/api/supabase/bookings/by-phone?${params.toString()}`
         );
         const existJson = await existRes.json();
         if (existJson.ok && Array.isArray(existJson.data) && existJson.data.length > 0) {

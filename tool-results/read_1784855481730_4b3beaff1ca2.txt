@@ -1,0 +1,664 @@
+     1→import { NextRequest, NextResponse } from "next/server";
+     2→import { supabaseAdmin } from "@/lib/supabase";
+     3→import { localDayStartUtc, localDayEndUtc } from "@/lib/utils";
+     4→import { getCurrentStaffId } from "@/lib/auth/current-staff";
+     5→
+     6→// Note: the `bookings` table does not have FK constraints registered
+     7→// for `customer_id` -> `customers.id` or `customer_source_id` -> `customer_sources.id`
+     8→// in this Supabase schema, and the `customer_channels` table does not exist.
+     9→// So we only join booking_services and branches here, and enrich the customer
+    10→// (and source) data manually after fetching.
+    11→const BOOKING_SELECT =
+    12→  "*, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, booking_id, service_id, staff_id, service_category_id, sort_order, service:services!service_id(id, name, code, price, duration), category:service_categories!service_category_id(id, name))";
+    13→
+    14→/**
+    15→ * Enrich a list of booking rows with customer (and customer source) data.
+    16→ * Done as a manual batch lookup because the FK is not registered in PostgREST.
+    17→ */
+    18→async function enrichBookings(
+    19→  rows: Array<Record<string, unknown>>
+    20→): Promise<void> {
+    21→  const customerIds = new Set<string>();
+    22→  const sourceIds = new Set<string>();
+    23→  for (const r of rows) {
+    24→    if (r.customer_id) customerIds.add(String(r.customer_id));
+    25→    if (r.customer_source_id) sourceIds.add(String(r.customer_source_id));
+    26→  }
+    27→
+    28→  const customerMap = new Map<string, Record<string, unknown>>();
+    29→  if (customerIds.size > 0) {
+    30→    const { data: customers } = await supabaseAdmin
+    31→      .from("customers")
+    32→      .select("id, code, name, phone, email")
+    33→      .in("id", Array.from(customerIds));
+    34→    if (customers) {
+    35→      for (const c of customers) {
+    36→        customerMap.set(String(c.id), c as Record<string, unknown>);
+    37→      }
+    38→    }
+    39→  }
+    40→
+    41→  const sourceMap = new Map<string, Record<string, unknown>>();
+    42→  if (sourceIds.size > 0) {
+    43→    const { data: sources } = await supabaseAdmin
+    44→      .from("customer_sources")
+    45→      .select("id, name")
+    46→      .in("id", Array.from(sourceIds));
+    47→    if (sources) {
+    48→      for (const s of sources) {
+    49→        sourceMap.set(String(s.id), s as Record<string, unknown>);
+    50→      }
+    51→    }
+    52→  }
+    53→
+    54→  for (const r of rows) {
+    55→    const cid = r.customer_id ? String(r.customer_id) : null;
+    56→    r.customer = cid ? customerMap.get(cid) ?? null : null;
+    57→    const sid = r.customer_source_id ? String(r.customer_source_id) : null;
+    58→    r.source = sid ? sourceMap.get(sid) ?? null : null;
+    59→  }
+    60→}
+    61→
+    62→/**
+    63→ * Re-sync booking_services for a booking: delete existing rows and re-insert.
+    64→ */
+    65→async function syncBookingServices(
+    66→  bookingId: string,
+    67→  services: unknown
+    68→): Promise<{ error: string | null }> {
+    69→  const { error: delErr } = await supabaseAdmin
+    70→    .from("booking_services")
+    71→    .delete()
+    72→    .eq("booking_id", bookingId);
+    73→  if (delErr) {
+    74→    return { error: `Failed to clear booking services: ${delErr.message}` };
+    75→  }
+    76→
+    77→  if (!Array.isArray(services) || services.length === 0) {
+    78→    return { error: null };
+    79→  }
+    80→
+    81→  const rows = (
+    82→    services as Array<{
+    83→      service_id?: string;
+    84→      staff_id?: string;
+    85→      service_category_id?: string;
+    86→      sort_order?: number;
+    87→      id?: string;
+    88→    }>
+    89→  )
+    90→    .map((s, idx) => ({
+    91→      booking_id: bookingId,
+    92→      service_id: s.service_id || null,
+    93→      staff_id: s.staff_id ?? null,
+    94→      service_category_id: s.service_category_id || null,
+    95→      sort_order: s.sort_order !== undefined ? Number(s.sort_order) : idx,
+    96→    }))
+    97→    .filter((s) => s.service_id);
+    98→
+    99→  if (rows.length === 0) {
+   100→    return { error: null };
+   101→  }
+   102→
+   103→  const { error: insErr } = await supabaseAdmin
+   104→    .from("booking_services")
+   105→    .insert(rows);
+   106→  if (insErr) {
+   107→    return { error: `Failed to update booking services: ${insErr.message}` };
+   108→  }
+   109→  return { error: null };
+   110→}
+   111→
+   112→export async function GET(
+   113→  _request: NextRequest,
+   114→  { params }: { params: Promise<{ id: string }> }
+   115→) {
+   116→  try {
+   117→    const { id } = await params;
+   118→    const { data, error } = await supabaseAdmin
+   119→      .from("bookings")
+   120→      .select(BOOKING_SELECT)
+   121→      .eq("id", id)
+   122→      .maybeSingle();
+   123→
+   124→    if (error) {
+   125→      return NextResponse.json(
+   126→        { ok: false, error: error.message },
+   127→        { status: 500 }
+   128→      );
+   129→    }
+   130→    if (!data) {
+   131→      return NextResponse.json(
+   132→        { ok: false, error: "Booking not found" },
+   133→        { status: 404 }
+   134→      );
+   135→    }
+   136→
+   137→    await enrichBookings([data as Record<string, unknown>]);
+   138→    return NextResponse.json({ ok: true, data });
+   139→  } catch (error: unknown) {
+   140→    return NextResponse.json(
+   141→      { ok: false, error: error instanceof Error ? error.message : "Failed" },
+   142→      { status: 500 }
+   143→    );
+   144→  }
+   145→}
+   146→
+   147→export async function PUT(
+   148→  request: NextRequest,
+   149→  { params }: { params: Promise<{ id: string }> }
+   150→) {
+   151→  try {
+   152→    const { id } = await params;
+   153→    const body = await request.json();
+   154→
+   155→    if (!body || typeof body !== "object") {
+   156→      return NextResponse.json(
+   157→        { ok: false, error: "Invalid body" },
+   158→        { status: 400 }
+   159→      );
+   160→    }
+   161→
+   162→    const { services, ...rest } = body;
+   163→
+   164→    // Fetch the booking's current state BEFORE updating, so we can:
+   165→    //  1. Build a change description for the "Chỉnh sửa" activity log.
+   166→    //  2. Get the linked invoice (if any) to attach the activity to.
+   167→    let beforeBooking: Record<string, unknown> | null = null;
+   168→    let bookingInvoiceId: string | null = null;
+   169→    let bookingInvoiceCode: string | null = null;
+   170→    let bookingBranchId: string | null = null;
+   171→    let beforeServices: Array<{ service_id: string; staff_id: string | null; service_category_id: string | null; sort_order: number }> = [];
+   172→    try {
+   173→      const { data: before } = await supabaseAdmin
+   174→        .from("bookings")
+   175→        .select("status, branch_id, date_time, duration, note, number_of_customers, customer_id, customer_source_id, customer_channel_id, invoice:invoices(id, code)")
+   176→        .eq("id", id)
+   177→        .maybeSingle();
+   178→      beforeBooking = before as Record<string, unknown> | null;
+   179→      bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
+   180→      // The invoice join returns an ARRAY (PostgREST to-many), so extract [0].
+   181→      const invRaw = (before as { invoice?: unknown })?.invoice;
+   182→      const inv = Array.isArray(invRaw) ? invRaw[0] as { id?: string; code?: string } | null : invRaw as { id?: string; code?: string } | null;
+   183→      bookingInvoiceId = inv?.id ?? null;
+   184→      bookingInvoiceCode = inv?.code ?? null;
+   185→      const { data: svcRows } = await supabaseAdmin
+   186→        .from("booking_services")
+   187→        .select("service_id, staff_id, service_category_id, sort_order")
+   188→        .eq("booking_id", id)
+   189→        .order("sort_order", { ascending: true });
+   190→      beforeServices = (svcRows ?? []) as typeof beforeServices;
+   191→    } catch {
+   192→      // best-effort — proceed without activity logging
+   193→    }
+   194→
+   195→    const updateData: Record<string, unknown> = {};
+   196→    if (rest.code !== undefined) updateData.code = rest.code || null;
+   197→    if (rest.date_time !== undefined)
+   198→      updateData.date_time = rest.date_time || null;
+   199→    if (rest.duration !== undefined)
+   200→      updateData.duration =
+   201→        rest.duration === null ? null : Number(rest.duration);
+   202→    if (rest.status !== undefined) updateData.status = rest.status || null;
+   203→    if (rest.note !== undefined) updateData.note = rest.note || null;
+   204→    if (rest.number_of_customers !== undefined)
+   205→      updateData.number_of_customers =
+   206→        rest.number_of_customers === null
+   207→          ? null
+   208→          : Number(rest.number_of_customers);
+   209→    if (rest.customer_source_id !== undefined)
+   210→      updateData.customer_source_id = rest.customer_source_id || null;
+   211→    if (rest.customer_channel_id !== undefined)
+   212→      updateData.customer_channel_id = rest.customer_channel_id || null;
+   213→    if (rest.customer_id !== undefined)
+   214→      updateData.customer_id = rest.customer_id || null;
+   215→    if (rest.branch_id !== undefined)
+   216→      updateData.branch_id = rest.branch_id || null;
+   217→    if (rest.created_by !== undefined)
+   218→      updateData.created_by = rest.created_by || null;
+   219→
+   220→    // === Server-side staff conflict validation (edit mode) ===
+   221→    // PARALLEL model: every service in the booking starts at the SAME
+   222→    // booking-level start time (each runs on a different staff, simultaneously).
+   223→    // Skip the booking being edited itself when checking existing bookings.
+   224→    const effectiveDateTime =
+   225→      typeof updateData.date_time === "string" ? updateData.date_time : null;
+   226→    if (effectiveDateTime && Array.isArray(services) && services.length > 0) {
+   227→      const bookingStart = new Date(effectiveDateTime).getTime();
+   228→      if (!isNaN(bookingStart)) {
+   229→        // Fetch service durations for the new booking's services.
+   230→        const newServiceIds = services
+   231→          .map((s: { service_id?: string }) => s.service_id)
+   232→          .filter((sid): sid is string => typeof sid === "string" && sid.length > 0);
+   233→        const newDurations = new Map<string, number>();
+   234→        if (newServiceIds.length > 0) {
+   235→          const { data: svcRows } = await supabaseAdmin
+   236→            .from("services")
+   237→            .select("id, duration")
+   238→            .in("id", newServiceIds);
+   239→          for (const r of svcRows || []) {
+   240→            newDurations.set(r.id, Number(r.duration) || 60);
+   241→          }
+   242→        }
+   243→
+   244→        // Build new slots running in PARALLEL (all start at bookingStart).
+   245→        const newSlots = services
+   246→          .map((s: { service_id?: string; staff_id?: string | null }) => {
+   247→            if (!s.staff_id || !s.service_id) return null;
+   248→            const dur = (newDurations.get(s.service_id) || 60) * 60 * 1000;
+   249→            const start = bookingStart;
+   250→            const end = start + dur;
+   251→            return { staffId: s.staff_id, start, end };
+   252→          })
+   253→          .filter((x): x is { staffId: string; start: number; end: number } => x !== null);
+   254→
+   255→        // 2a. Within-form conflict: in the parallel model, two services with
+   256→        // the SAME staff both start at bookingStart → overlap → reject. This
+   257→        // enforces "within one booking, each service must use a DIFFERENT staff".
+   258→        for (let i = 0; i < newSlots.length; i++) {
+   259→          for (let j = i + 1; j < newSlots.length; j++) {
+   260→            const a = newSlots[i];
+   261→            const b = newSlots[j];
+   262→            if (a.staffId === b.staffId && a.start < b.end && b.start < a.end) {
+   263→              return NextResponse.json(
+   264→                { ok: false, error: "Không thể đặt lịch vì trùng nhân viên trong cùng phiếu: mỗi dịch vụ trong một lịch hẹn phải dùng thợ khác nhau." },
+   265→                { status: 400 }
+   266→              );
+   267→            }
+   268→          }
+   269→        }
+   270→
+   271→        // 2b. Conflict with existing bookings (skip the one being edited).
+   272→        // bookingStart is a UTC ms epoch; convert to the Vietnam calendar day
+   273→        // (UTC+7) so the conflict window matches the day the staff/user sees.
+   274→        const dayStart = new Date(bookingStart);
+   275→        const vnDay = new Date(bookingStart + 7 * 60 * 60 * 1000);
+   276→        const isoDay = `${vnDay.getUTCFullYear()}-${String(vnDay.getUTCMonth() + 1).padStart(2, "0")}-${String(vnDay.getUTCDate()).padStart(2, "0")}`;
+   277→        let existingQuery = supabaseAdmin
+   278→          .from("bookings")
+   279→          .select(BOOKING_SELECT)
+   280→          .gte("date_time", localDayStartUtc(isoDay))
+   281→          .lte("date_time", localDayEndUtc(isoDay));
+   282→        if (updateData.branch_id) existingQuery = existingQuery.eq("branch_id", updateData.branch_id);
+   283→        const { data: existingBookings } = await existingQuery;
+   284→
+   285→        // Pre-fetch staff + customer names for the conflict message (batched).
+   286→        const editConflictStaffIds = new Set<string>();
+   287→        const editConflictCustomerIds = new Set<string>();
+   288→        for (const ex of existingBookings || []) {
+   289→          for (const s of (ex.services || []) as Array<{ staff_id?: string | null }>) {
+   290→            if (s.staff_id) editConflictStaffIds.add(String(s.staff_id));
+   291→          }
+   292→          if (ex.customer_id) editConflictCustomerIds.add(String(ex.customer_id));
+   293→        }
+   294→        const editStaffMap = new Map<string, string>();
+   295→        if (editConflictStaffIds.size > 0) {
+   296→          const { data: rows } = await supabaseAdmin
+   297→            .from("staff")
+   298→            .select("id, name")
+   299→            .in("id", Array.from(editConflictStaffIds));
+   300→          for (const r of rows || []) editStaffMap.set(String(r.id), String(r.name));
+   301→        }
+   302→        const editCustMap = new Map<string, string>();
+   303→        if (editConflictCustomerIds.size > 0) {
+   304→          const { data: rows } = await supabaseAdmin
+   305→            .from("customers")
+   306→            .select("id, name")
+   307→            .in("id", Array.from(editConflictCustomerIds));
+   308→          for (const r of rows || []) editCustMap.set(String(r.id), String(r.name));
+   309→        }
+   310→        const toVnTimeEdit = (ms: number): string => {
+   311→          const d = new Date(ms + 7 * 60 * 60 * 1000);
+   312→          return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+   313→        };
+   314→        const statusLabelEdit: Record<string, string> = {
+   315→          pending: "Chờ xác nhận",
+   316→          confirmed: "Đã xác nhận",
+   317→          checkin: "Đang phục vụ",
+   318→          checkout: "Đã thanh toán",
+   319→          cancelled: "Đã huỷ",
+   320→          no_show: "Không đến",
+   321→        };
+   322→
+   323→        for (const ex of existingBookings || []) {
+   324→          if (ex.id === id) continue; // skip the booking being edited
+   325→          if (ex.status === "cancelled" || ex.status === "no_show") continue;
+   326→          const exStart = new Date(ex.date_time).getTime();
+   327→          if (isNaN(exStart)) continue;
+   328→          for (const exSvc of (ex.services || []) as Array<{ staff_id?: string | null; service?: { duration?: number; name?: string } | null }>) {
+   329→            if (!exSvc.staff_id) continue;
+   330→            const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+   331→            const exEnd = exStart + exDur;
+   332→            for (const ns of newSlots) {
+   333→              if (ns.staffId === exSvc.staff_id && ns.start < exEnd && exStart < ns.end) {
+   334→                const exTime = toVnTimeEdit(exStart);
+   335→                const exEndTime = toVnTimeEdit(exEnd);
+   336→                const nsTime = toVnTimeEdit(ns.start);
+   337→                const nsEndTime = toVnTimeEdit(ns.end);
+   338→                const exDateStr = isoDay.split("-").reverse().join("/");
+   339→                const staffName = editStaffMap.get(String(exSvc.staff_id)) || "nhân viên";
+   340→                const svcName = exSvc.service?.name || "dịch vụ";
+   341→                const exCode = ex.code ? String(ex.code) : "";
+   342→                const exCustomerName = ex.customer_id
+   343→                  ? (editCustMap.get(String(ex.customer_id)) || "")
+   344→                  : "";
+   345→                const exBranchName = (ex.branch as { name?: string } | null)?.name || "";
+   346→                const exDurationMin = Math.round(exDur / 60000);
+   347→                const exStatusLabel = ex.status
+   348→                  ? statusLabelEdit[String(ex.status)] || String(ex.status)
+   349→                  : "";
+   350→                const codeLine = exCode ? `Lịch ${exCode}` : "Một lịch đã đặt trước đó";
+   351→                const custLine = exCustomerName ? `• Khách: ${exCustomerName}\n` : "";
+   352→                const branchLine = exBranchName ? `• Chi nhánh: ${exBranchName}\n` : "";
+   353→                const statusLine = exStatusLabel ? `• Trạng thái: ${exStatusLabel}\n` : "";
+   354→                return NextResponse.json(
+   355→                  {
+   356→                    ok: false,
+   357→                    error:
+   358→                      `Không thể đặt lịch vì trùng thời gian với một lịch đã đặt trước đó.\n` +
+   359→                      `${codeLine}:\n` +
+   360→                      custLine +
+   361→                      `• Thợ: ${staffName}\n` +
+   362→                      `• Dịch vụ: ${svcName} (${exDurationMin} phút)\n` +
+   363→                      `• Thời gian: ${exTime} - ${exEndTime} ngày ${exDateStr}\n` +
+   364→                      branchLine +
+   365→                      statusLine +
+   366→                      `→ Trùng với dịch vụ mới bạn đang đặt (${nsTime} - ${nsEndTime} ngày ${exDateStr}). ` +
+   367→                      `Vui lòng chọn khung giờ hoặc thợ khác.`,
+   368→                  },
+   369→                  { status: 400 }
+   370→                );
+   371→              }
+   372→            }
+   373→          }
+   374→        }
+   375→      }
+   376→    }
+   377→
+   378→    if (Object.keys(updateData).length > 0) {
+   379→      const { error } = await supabaseAdmin
+   380→        .from("bookings")
+   381→        .update(updateData)
+   382→        .eq("id", id);
+   383→      if (error) {
+   384→        return NextResponse.json(
+   385→          { ok: false, error: error.message },
+   386→          { status: 500 }
+   387→        );
+   388→      }
+   389→    }
+   390→
+   391→    // Sync services if provided
+   392→    if (services !== undefined) {
+   393→      const { error: svcErr } = await syncBookingServices(id, services);
+   394→      if (svcErr) {
+   395→        return NextResponse.json(
+   396→          { ok: false, error: svcErr },
+   397→          { status: 500 }
+   398→        );
+   399→      }
+   400→    }
+   401→
+   402→    // === Log a "Chỉnh sửa" (UPDATE_INVOICE) activity ONLY when the booking
+   403→    //     actually changed ===
+   404→    // The user wants the "Chỉnh sửa" row to appear ONLY when there's a real
+   405→    // change (time, services, customer, note, etc.). If the user opens the edit
+   406→    // dialog and clicks Save without changing anything, NO "Chỉnh sửa" row is
+   407→    // logged. Only logged when the booking has a linked invoice (activities are
+   408→    // tied to invoices).
+   409→    if (bookingInvoiceId && beforeBooking) {
+   410→      const actorStaffId = getCurrentStaffId(request) || (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
+   411→      // Build a change description by comparing BEFORE vs AFTER for each field.
+   412→      const parts: string[] = [];
+   413→      if (rest.date_time !== undefined && rest.date_time !== (beforeBooking as { date_time?: string | null }).date_time) parts.push("ngày giờ");
+   414→      if (rest.duration !== undefined && Number(rest.duration) !== Number((beforeBooking as { duration?: number | null }).duration)) parts.push("thời lượng");
+   415→      if (rest.customer_id !== undefined && rest.customer_id !== (beforeBooking as { customer_id?: string | null }).customer_id) parts.push("khách hàng");
+   416→      if (rest.note !== undefined && rest.note !== (beforeBooking as { note?: string | null }).note) parts.push("ghi chú");
+   417→      if (rest.number_of_customers !== undefined && Number(rest.number_of_customers) !== Number((beforeBooking as { number_of_customers?: number | null }).number_of_customers)) parts.push("số khách");
+   418→      if (rest.customer_source_id !== undefined && (rest.customer_source_id || null) !== ((beforeBooking as { customer_source_id?: string | null }).customer_source_id || null)) parts.push("nguồn khách");
+   419→      if (rest.customer_channel_id !== undefined && (rest.customer_channel_id || null) !== ((beforeBooking as { customer_channel_id?: string | null }).customer_channel_id || null)) parts.push("kênh đặt lịch");
+   420→      if (rest.branch_id !== undefined && rest.branch_id !== (beforeBooking as { branch_id?: string | null }).branch_id) parts.push("chi nhánh");
+   421→      // Services: compare old vs new by serializing (service_id + staff_id +
+   422→      // service_category_id + sort_order) for each slot. Only flag as changed
+   423→      // when the set of service slots actually differs.
+   424→      if (services !== undefined && Array.isArray(services)) {
+   425→        const newSvcKey = services
+   426→          .map((s: { service_id?: string; staff_id?: string | null; service_category_id?: string | null; sort_order?: number }) =>
+   427→            `${s.service_id || ""}|${s.staff_id || ""}|${s.service_category_id || ""}|${s.sort_order ?? 0}`)
+   428→          .sort().join(";");
+   429→        const oldSvcKey = beforeServices
+   430→          .map((s) => `${s.service_id}|${s.staff_id || ""}|${s.service_category_id || ""}|${s.sort_order ?? 0}`)
+   431→          .sort().join(";");
+   432→        if (newSvcKey !== oldSvcKey) parts.push("dịch vụ");
+   433→      }
+   434→      // Only log the activity if at least one field actually changed.
+   435→      if (parts.length > 0) {
+   436→        const changeDetail = `Chỉnh sửa lịch hẹn: ${parts.join(", ")}`;
+   437→        try {
+   438→          await supabaseAdmin.from("invoice_activities").insert({
+   439→            invoice_id: bookingInvoiceId,
+   440→            invoice_code: bookingInvoiceCode,
+   441→            action: "UPDATE_INVOICE",
+   442→            detail: changeDetail,
+   443→            value: null,
+   444→            branch_id: bookingBranchId,
+   445→            created_by: actorStaffId,
+   446→          });
+   447→        } catch {
+   448→          // best-effort — don't fail the booking edit
+   449→        }
+   450→      }
+   451→    }
+   452→
+   453→    const { data: refreshed, error: fetchErr } = await supabaseAdmin
+   454→      .from("bookings")
+   455→      .select(BOOKING_SELECT)
+   456→      .eq("id", id)
+   457→      .single();
+   458→
+   459→    if (fetchErr) {
+   460→      return NextResponse.json(
+   461→        { ok: false, error: fetchErr.message },
+   462→        { status: 500 }
+   463→      );
+   464→    }
+   465→
+   466→    await enrichBookings([refreshed as Record<string, unknown>]);
+   467→    return NextResponse.json({ ok: true, data: refreshed });
+   468→  } catch (error: unknown) {
+   469→    return NextResponse.json(
+   470→      { ok: false, error: error instanceof Error ? error.message : "Failed" },
+   471→      { status: 500 }
+   472→    );
+   473→  }
+   474→}
+   475→
+   476→export async function PATCH(
+   477→  request: NextRequest,
+   478→  { params }: { params: Promise<{ id: string }> }
+   479→) {
+   480→  try {
+   481→    const { id } = await params;
+   482→    const body = await request.json();
+   483→
+   484→    if (!body || typeof body !== "object") {
+   485→      return NextResponse.json(
+   486→        { ok: false, error: "Invalid body" },
+   487→        { status: 400 }
+   488→      );
+   489→    }
+   490→
+   491→    const { services, ...rest } = body;
+   492→
+   493→    // Fetch the booking's current state BEFORE updating, so we can detect
+   494→    // status transitions and log the appropriate invoice_activity.
+   495→    let oldStatus: string | null = null;
+   496→    let bookingInvoiceId: string | null = null;
+   497→    let bookingInvoiceCode: string | null = null;
+   498→    let bookingBranchId: string | null = null;
+   499→    try {
+   500→      const { data: before } = await supabaseAdmin
+   501→        .from("bookings")
+   502→        .select("status, branch_id, invoice:invoices(id, code)")
+   503→        .eq("id", id)
+   504→        .maybeSingle();
+   505→      oldStatus = (before as { status?: string | null } | null)?.status ?? null;
+   506→      bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
+   507→      // The invoice join returns an ARRAY (PostgREST to-many), so extract [0].
+   508→      const invRaw2 = (before as { invoice?: unknown })?.invoice;
+   509→      const inv = Array.isArray(invRaw2) ? invRaw2[0] as { id?: string; code?: string } | null : invRaw2 as { id?: string; code?: string } | null;
+   510→      bookingInvoiceId = inv?.id ?? null;
+   511→      bookingInvoiceCode = inv?.code ?? null;
+   512→    } catch {
+   513→      // best-effort — proceed without activity logging
+   514→    }
+   515→
+   516→    const newStatus = rest.status !== undefined ? String(rest.status) : null;
+   517→
+   518→    const updateData: Record<string, unknown> = {};
+   519→    const allowedFields = [
+   520→      "code",
+   521→      "date_time",
+   522→      "duration",
+   523→      "status",
+   524→      "note",
+   525→      "number_of_customers",
+   526→      "customer_source_id",
+   527→      "customer_channel_id",
+   528→      "customer_id",
+   529→      "branch_id",
+   530→      "created_by",
+   531→      "reminder_at",
+   532→    ];
+   533→
+   534→    for (const field of allowedFields) {
+   535→      if (rest[field] === undefined) continue;
+   536→      if (["duration", "number_of_customers"].includes(field)) {
+   537→        updateData[field] = rest[field] === null ? null : Number(rest[field]);
+   538→      } else {
+   539→        updateData[field] = rest[field] === null ? null : rest[field];
+   540→      }
+   541→    }
+   542→
+   543→    if (Object.keys(updateData).length > 0) {
+   544→      const { error } = await supabaseAdmin
+   545→        .from("bookings")
+   546→        .update(updateData)
+   547→        .eq("id", id);
+   548→      if (error) {
+   549→        return NextResponse.json(
+   550→          { ok: false, error: error.message },
+   551→          { status: 500 }
+   552→        );
+   553→      }
+   554→    }
+   555→
+   556→    if (services !== undefined) {
+   557→      const { error: svcErr } = await syncBookingServices(id, services);
+   558→      if (svcErr) {
+   559→        return NextResponse.json(
+   560→          { ok: false, error: svcErr },
+   561→          { status: 500 }
+   562→        );
+   563→      }
+   564→    }
+   565→
+   566→
+   567→    // === Log invoice activity for status transitions ===
+   568→    // When the booking's status changes, log the appropriate activity so the
+   569→    // "Lịch sử thao tác" table reflects it. The actor is the currently
+   570→    // logged-in staff (from the auth cookie). For kiosk-placed bookings
+   571→    // (created_by is null), the actor remains null — enriched with the
+   572→    // customer name on read.
+   573→    if (newStatus && newStatus !== oldStatus && bookingInvoiceId) {
+   574→      // Cookie is the primary source (httpOnly, tamper-proof). The body's
+   575→      // actor_staff_id is a FALLBACK for when the cookie isn't sent (Preview
+   576→      // Panel iframe third-party cookie blocking) — the client sends the
+   577→      // logged-in staff's id from the auth store so the actor is always
+   578→      // captured. Uses a dedicated field (not `created_by`, which is the
+   579→      // booking's original-creator column and must not be overwritten).
+   580→      const actorStaffId = getCurrentStaffId(request) || (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
+   581→      let activityAction: string | null = null;
+   582→      let activityDetail = "";
+   583→      if (newStatus === "checkin") {
+   584→        activityAction = "CHECKIN";
+   585→        activityDetail = "Checkin lịch hẹn";
+   586→      } else if (newStatus === "no_show") {
+   587→        activityAction = "NO_SHOW";
+   588→        activityDetail = "Đánh dấu không đến";
+   589→      } else if (newStatus === "cancelled") {
+   590→        activityAction = "CANCEL";
+   591→        activityDetail = "Hủy lịch hẹn";
+   592→      } else if (newStatus === "checkout") {
+   593→        activityAction = "CHECKOUT";
+   594→        activityDetail = "Hoàn tất thanh toán";
+   595→      }
+   596→      if (activityAction) {
+   597→        try {
+   598→          await supabaseAdmin.from("invoice_activities").insert({
+   599→            invoice_id: bookingInvoiceId,
+   600→            invoice_code: bookingInvoiceCode,
+   601→            action: activityAction,
+   602→            detail: activityDetail,
+   603→            value: null,
+   604→            branch_id: bookingBranchId,
+   605→            created_by: actorStaffId,
+   606→          });
+   607→        } catch {
+   608→          // best-effort — don't fail the booking update
+   609→        }
+   610→      }
+   611→    }
+   612→    const { data: refreshed, error: fetchErr } = await supabaseAdmin
+   613→      .from("bookings")
+   614→      .select(BOOKING_SELECT)
+   615→      .eq("id", id)
+   616→      .single();
+   617→
+   618→    if (fetchErr) {
+   619→      return NextResponse.json(
+   620→        { ok: false, error: fetchErr.message },
+   621→        { status: 500 }
+   622→      );
+   623→    }
+   624→
+   625→    await enrichBookings([refreshed as Record<string, unknown>]);
+   626→    return NextResponse.json({ ok: true, data: refreshed });
+   627→  } catch (error: unknown) {
+   628→    return NextResponse.json(
+   629→      { ok: false, error: error instanceof Error ? error.message : "Failed" },
+   630→      { status: 500 }
+   631→    );
+   632→  }
+   633→}
+   634→
+   635→export async function DELETE(
+   636→  _request: NextRequest,
+   637→  { params }: { params: Promise<{ id: string }> }
+   638→) {
+   639→  try {
+   640→    const { id } = await params;
+   641→
+   642→    // booking_services has ON DELETE CASCADE, but we still clean explicitly
+   643→    // to be safe across deployments that may not have the FK configured.
+   644→    await supabaseAdmin.from("booking_services").delete().eq("booking_id", id);
+   645→
+   646→    const { error } = await supabaseAdmin
+   647→      .from("bookings")
+   648→      .delete()
+   649→      .eq("id", id);
+   650→    if (error) {
+   651→      return NextResponse.json(
+   652→        { ok: false, error: error.message },
+   653→        { status: 500 }
+   654→      );
+   655→    }
+   656→    return NextResponse.json({ ok: true, data: { id } });
+   657→  } catch (error: unknown) {
+   658→    return NextResponse.json(
+   659→      { ok: false, error: error instanceof Error ? error.message : "Failed" },
+   660→      { status: 500 }
+   661→    );
+   662→  }
+   663→}
+   664→

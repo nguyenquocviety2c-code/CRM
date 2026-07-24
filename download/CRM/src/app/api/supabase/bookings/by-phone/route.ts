@@ -3,40 +3,50 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 
 /**
- * GET /api/supabase/bookings/by-phone?phone=...&excludeBookingId=...
+ * GET /api/supabase/bookings/by-phone?phone=...&customerId=...&excludeBookingId=...
  *
- * Returns the customer's NON-cancelled bookings (with date/time, services,
- * staff, branch, status) so the booking UI can show them a "you already have
- * an appointment on ..." confirmation prompt before creating a new one.
+ * Returns the customer's NON-cancelled, NON-checkout bookings (with date/time,
+ * services, staff, branch, status) so the booking UI can show them a "you already
+ * have an appointment on ..." confirmation prompt before creating a new one.
+ *
+ * Supports lookup by EITHER phone OR customerId (or both). Phone lookup finds
+ * the matching customer first; customerId lookup goes straight to bookings.
  *
  * Returns:
- *   { ok: true, data: [{ date_time, status, services: [{name, staffName}], branchName }] }
+ *   { ok: true, data: [{ id, date, time, status, services: [{name, staffName}], branchName }] }
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const phone = (searchParams.get("phone") || "").trim();
+    const customerIdParam = (searchParams.get("customerId") || "").trim();
     const excludeBookingId = searchParams.get("excludeBookingId") || "";
-    if (!phone) {
+    if (!phone && !customerIdParam) {
       return NextResponse.json(
-        { ok: false, error: "Thiếu số điện thoại" },
+        { ok: false, error: "Thiếu số điện thoại hoặc ID khách hàng" },
         { status: 400 }
       );
     }
 
-    // 1. Find the customer by exact phone match.
-    const { data: customers, error: custErr } = await supabaseAdmin
-      .from("customers")
-      .select("id")
-      .eq("phone", phone)
-      .limit(1);
-    if (custErr) {
-      return NextResponse.json({ ok: false, error: custErr.message }, { status: 500 });
+    // 1. Determine the customer ID — either from the parameter directly,
+    //    or by looking up the customer by phone.
+    let customerId: string;
+    if (customerIdParam) {
+      customerId = customerIdParam;
+    } else {
+      const { data: customers, error: custErr } = await supabaseAdmin
+        .from("customers")
+        .select("id")
+        .eq("phone", phone)
+        .limit(1);
+      if (custErr) {
+        return NextResponse.json({ ok: false, error: custErr.message }, { status: 500 });
+      }
+      if (!customers || customers.length === 0) {
+        return NextResponse.json({ ok: true, data: [] });
+      }
+      customerId = customers[0].id as string;
     }
-    if (!customers || customers.length === 0) {
-      return NextResponse.json({ ok: true, data: [] });
-    }
-    const customerId = customers[0].id as string;
 
     // 2. Fetch the customer's non-cancelled bookings. Use the same select as
     //    the main bookings route so we get services + branch + category.

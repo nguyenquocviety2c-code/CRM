@@ -754,13 +754,27 @@ export function ServiceSelector() {
 
       // 0b. Existing-booking confirmation: when adding the FIRST service to a
       //     draft tab (about to create a new booking), check if the customer
-      //     already has non-cancelled bookings. If so, show a confirmation
-      //     prompt. Skipped for service 2+ and after the user confirms.
+      //     already has non-cancelled, non-checkout bookings. If so, show a
+      //     confirmation prompt. Skipped for service 2+ and after the user confirms.
+      //
+      //     The check uses phone OR customerId — phone is preferred (exact
+      //     match), but when the cashier has linked a walk-in tab to a real
+      //     customer by name (no phone entered yet), we can still check by
+      //     customerId. Pass excludeBookingId so the current tab's own booking
+      //     (if any) is excluded from the results.
       const isFirstServiceOnTab = !(meta0?.bookingCreated && meta0?.bookingId);
-      if (isFirstServiceOnTab && !skipExistingBookingsCheck && phone0) {
+      // Also check for booking tabs that are adding a service that will create
+      // a NEW separate booking (forceNew path) — same confirmation needed.
+      const customerId0 = meta0?.customerId || activeCustomer?.customerId || "";
+      const canCheckExisting = phone0 || (customerId0 && !customerId0.startsWith("walkin-"));
+      if (isFirstServiceOnTab && !skipExistingBookingsCheck && canCheckExisting) {
         try {
+          const params = new URLSearchParams();
+          if (phone0) params.set("phone", phone0);
+          else if (customerId0) params.set("customerId", customerId0);
+          if (excludeBookingId) params.set("excludeBookingId", excludeBookingId);
           const existRes = await fetch(
-            `/api/supabase/bookings/by-phone?phone=${encodeURIComponent(phone0)}`
+            `/api/supabase/bookings/by-phone?${params.toString()}`
           );
           const existJson = await existRes.json();
           if (existJson.ok && Array.isArray(existJson.data) && existJson.data.length > 0) {
