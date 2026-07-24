@@ -20,9 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import { Pencil, Trash2, LogIn, GripVertical } from "lucide-react";
-import { useDraggablePopup } from "@/hooks/use-draggable-popup";
+import { DraggableHoverPopup } from "@/components/features/booking/draggable-hover-popup";
 
 interface Staff {
   id: string;
@@ -1563,10 +1561,6 @@ function BookingChip({
       calls this; falls back to onEdit when not provided. */
   onAssignStaff?: () => void;
 }) {
-  // Draggable popup: click-hold anywhere (except buttons) → reposition, double-click → reset
-  const [hoverOpen, setHoverOpen] = useState(false);
-  const { isDragging, isDraggingRef, style: dragStyle, onContentPointerDown, resetPosition } = useDraggablePopup();
-
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
   const serviceName = svc?.service?.name || "Dịch vụ";
@@ -1620,23 +1614,33 @@ function BookingChip({
   const phone = booking.customer?.phone || "";
 
   return (
-    <HoverCard
-      open={hoverOpen}
-      onOpenChange={(open) => {
-        // Prevent closing while dragging
-        if (isDraggingRef.current && !open) return;
-        setHoverOpen(open);
-      }}
-      openDelay={200}
-      closeDelay={500}
+    <DraggableHoverPopup
+      side="right"
+      align="start"
+      sideOffset={0}
+      className="w-[340px] max-w-[340px] text-xs"
+      renderPopup={() => (
+        <BookingHoverDetails
+          booking={booking}
+          canViewCustomerPhone={canViewCustomerPhone}
+          statusOptions={[]}
+          onStatusChange={() => {}}
+          selectOpen={false}
+          setSelectOpen={() => {}}
+          onEdit={onEdit || onClick}
+          onDelete={() => {}}
+          canCancelPayment={false}
+          onOpenInvoice={onClick}
+          onAssignStaff={onAssignStaff || onEdit || onClick}
+        />
+      )}
     >
-      <HoverCardTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
-          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}${isHighlighted ? " booking-highlight-flash" : ""}`}
-        >
+      <button
+        type="button"
+        onClick={onClick}
+        title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
+        className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}${isHighlighted ? " booking-highlight-flash" : ""}`}
+      >
           <div className="flex items-center justify-between">
             <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
             {booking.numberOfCustomers > 1 && (
@@ -1708,44 +1712,8 @@ function BookingChip({
               Tổng: {totalDuration} phút
             </div>
           )}
-        </button>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side="right"
-        align="start"
-        sideOffset={0}
-        className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
-        style={dragStyle}
-      >
-        {/* Draggable wrapper — click-hold on drag handle to reposition */}
-        <div
-          onPointerDown={onContentPointerDown}
-          onDoubleClick={resetPosition}
-          className={`relative ${isDragging ? "cursor-grabbing select-none" : ""}`}
-        >
-          {/* Visual drag handle at the top — clear affordance for dragging */}
-          <div
-            className="flex items-center justify-center h-7 cursor-grab active:cursor-grabbing bg-muted/60 border-b select-none rounded-t-md"
-            title="Kéo để di chuyển · Nhấp đúp để trở về mặc định"
-          >
-            <GripVertical className="h-4 w-4 text-muted-foreground/60" />
-          </div>
-          <BookingHoverDetails
-            booking={booking}
-            canViewCustomerPhone={canViewCustomerPhone}
-            statusOptions={[]}
-            onStatusChange={() => {}}
-            selectOpen={false}
-            setSelectOpen={() => {}}
-            onEdit={onEdit || onClick}
-            onDelete={() => {}}
-            canCancelPayment={false}
-            onOpenInvoice={onClick}
-            onAssignStaff={onAssignStaff || onEdit || onClick}
-          />
-        </div>
-      </HoverCardContent>
-    </HoverCard>
+      </button>
+    </DraggableHoverPopup>
   );
 }
 

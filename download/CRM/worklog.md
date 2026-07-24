@@ -1980,3 +1980,29 @@ Stage Summary:
 - Fix: Use CSS `translate` property (independent from `transform`) for popup offset
 - Fix: Use `onPointerDown` instead of `onMouseDown` for Radix compatibility
 - Both Customer View (Khung giờ) and Staff View popup now support drag-to-reposition with localStorage persistence
+---
+Task ID: 5
+Agent: Main (Z.ai Code)
+Task: Replace Radix HoverCard with custom DraggableHoverPopup for reliable drag functionality
+
+Work Log:
+- Identified root cause: Radix HoverCard is fundamentally incompatible with draggable content because of its DismissableLayer, FocusScope, Portal rendering, and CSS animations on `transform`. These fight against drag interactions in multiple ways.
+- Created a custom `DraggableHoverPopup` component (draggable-hover-popup.tsx) that completely avoids Radix's event handling:
+  - Uses simple `mouseenter/mouseleave` for hover detection with open/close delay timers
+  - Uses `position: fixed` for popup positioning, calculated from trigger element's bounding rect
+  - Handles "grace area" between trigger and popup (pointer can safely cross the gap)
+  - Keeps popup open during drag via `isDraggingRef` check
+  - Uses CSS `translate` property for drag offset (independent from `transform`)
+  - Handles viewport boundary adjustment (popup shifts if it would overflow)
+  - Includes a clear drag handle bar at the top with GripVertical icon
+  - Uses `useDraggablePopup` hook for drag state management
+- Updated CustomerGridChip (booking-time-grid.tsx): replaced HoverCard/HoverCardTrigger/HoverCardContent with DraggableHoverPopup, side="bottom" align="start"
+- Updated BookingChip (booking-staff-view.tsx): replaced HoverCard/HoverCardTrigger/HoverCardContent with DraggableHoverPopup, side="right" align="start"
+- Removed all HoverCard imports from both files
+- Verified: no console errors, no compilation errors, page renders correctly in both views
+
+Stage Summary:
+- Radix HoverCard fully replaced with custom DraggableHoverPopup in both views
+- The custom popup has NO Radix dependencies (no Portal, DismissableLayer, FocusScope, animations)
+- Full control over hover behavior, positioning, and drag interaction
+- Drag offset persisted in localStorage, applied to all future popup appearances

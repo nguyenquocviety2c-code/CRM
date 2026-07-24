@@ -20,14 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Pencil, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
-import {
-  HoverCard,
-  HoverCardTrigger,
-  HoverCardContent,
-} from "@/components/ui/hover-card";
 import { BookingHoverDetails } from "@/components/features/booking/booking-staff-view";
-import { useDraggablePopup } from "@/hooks/use-draggable-popup";
-import { GripVertical } from "lucide-react";
+import { DraggableHoverPopup } from "@/components/features/booking/draggable-hover-popup";
 
 interface BookingTimeGridProps {
   bookings: Booking[];
@@ -1527,9 +1521,6 @@ function CustomerGridChip({
   onDelete?: (bookingId: string) => void;
 }) {
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
-  // Draggable popup: click-hold anywhere (except buttons) → reposition, double-click → reset
-  const [hoverOpen, setHoverOpen] = useState(false);
-  const { isDragging, isDraggingRef, style: dragStyle, onContentPointerDown, resetPosition } = useDraggablePopup();
 
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1575,87 +1566,61 @@ function CustomerGridChip({
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 
   return (
-    <HoverCard
-      open={hoverOpen}
-      onOpenChange={(open) => {
-        // Prevent closing while dragging
-        if (isDraggingRef.current && !open) return;
-        setHoverOpen(open);
-      }}
-      openDelay={200}
-      closeDelay={500}
+    <DraggableHoverPopup
+      side="bottom"
+      align="start"
+      sideOffset={0}
+      className="w-[255px] max-w-[255px] text-xs"
+      renderPopup={() => (
+        <BookingHoverDetails
+          booking={booking}
+          canViewCustomerPhone={canViewCustomerPhone}
+          statusOptions={[]}
+          onStatusChange={() => {}}
+          selectOpen={false}
+          setSelectOpen={() => {}}
+          onEdit={() => onEdit?.(booking)}
+          onDelete={() => onDelete?.(booking.id)}
+          canCancelPayment={canCancelPayment}
+          onOpenInvoice={onClick}
+          onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
+        />
+      )}
     >
-      <HoverCardTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName}`}
-          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
-        >
-          <div className="flex items-center justify-between">
-            <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
-            {booking.numberOfCustomers > 1 && (
-              <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">×{booking.numberOfCustomers}</span>
-            )}
-          </div>
-          <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
-            {booking.customer?.name || "Khách"}
-            {phone && (
-              <span className="ml-1 text-xs font-normal text-gray-500">
-                {canViewCustomerPhone ? phone : maskPhone(phone)}
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 space-y-0.5">
-            {serviceRows.map((s, i) => (
-              <div key={i} className="flex items-center justify-between gap-1">
-                <span className="truncate text-xs text-gray-700">
-                  {s.service?.name || "Dịch vụ"}
-                  {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
-                </span>
-                {s.staff?.name && <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>}
-              </div>
-            ))}
-            {serviceRows.length === 0 && <div className="truncate text-xs text-gray-600">{serviceName}</div>}
-          </div>
-          {totalDuration > 0 && <div className="mt-0.5 text-[10px] font-medium text-gray-500">Tổng: {totalDuration} phút</div>}
-        </button>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side="bottom"
-        align="start"
-        sideOffset={0}
-        className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl"
-        style={dragStyle}
+      <button
+        type="button"
+        onClick={onClick}
+        title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName}`}
+        className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
       >
-        {/* Draggable wrapper — click-hold on drag handle to reposition */}
-        <div
-          onPointerDown={onContentPointerDown}
-          onDoubleClick={resetPosition}
-          className={`relative ${isDragging ? "cursor-grabbing select-none" : ""}`}
-        >
-          {/* Visual drag handle at the top — clear affordance for dragging */}
-          <div
-            className="flex items-center justify-center h-7 cursor-grab active:cursor-grabbing bg-muted/60 border-b select-none rounded-t-md"
-            title="Kéo để di chuyển · Nhấp đúp để trở về mặc định"
-          >
-            <GripVertical className="h-4 w-4 text-muted-foreground/60" />
-          </div>
-          <BookingHoverDetails
-            booking={booking}
-            canViewCustomerPhone={canViewCustomerPhone}
-            statusOptions={[]}
-            onStatusChange={() => {}}
-            selectOpen={false}
-            setSelectOpen={() => {}}
-            onEdit={() => onEdit?.(booking)}
-            onDelete={() => onDelete?.(booking.id)}
-            canCancelPayment={canCancelPayment}
-            onOpenInvoice={onClick}
-            onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
-          />
+        <div className="flex items-center justify-between">
+          <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
+          {booking.numberOfCustomers > 1 && (
+            <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">×{booking.numberOfCustomers}</span>
+          )}
         </div>
-      </HoverCardContent>
-    </HoverCard>
+        <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+          {booking.customer?.name || "Khách"}
+          {phone && (
+            <span className="ml-1 text-xs font-normal text-gray-500">
+              {canViewCustomerPhone ? phone : maskPhone(phone)}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 space-y-0.5">
+          {serviceRows.map((s, i) => (
+            <div key={i} className="flex items-center justify-between gap-1">
+              <span className="truncate text-xs text-gray-700">
+                {s.service?.name || "Dịch vụ"}
+                {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
+              </span>
+              {s.staff?.name && <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>}
+            </div>
+          ))}
+          {serviceRows.length === 0 && <div className="truncate text-xs text-gray-600">{serviceName}</div>}
+        </div>
+        {totalDuration > 0 && <div className="mt-0.5 text-[10px] font-medium text-gray-500">Tổng: {totalDuration} phút</div>}
+      </button>
+    </DraggableHoverPopup>
   );
 }
