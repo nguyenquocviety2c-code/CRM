@@ -281,16 +281,25 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
   useEffect(() => {
     if (!activeTabId) return;
     const meta = tabMeta[activeTabId];
-    if (!meta || meta.type !== "booking") return; // only booking/standalone tabs
+    // Walk-in DRAFT tabs (no booking, no invoice) are not day-bound —
+    // don't deselect them across date range changes.
+    const isWalkinDraft = activeTabId.startsWith("walkin-") && !meta?.bookingId && !meta?.invoiceId;
+    if (isWalkinDraft) return;
+    // For booking-type tabs and walk-in tabs linked to a booking/invoice,
+    // deselect if the linked entity doesn't belong to the current day.
     // Wait until the current day's data has been fetched.
     if (!dayBookings || !dayStandaloneInvoices) return;
     const inDayBookings = dayBookings.some((b) => b.id === activeTabId);
     const inDayStandalone = dayStandaloneInvoices.some((inv) => inv.id === activeTabId);
     // Walk-in tabs auto-linked to a booking: check by meta.bookingId too.
-    const linkedBookingInDay = meta.bookingId
+    const linkedBookingInDay = meta?.bookingId
       ? dayBookings.some((b) => b.id === meta.bookingId)
       : false;
-    if (!inDayBookings && !inDayStandalone && !linkedBookingInDay) {
+    // Walk-in tabs with a standalone invoice: check by meta.invoiceId too.
+    const linkedInvoiceInDay = meta?.invoiceId
+      ? dayStandaloneInvoices.some((inv) => inv.id === meta.invoiceId)
+      : false;
+    if (!inDayBookings && !inDayStandalone && !linkedBookingInDay && !linkedInvoiceInDay) {
       // The active tab's booking/invoice doesn't belong to this day — deselect.
       setActiveTab("");
     }
@@ -592,13 +601,26 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
     const isWalkinStyleTab = (customerId: string, meta?: TabMeta) =>
       customerId.startsWith("walkin-") || meta?.type === "walkin";
 
+    // Walk-in tabs linked to a booking/invoice are DAY-BOUND: they should
+    // only appear in the tab bar when viewing the date range that includes
+    // their booking/invoice. Without this, a walk-in tab for a booking
+    // created for "today" would also appear on "yesterday" because the tab
+    // data persists in the store across date range changes.
+    // Pure drafts (no booking, no invoice) are NOT day-bound and can persist
+    // across date range changes — the cashier may return to them later.
+    const dayBookingIds = new Set((dayBookings || []).map((b) => b.id));
+    const dayInvoiceIds = new Set((dayStandaloneInvoices || []).map((inv) => inv.id));
+
     const walkinInvoiceIds = new Set<string>();
     const walkinBookingIds = new Set<string>();
     for (const c of activeCustomers) {
       const meta = tabMeta[c.customerId];
       if (isWalkinStyleTab(c.customerId, meta)) {
-        if (meta?.invoiceId) walkinInvoiceIds.add(meta.invoiceId);
-        if (meta?.bookingId) walkinBookingIds.add(meta.bookingId);
+        // Only add to dedup sets if the linked booking/invoice belongs to
+        // the current day — otherwise the walk-in tab won't appear in the
+        // merged list anyway, so no dedup needed.
+        if (meta?.invoiceId && dayInvoiceIds.has(meta.invoiceId)) walkinInvoiceIds.add(meta.invoiceId);
+        if (meta?.bookingId && dayBookingIds.has(meta.bookingId)) walkinBookingIds.add(meta.bookingId);
       }
     }
 
@@ -608,10 +630,21 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
     // "booking" but customerId starts with "walkin-"), also look up the
     // linked booking's status so the tab badge reflects the booking's actual
     // status (e.g. "confirmed" → "Đã xác nhận") instead of the default "new".
+    //
+    // DAY-BOUND FILTER: walk-in tabs linked to a booking/invoice only appear
+    // when that booking/invoice belongs to the current date range. Pure
+    // drafts (no booking, no invoice) always appear.
     const walkinTabs: TodayBooking[] = activeCustomers
       .filter((c) => {
         const meta = tabMeta[c.customerId];
-        return isWalkinStyleTab(c.customerId, meta);
+        if (!isWalkinStyleTab(c.customerId, meta)) return false;
+        // Day-bound filter: if the tab has a linked booking, only show it
+        // when that booking is in the current day's data.
+        if (meta?.bookingId && !dayBookingIds.has(meta.bookingId)) return false;
+        // Day-bound filter: if the tab has a linked invoice (and no booking),
+        // only show it when that invoice is in the current day's data.
+        if (meta?.invoiceId && !meta.bookingId && !dayInvoiceIds.has(meta.invoiceId)) return false;
+        return true;
       })
       .map((c) => {
         const meta = tabMeta[c.customerId];

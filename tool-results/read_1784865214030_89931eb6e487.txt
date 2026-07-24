@@ -1,0 +1,2002 @@
+     1→"use client";
+     2→
+     3→import { useState, useEffect, useRef } from "react";
+     4→import dynamic from "next/dynamic";
+     5→import { useRouter } from "next/navigation";
+     6→// Lazy-load PaidInvoiceView — only opened on demand. Customer history now
+     7→// navigates to /customers/[id].
+     8→const PaidInvoiceView = dynamic(
+     9→  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+    10→  { ssr: false }
+    11→);
+    12→import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+    13→import {
+    14→  Trash2,
+    15→  Printer,
+    16→  Check,
+    17→  Smile,
+    18→  Camera,
+    19→  Loader2,
+    20→  X,
+    21→  CheckSquare,
+    22→  UserCog,
+    23→  Minus,
+    24→  Plus,
+    25→} from "lucide-react";
+    26→import { useCashierStore, resolveDiscountAmount } from "@/stores/cashier-store";
+    27→import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
+    28→import { useBranchStore } from "@/stores/branch-store";
+    29→import { useAuthStore } from "@/stores/auth-store";
+    30→import { queryKeys } from "@/lib/query-keys";
+    31→import { isPromotionActive, isPromotionForBranch } from "@/lib/promotion-utils";
+    32→import { toVietnamTime, toVietnamDay, localDayStartUtc, localDayEndUtc } from "@/lib/utils";
+    33→import { Input } from "@/components/ui/input";
+    34→import {
+    35→  Select,
+    36→  SelectContent,
+    37→  SelectItem,
+    38→  SelectTrigger,
+    39→  SelectValue,
+    40→} from "@/components/ui/select";
+    41→import {
+    42→  Dialog,
+    43→  DialogContent,
+    44→  DialogHeader,
+    45→  DialogTitle,
+    46→  DialogFooter,
+    47→} from "@/components/ui/dialog";
+    48→import { Button } from "@/components/ui/button";
+    49→import { Label } from "@/components/ui/label";
+    50→import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
+    51→import { parseMultiCustomerNote, type SlotCustomer } from "@/lib/multi-customer";
+    52→
+    53→/**
+    54→ * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
+    55→ */
+    56→const fileToDataUrl = (file: File): Promise<string> => {
+    57→  return new Promise((resolve, reject) => {
+    58→    const reader = new FileReader();
+    59→    reader.onload = () => resolve(reader.result as string);
+    60→    reader.onerror = reject;
+    61→    reader.readAsDataURL(file);
+    62→  });
+    63→};
+    64→
+    65→export function InvoiceSummary({ dateRange }: { dateRange: { from: Date; to: Date } }) {
+    66→  const {
+    67→    activeTabId,
+    68→    activeCustomers,
+    69→    invoices,
+    70→    updateInvoiceItemDiscount,
+    71→    updateInvoiceItemQuantity,
+    72→    removeInvoiceItem,
+    73→    setInvoiceItemStaff,
+    74→    setAllInvoiceItemsStaff,
+    75→    setDiscountAmount,
+    76→    setTipAmount,
+    77→    setVoucherCode,
+    78→    getSubtotal,
+    79→    getInvoiceTotal,
+    80→    getTipAmount,
+    81→    closeCustomerTab,
+    82→    tabMeta,
+    83→    updateTabMeta,
+    84→  } = useCashierStore();
+    85→  const { selectedBranchId } = useBranchStore();
+    86→  // Permission: "upload_photo" gates the device-upload feature. A single
+    87→  // permission covers both unpaid and paid invoices.
+    88→  // "delete_past_photos" gates deleting photos on PAID invoices (unpaid
+    89→  // invoices can always be edited, including photo deletion).
+    90→  // "view_customer_photo" gates the lightbox (click-to-zoom) on photos.
+    91→  // "create_invoice" gates the "Hoàn tất" (checkout) button.
+    92→  // "edit_unpaid_invoice" gates editing an UNPAID invoice's items/discount/tip
+    93→  // (without it, an unpaid invoice renders read-only like a paid one).
+    94→  // "invoice_discount" gates selecting a promotion (CTKM) on an invoice.
+    95→  // "cancel_payment" gates the "Hủy thanh toán" button (cancel an unpaid order).
+    96→  const { hasPermission } = useAuthStore();
+    97→  const canUploadPhoto = hasPermission("upload_photo");
+    98→  const canDeletePastPhotos = hasPermission("delete_past_photos");
+    99→  const canViewCustomerPhoto = hasPermission("view_customer_photo");
+   100→  const canCreateInvoice = hasPermission("create_invoice");
+   101→  const canEditUnpaidInvoice = hasPermission("edit_unpaid_invoice");
+   102→  const canUsePromotion = hasPermission("invoice_discount");
+   103→  const canCancelPayment = hasPermission("cancel_payment");
+   104→  const router = useRouter();
+   105→  const queryClient = useQueryClient();
+   106→
+   107→  const invoice = activeTabId ? invoices[activeTabId] : null;
+   108→  const [discountInput, setDiscountInput] = useState("");
+   109→  const [tipInput, setTipInput] = useState("");
+   110→  // Payment method chosen during checkout review ("cash" | "transfer").
+   111→  // Default "cash". Sent as `payment_method` in the checkout payload.
+   112→  const [paymentMethod, setPaymentMethod] = useState<"cash" | "transfer">("cash");
+   113→  // The promotion selected for this invoice (id of an incentives row, or ""
+   114→  // for none). When set, the discount amount auto-fills from the promotion's
+   115→  // percentage and the promotion metadata is sent with the checkout so the
+   116→  // CSKH promotion's used_count increments.
+   117→  const [selectedPromoId, setSelectedPromoId] = useState<string>("");
+   118→  // Voucher state — when the cashier types a code in "Nhập mã Voucher" and
+   119→  // blurs/presses Enter, we look it up against the incentives table
+   120→  // (type=voucher), validate it (active, branch-eligible, within validity,
+   121→  // not fully used), and apply its discount to the eligible items (mirroring
+   122→  // handlePromoSelect). selectedVoucher holds the resolved voucher object;
+   123→  // voucherError holds a human-readable error string when the code is invalid.
+   124→  const [selectedVoucher, setSelectedVoucher] = useState<{
+   125→    id: string;
+   126→    code: string | null;
+   127→    name: string;
+   128→    discountValue: number;
+   129→    discountType: string;
+   130→    serviceIds: string | null;
+   131→  } | null>(null);
+   132→  const [voucherError, setVoucherError] = useState<string>("");
+   133→
+   134→  // Photos attached to the active invoice. Stored as base64 data URLs so they
+   135→  // can be embedded in the invoice's `note` JSON (alongside items/tip/promotion).
+   136→  // For draft (checkin) tabs we keep them locally until checkout (POST invoice).
+   137→  // For paid (checkout) tabs the source of truth is the saved invoice (server)
+   138→  // — we don't keep a local copy, instead we PUT changes immediately and let the
+   139→  // queryClient refetch refresh the display. Draft photos are kept per-tab so
+   140→  // they don't bleed across tabs.
+   141→  const [draftPhotosByTab, setDraftPhotosByTab] = useState<Record<string, string[]>>({});
+   142→  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+   143→  const [paidInvoiceOpen, setPaidInvoiceOpen] = useState(false);
+   144→  // Per-item discount input draft. Keyed by item id so each line tracks its
+   145→  // own text independently. The draft is committed to the store on blur or
+   146→  // Enter; while the user types, we keep the raw string so they can clear /
+   147→  // retype freely without the number snapping on every keystroke.
+   148→  const [itemDiscountDrafts, setItemDiscountDrafts] = useState<
+   149→    Record<string, string>
+   150→  >({});
+   151→  // Inline success banner shown after a successful checkout. Stores the paid
+   152→  // invoice code + booking code so the cashier can see EXACTLY which order was
+   153→  // paid (not all orders — only the selected one). Auto-dismisses after 6s.
+   154→  const [paidSuccess, setPaidSuccess] = useState<{
+   155→    tabId: string;
+   156→    invoiceCode: string;
+   157→    bookingCode: string | null;
+   158→    syncedBooking: boolean;
+   159→  } | null>(null);
+   160→  useEffect(() => {
+   161→    if (!paidSuccess) return;
+   162→    const timer = setTimeout(() => setPaidSuccess(null), 6000);
+   163→    return () => clearTimeout(timer);
+   164→  }, [paidSuccess]);
+   165→
+   166→  const activeCustomer = activeCustomers.find((c) => c.customerId === activeTabId);
+   167→
+   168→  // Fetch the selected date's bookings (same query/key as CustomerTabs —
+   169→  // TanStack Query dedupes the request) so we can read the active tab's
+   170→  // booking status. The active tab id is the booking id (tabs opened from a
+   171→  // booking) OR a customer id (tabs opened via "Thêm khách hàng") OR an
+   172→  // invoice id (tabs opened from a standalone product-only invoice).
+   173→  interface DayBooking {
+   174→    id: string;
+   175→    status: string;
+   176→    note: string | null;
+   177→    number_of_customers: number | null;
+   178→    customer: { id: string; name: string; phone: string | null } | null;
+   179→  }
+   180→  // Vietnam-timezone-aware UTC range for the selected date range.
+   181→  const vnFromDay = toVietnamDay(dateRange.from);
+   182→  const vnToDay = toVietnamDay(dateRange.to);
+   183→  const vnUtcFrom = localDayStartUtc(vnFromDay);
+   184→  const vnUtcTo = localDayEndUtc(vnToDay);
+   185→
+   186→  const { data: dayBookings } = useQuery<DayBooking[]>({
+   187→    queryKey: ["cashier-day-bookings", vnFromDay, vnToDay, selectedBranchId],
+   188→    queryFn: async () => {
+   189→      const params = new URLSearchParams();
+   190→      params.set("page", "1");
+   191→      params.set("limit", "100");
+   192→      // Use Vietnam-timezone-aware UTC bounds for Supabase filtering.
+   193→      params.set("date_from", vnUtcFrom);
+   194→      params.set("date_to", vnUtcTo);
+   195→      if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
+   196→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   197→      const json = await res.json();
+   198→      if (!json.ok) return [];
+   199→      return (json.data as DayBooking[]) || [];
+   200→    },
+   201→  });
+   202→
+   203→  // Fetch the selected date's standalone (product-only) invoices so we can
+   204→  // read the active tab's invoice status when the tab was opened from a
+   205→  // standalone invoice (no booking link). Same query/key as CustomerTabs.
+   206→  interface StandaloneInvoiceRow {
+   207→    id: string;
+   208→    code: string | null;
+   209→    status: string;
+   210→    booking_id: string | null;
+   211→    final_amount: number;
+   212→    customer: { id: string; name: string; phone: string | null } | null;
+   213→  }
+   214→  const { data: dayStandaloneInvoices } = useQuery<StandaloneInvoiceRow[]>({
+   215→    queryKey: ["cashier-day-standalone-invoices", vnFromDay, vnToDay, selectedBranchId],
+   216→    queryFn: async () => {
+   217→      const params = new URLSearchParams();
+   218→      params.set("page", "1");
+   219→      params.set("limit", "100");
+   220→      // Use Vietnam-timezone-aware UTC bounds for Supabase filtering.
+   221→      params.set("date_from", vnUtcFrom);
+   222→      params.set("date_to", vnUtcTo);
+   223→      if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
+   224→      const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
+   225→      const json = await res.json();
+   226→      if (!json.ok) return [];
+   227→      const all = (json.data as StandaloneInvoiceRow[]) || [];
+   228→      return all.filter((inv) => !inv.booking_id);
+   229→    },
+   230→  });
+   231→
+   232→  // The active tab's booking status (if the tab was opened from a booking).
+   233→  // null when the tab is a manual customer (no booking) — those are treated
+   234→  // as editable+not-paid (no status restriction).
+   235→  const activeBooking = (dayBookings || []).find((b) => b.id === activeTabId) || null;
+   236→  const bookingStatus = activeBooking?.status || null;
+   237→  // The active tab's standalone-invoice status (if the tab was opened from a
+   238→  // product-only invoice, OR a draft tab that was just paid/cancelled and
+   239→  // linked to a standalone invoice via meta.invoiceId). A standalone invoice's
+   240→  // status is "completed" (paid) or "cancelled".
+   241→  const activeTabMetaForInvoice = activeTabId ? tabMeta[activeTabId] : undefined;
+   242→  const activeStandaloneInvoice = (dayStandaloneInvoices || []).find(
+   243→    (inv) =>
+   244→      inv.id === activeTabId ||
+   245→      (activeTabMetaForInvoice?.invoiceId && inv.id === activeTabMetaForInvoice.invoiceId)
+   246→  ) || null;
+   247→  const standaloneInvoiceStatus = activeStandaloneInvoice?.status || null;
+   248→  // A tab is "paid" if EITHER the booking is checkout OR the standalone
+   249→  // invoice is completed OR the local paidSuccess flag is set (immediate
+   250→  // feedback after clicking "Hoàn tất" — don't wait for the query refetch
+   251→  // to flip the status, which would leave the button clickable for a few
+   252→  // seconds). A tab is "cancelled" if EITHER the booking is
+   253→  // cancelled/no_show OR the standalone invoice is cancelled.
+   254→  // Read the tab's paid/cancelled status from the persisted store (survives
+   255→  // page navigation — switching to Lịch hẹn and back doesn't reset it).
+   256→  const activeTabPaidFlag = activeTabMetaForInvoice?.paid;
+   257→  const activeTabCancelledFlag = activeTabMetaForInvoice?.cancelled;
+   258→  const isPaid = bookingStatus === "checkout" || standaloneInvoiceStatus === "completed" || !!activeTabPaidFlag;
+   259→  const isCancelled =
+   260→    bookingStatus === "cancelled" ||
+   261→    bookingStatus === "no_show" ||
+   262→    standaloneInvoiceStatus === "cancelled" ||
+   263→    !!activeTabCancelledFlag;
+   264→  // Whether the invoice is editable: an UNPAID, non-cancelled invoice is
+   265→  // editable ONLY when the staff has the edit_unpaid_invoice permission.
+   266→  // Paid/cancelled invoices are always read-only. Used to gate the quantity
+   267→  // +/- controls, discount/tip inputs, promotion select, item remove, etc.
+   268→  const editable = !isPaid && !isCancelled && canEditUnpaidInvoice;
+   269→  // Two-step payment: after pressing "Thanh toán", the summary enters a review
+   270→  // mode where inputs (discount/tip/promo/item-remove) become read-only and the
+   271→  // action bar switches to [Hủy][Hoàn tất]. "Hủy" exits review (back to
+   272→  // editable); "Hoàn tất" performs the checkout. Only applies to editable
+   273→  // (unpaid, non-cancelled) invoices.
+   274→  //
+   275→  // The review state is SHARED across the Booking and Cashier modules via
+   276→  // usePaymentReviewStore so pressing Thanh toán in one module reflects in the
+   277→  // other. The key is the active tab id (= booking.id for booking-type tabs).
+   278→  const activeBookingId = activeTabId ? tabMeta[activeTabId]?.bookingId : undefined;
+   279→  const reviewKey = activeBookingId || activeTabId || "";
+   280→  const { enterReview, exitReview } = usePaymentReviewStore();
+   281→  const isReviewing = useIsReviewing(reviewKey);
+   282→  const reviewMode = editable && isReviewing;
+   283→  // Render inputs only when editable AND NOT in review mode.
+   284→  const editableDisplay = editable && !reviewMode;
+   285→  // Allow checkout from ANY non-terminal status: new / confirmed / checkin, or
+   286→  // no booking at all (manual walk-in / product-only tabs). Only paid
+   287→  // (checkout) / cancelled / no_show bookings are blocked. This means the
+   288→  // cashier can complete payment the moment a customer walks in, without
+   289→  // having to first mark the booking as "checkin" in the Booking module.
+   290→  const TERMINAL_STATUSES = ["checkout", "cancelled", "no_show"];
+   291→  const canCheckout =
+   292→    (bookingStatus === null || !TERMINAL_STATUSES.includes(bookingStatus)) &&
+   293→    standaloneInvoiceStatus !== "completed" &&
+   294→    standaloneInvoiceStatus !== "cancelled" &&
+   295→    !activeTabPaidFlag;
+   296→
+   297→  // For PAID orders, fetch the saved invoice from Supabase so the summary
+   298→  // displays the actual paid items / promotion / tip / total (read-only)
+   299→  // instead of the empty in-memory draft. The active tab id IS the booking id
+   300→  // for tabs opened from a booking.
+   301→  interface SavedInvoiceItem {
+   302→    name?: string;
+   303→    type?: string;
+   304→    price?: number;
+   305→    quantity?: number;
+   306→    discount?: number;
+   307→    total?: number;
+   308→    staffName?: string;
+   309→  }
+   310→  interface SavedInvoice {
+   311→    id: string;
+   312→    code: string | null;
+   313→    final_amount: number;
+   314→    discount: number;
+   315→    tip: number;
+   316→    promotion: {
+   317→      id: string;
+   318→      code: string | null;
+   319→      name: string;
+   320→      discountValue: number;
+   321→      discountAmount: number;
+   322→    } | null;
+   323→    items: SavedInvoiceItem[];
+   324→    photos?: string[];
+   325→  }
+   326→  const { data: savedInvoice } = useQuery<SavedInvoice | null>({
+   327→    queryKey: ["cashier-saved-invoice", activeTabId, isPaid, isCancelled],
+   328→    queryFn: async () => {
+   329→      // Load the saved invoice for paid OR cancelled orders so the summary
+   330→      // shows the actual items/totals that were paid or cancelled.
+   331→      if (!activeTabId || (!isPaid && !isCancelled)) return null;
+   332→      const meta = tabMeta[activeTabId];
+   333→      // For a standalone-invoice tab (product-only order, no booking), the
+   334→      // active tab id IS the invoice id — fetch it directly by id. Otherwise
+   335→      // the tab id is the booking id, so fetch the invoice linked to that
+   336→      // booking.
+   337→      if (meta?.invoiceId) {
+   338→        const res = await fetch(`/api/supabase/invoices/${encodeURIComponent(meta.invoiceId)}`);
+   339→        const json = await res.json();
+   340→        if (!json.ok || !json.data) return null;
+   341→        return json.data as SavedInvoice;
+   342→      }
+   343→      const res = await fetch(`/api/supabase/invoices?booking_id=${encodeURIComponent(activeTabId)}&limit=1`);
+   344→      const json = await res.json();
+   345→      if (!json.ok || !Array.isArray(json.data) || json.data.length === 0) return null;
+   346→      return json.data[0] as SavedInvoice;
+   347→    },
+   348→    enabled: !!activeTabId && (isPaid || isCancelled),
+   349→  });
+   350→
+   351→  // Display photos: for paid orders, use the saved invoice's photos (server
+   352→  // is the source of truth); for draft orders, use the per-tab local draft state.
+   353→  const draftPhotos = activeTabId ? (draftPhotosByTab[activeTabId] || []) : [];
+   354→  const displayPhotos = isPaid
+   355→    ? (Array.isArray(savedInvoice?.photos) ? (savedInvoice!.photos as string[]) : [])
+   356→    : draftPhotos;
+   357→
+   358→  // Persist the current photo set to the invoice's note JSON. Only used when an
+   359→  // invoice already exists (paid orders + the Booking module's pending invoice
+   360→  // at checkin). For pure draft (checkin) tabs without an invoice, photos are
+   361→  // held locally and POSTed on checkout.
+   362→  const savePhotos = async (invoiceId: string, photos: string[]) => {
+   363→    try {
+   364→      await fetch(`/api/supabase/invoices/${invoiceId}`, {
+   365→        method: "PUT",
+   366→        headers: { "Content-Type": "application/json" },
+   367→        body: JSON.stringify({ photos, created_by: useAuthStore.getState().user?.id }),
+   368→      });
+   369→      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+   370→      queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+   371→      queryClient.invalidateQueries({ queryKey: ["cashier-saved-invoice"] });
+   372→    } catch {
+   373→      /* best-effort */
+   374→    }
+   375→  };
+   376→
+   377→  // Convert selected FileList -> upload to R2 -> get URLs -> append to gallery.
+   378→  // For draft tabs (no saved invoice): append URLs to local state (sent at checkout).
+   379→  // For paid tabs (saved invoice exists): append + PUT immediately so the change
+   380→  // persists and syncs to the Booking module's dialogs.
+   381→  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+   382→    const files = e.target.files;
+   383→    if (!files || files.length === 0) return;
+   384→
+   385→    // Upload each file to R2 and get the public URL.
+   386→    const folder = savedInvoice?.code || activeTabId || "drafts";
+   387→    const formData = new FormData();
+   388→    formData.append("folder", `invoices/${folder}`);
+   389→    for (let i = 0; i < files.length; i++) {
+   390→      const f = files[i];
+   391→      if (f) formData.append("files", f);
+   392→    }
+   393→    let newPhotos: string[] = [];
+   394→    try {
+   395→      const res = await fetch("/api/upload", {
+   396→        method: "POST",
+   397→        body: formData,
+   398→      });
+   399→      const json = await res.json();
+   400→      if (json.ok && json.data?.urls) {
+   401→        newPhotos = json.data.urls;
+   402→      }
+   403→    } catch {
+   404→      // Fallback: use base64 data URLs if R2 upload fails.
+   405→      for (let i = 0; i < files.length; i++) {
+   406→        const f = files[i];
+   407→        if (!f) continue;
+   408→        try {
+   409→          newPhotos.push(await fileToDataUrl(f));
+   410→        } catch { /* skip */ }
+   411→      }
+   412→    }
+   413→
+   414→    if (newPhotos.length === 0) {
+   415→      e.target.value = "";
+   416→      return;
+   417→    }
+   418→    if (isPaid && savedInvoice?.id) {
+   419→      const updated = [...displayPhotos, ...newPhotos];
+   420→      await savePhotos(savedInvoice.id, updated);
+   421→    } else if (activeTabId) {
+   422→      setDraftPhotosByTab((prev) => ({
+   423→        ...prev,
+   424→        [activeTabId]: [...(prev[activeTabId] || []), ...newPhotos],
+   425→      }));
+   426→    }
+   427→    e.target.value = "";
+   428→  };
+   429→
+   430→  // Remove a photo from the gallery. Draft -> local state; paid -> PUT.
+   431→  const handleRemovePhoto = async (idx: number) => {
+   432→    if (isPaid && savedInvoice?.id) {
+   433→      const updated = displayPhotos.filter((_, i) => i !== idx);
+   434→      await savePhotos(savedInvoice.id, updated);
+   435→    } else if (activeTabId) {
+   436→      setDraftPhotosByTab((prev) => ({
+   437→        ...prev,
+   438→        [activeTabId]: (prev[activeTabId] || []).filter((_, i) => i !== idx),
+   439→      }));
+   440→    }
+   441→  };
+   442→
+   443→  // Fetch the active promotions created in CSKH so they can be selected here
+   444→  // (synced with the same source as the booking invoice dialog).
+   445→  const { data: promotionsData } = useQuery<{
+   446→    items: Array<{
+   447→      id: string;
+   448→      code: string | null;
+   449→      name: string;
+   450→      discountValue: number;
+   451→      discountType: string;
+   452→      serviceIds: string | null;
+   453→      branchIds: string | null;
+   454→      applyScope: string | null;
+   455→      startDate: string | null;
+   456→      endDate: string | null;
+   457→      usageLimit: number;
+   458→      usedCount: number;
+   459→    }>;
+   460→  }>({
+   461→    queryKey: ["cashier-promotions"],
+   462→    queryFn: async () => {
+   463→      const res = await fetch("/api/supabase/incentives?type=promotion&page=1&limit=100");
+   464→      const json = await res.json();
+   465→      return json.data || { items: [] };
+   466→    },
+   467→  });
+   468→  // Only show CURRENTLY USABLE promotions in the selector: filter out expired
+   469→  // (endDate in the past), not-yet-started (startDate in the future), fully-used
+   470→  // (usedCount >= usageLimit), AND promotions that don't apply to the currently
+   471→  // selected branch. Mirrors the Booking module's getActivePromotionsForBooking
+   472→  // so both selectors stay consistent and only branch-eligible promos appear.
+   473→  const promotions = (promotionsData?.items || []).filter(
+   474→    (p) => isPromotionActive(p) && isPromotionForBranch(p, selectedBranchId)
+   475→  );
+   476→  const selectedPromo = promotions.find((p) => p.id === selectedPromoId) || null;
+   477→
+   478→  // Fetch ALL active staff (no branch filter) so the "Xếp nhân viên" dialog
+   479→  // list is never empty when the branch selector is on "Tất cả cửa hàng".
+   480→  // We filter client-side by CHỨC DANH (staff group name) AND by the selected
+   481→  // branch (using each staff's `branches` array). Only stylist titles are
+   482→  // eligible for product advisory assignment — office/admin/reception groups
+   483→  // are excluded.
+   484→  const ELIGIBLE_STAFF_TITLES = new Set([
+   485→    "Artist",
+   486→    "Creative Director",
+   487→    "Customer Service / CS",
+   488→    "Junior",
+   489→    "Master",
+   490→  ]);
+   491→  const { data: branchStaff } = useQuery<
+   492→    Array<{ id: string; name: string; branch_id?: string | null; branches?: string[]; group?: { name?: string } | null }>
+   493→  >({
+   494→    queryKey: ["cashier-staff-for-product"],
+   495→    queryFn: async () => {
+   496→      const res = await fetch(`/api/supabase/staff?active=true&limit=500`);
+   497→      const json = await res.json();
+   498→      return (json.data as Array<{
+   499→        id: string;
+   500→        name: string;
+   501→        branch_id?: string | null;
+   502→        branches?: string[];
+   503→        group?: { name?: string } | null;
+   504→      }>) || [];
+   505→    },
+   506→  });
+   507→  // Apply the two filters: eligible chức danh AND belongs to the selected
+   508→  // branch (or "all"/none = no branch filter).
+   509→  const eligibleBranchStaff = (branchStaff || []).filter((s) => {
+   510→    const title = s.group?.name || "";
+   511→    if (!ELIGIBLE_STAFF_TITLES.has(title)) return false;
+   512→    if (!selectedBranchId || selectedBranchId === "all") return true;
+   513→    return (
+   514→      s.branch_id === selectedBranchId ||
+   515→      (Array.isArray(s.branches) && s.branches.includes(selectedBranchId))
+   516→    );
+   517→  });
+   518→  // Per-item "change staff" dialog state. Opens when the cashier clicks the
+   519→  // small square button next to a line item's staff name. Tracks WHICH item
+   520→  // id is being edited (so OK only updates that one line) and the picked
+   521→  // staff id. The dialog is REQUIRED — OK is disabled until a staff is picked.
+   522→  // `changeStaffError` holds the conflict message when the picked staff is
+   523→  // already booked at this item's date/time — the change is then BLOCKED.
+   524→  const [changeStaffItemId, setChangeStaffItemId] = useState<string | null>(null);
+   525→  const [changeStaffPickStaffId, setChangeStaffPickStaffId] = useState<string>("");
+   526→  const [changeStaffError, setChangeStaffError] = useState<string>("");
+   527→  // True while the change-staff conflict check is running (disables OK + shows
+   528→  // "Đang kiểm tra..." so the cashier knows the click registered).
+   529→  const [changeStaffChecking, setChangeStaffChecking] = useState(false);
+   530→  // Bulk "Xếp nhân viên" dialog state (action-bar button). Opens a dialog where
+   531→  // the cashier picks ONE staff; on confirm, that staff is assigned to EVERY
+   532→  // line item in the current invoice (services + products + packages). This is
+   533→  // a bulk operation — it does NOT run the per-item conflict check (the cashier
+   534→  // explicitly chooses to assign the whole order to one staff). OK is disabled
+   535→  // until a staff is picked; Cancel closes without changing anything.
+   536→  const [assignAllStaffOpen, setAssignAllStaffOpen] = useState(false);
+   537→  const [assignAllStaffPickStaffId, setAssignAllStaffPickStaffId] = useState<string>("");
+   538→  // Payment confirmation dialog state. When the cashier clicks the action-bar
+   539→  // "Thanh toán" button, this dialog opens FIRST (instead of immediately
+   540→  // entering review mode). The dialog shows the amount due, one or more
+   541→  // PAYMENT ROWS (each row = Phương thức + Số tiền on the SAME line), and a
+   542→  // notes field. (The "Mã hóa đơn" field was removed per request — the system
+   543→  // auto-generates the real code.) Only when the cashier clicks "Thanh toán"
+   544→  // INSIDE this dialog does the actual `handleThanhToan()` run (which auto-
+   545→  // checkins the booking, creates a pending invoice, and enters the "chờ bấm
+   546→  // Hoàn tất" review state). "Hủy" closes the dialog without changing
+   547→  // anything. This matches the reference mockup: a 2-step payment flow where
+   548→  // the first click opens the form and the second click (inside the dialog)
+   549→  // confirms.
+   550→  //
+   551→  // Multi-row payment: the dialog starts with ONE payment row. A small square
+   552→  // [+] button next to the row lets the cashier add a SECOND row. Because there
+   553→  // are only 2 payment methods (cash / transfer), the second row's method is
+   554→  // LOCKED to the opposite of the first row's (if row 1 = Tiền mặt, row 2 =
+   555→  // Chuyển khoản, and vice versa). So at most 2 rows exist. The [+] button is
+   556→  // hidden once 2 rows exist; a [×] remove button appears on row 2 to drop it.
+   557→  // Amount entry: BOTH rows are EDITABLE — the cashier types each amount
+   558→  // manually. Row 1 starts pre-filled with the full invoice total (so a
+   559→  // single-method payment needs no editing); when the cashier clicks [+] to
+   560→  // add row 2, row 2 starts EMPTY (NO auto-split — the cashier types both
+   561→  // amounts themselves). A small hint shows the sum vs amount due.
+   562→  type PayRow = { method: "cash" | "transfer"; amount: string };
+   563→  const [payConfirmOpen, setPayConfirmOpen] = useState(false);
+   564→  const [payConfirmRows, setPayConfirmRows] = useState<PayRow[]>([
+   565→    { method: "cash", amount: "" },
+   566→  ]);
+   567→  const [payConfirmNote, setPayConfirmNote] = useState("");
+   568→
+   569→  // Parse the promotion's serviceIds JSON string into a list (or null = all).
+   570→  // For "service_category" type these are category ids; otherwise service ids.
+   571→  const getPromoTargetIds = (promo: { serviceIds: string | null }): string[] | null => {
+   572→    if (!promo.serviceIds) return null;
+   573→    try {
+   574→      const ids = JSON.parse(promo.serviceIds) as string[];
+   575→      if (!Array.isArray(ids) || ids.length === 0) return null;
+   576→      return ids;
+   577→    } catch {
+   578→      return null;
+   579→    }
+   580→  };
+   581→
+   582→  // Fetch the service list so we can resolve each invoice item's service id
+   583→  // -> category id. Needed for "service_category" promotions whose targetIds
+   584→  // are CATEGORY ids (the invoice item only stores the service id).
+   585→  const { data: servicesForCategory } = useQuery<Array<{
+   586→    id: string;
+   587→    category_id: string | null;
+   588→  }>>({
+   589→    queryKey: ["cashier-services-for-category"],
+   590→    queryFn: async () => {
+   591→      const res = await fetch("/api/supabase/services?limit=200");
+   592→      const json = await res.json();
+   593→      return (json.data as Array<{ id: string; category_id: string | null }>) || [];
+   594→    },
+   595→  });
+   596→
+   597→  // Whether a given invoice line is eligible for a promotion, mirroring the
+   598→  // scope logic from the Booking module: null scope = all items; otherwise
+   599→  // match by service id, or by category id for "service_category" promos.
+   600→  // For "product" promos, match against product items by their itemId.
+   601→  // Used by handlePromoSelect to apply the promo per-line to the right items.
+   602→  const isItemPromoEligible = (
+   603→    item: { itemId: string; type?: string },
+   604→    promo: { discountType: string; serviceIds: string | null }
+   605→  ): boolean => {
+   606→    const targetIds = getPromoTargetIds(promo);
+   607→    if (!targetIds) return true;
+   608→    if (promo.discountType === "service_category") {
+   609→      const catId =
+   610→        (servicesForCategory || []).find((s) => s.id === item.itemId)
+   611→          ?.category_id || "";
+   612→      return targetIds.includes(catId);
+   613→    }
+   614→    return targetIds.includes(item.itemId);
+   615→  };
+   616→
+   617→  const handleDiscountChange = (value: string) => {
+   618→    setDiscountInput(value);
+   619→    if (activeTabId) {
+   620→      const amount = parseFloat(value) || 0;
+   621→      setDiscountAmount(activeTabId, amount);
+   622→    }
+   623→  };
+   624→
+   625→  // When a promotion is chosen, apply it as a per-line VND discount on each
+   626→  // ELIGIBLE line. For service/service_category promos, only service + package
+   627→  // items are eligible (products excluded). For "product" promos, only PRODUCT
+   628→  // items are eligible (services excluded) — this previously silently failed
+   629→  // because product items were filtered out entirely.
+   630→  // The promo lives per-item so the line "Thành tiền" and footer totals update
+   631→  // live; the invoice-level discountAmount is cleared to avoid any
+   632→  // double-counting. Clearing the promo resets every line to 0.
+   633→  const handlePromoSelect = (promoId: string) => {
+   634→    setSelectedPromoId(promoId);
+   635→    if (!activeTabId) return;
+   636→    const invoice = invoices[activeTabId];
+   637→    if (!invoice) return;
+   638→    const isProductPromo = (p: { discountType: string }) => p.discountType === "product";
+   639→    // For product promos, target PRODUCT items; otherwise target services + packages.
+   640→    const targetItems = invoice.items.filter((it) =>
+   641→      isProductPromo(promotions.find((p) => p.id === promoId) || { discountType: "" })
+   642→        ? it.type === "product"
+   643→        : it.type !== "product"
+   644→    );
+   645→    if (promoId === "") {
+   646→      // "Không áp dụng" — clear all per-line discounts on the targeted item types.
+   647→      targetItems.forEach((it) =>
+   648→        updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
+   649→      );
+   650→      setDiscountInput("");
+   651→      setDiscountAmount(activeTabId, 0);
+   652→      return;
+   653→    }
+   654→    const promo = promotions.find((p) => p.id === promoId);
+   655→    if (!promo) return;
+   656→    // A promotion and a voucher are mutually exclusive — selecting a promo
+   657→    // clears any applied voucher (and its discount) to avoid double-discount.
+   658→    if (selectedVoucher) {
+   659→      clearVoucherDiscount();
+   660→      setSelectedVoucher(null);
+   661→      setVoucherError("");
+   662→    }
+   663→    const pct = Number(promo.discountValue) || 0;
+   664→    const eligible = targetItems.filter((it) => isItemPromoEligible(it, promo));
+   665→    if (pct <= 0 || eligible.length === 0) {
+   666→      // No eligible item for this promo — don't apply it.
+   667→      const msg = isProductPromo(promo)
+   668→        ? "Chương trình khuyến mãi không được áp dụng cho sản phẩm hiện tại"
+   669→        : "Chương trình khuyến mãi không được áp dụng cho dịch vụ hiện tại";
+   670→      alert(msg);
+   671→      setSelectedPromoId("");
+   672→      targetItems.forEach((it) =>
+   673→        updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
+   674→      );
+   675→      setDiscountInput("");
+   676→      setDiscountAmount(activeTabId, 0);
+   677→      return;
+   678→    }
+   679→    // Apply the promo share to each eligible line (VND amount so the Giảm giá
+   680→    // column shows a tiền amount); reset non-eligible targeted items to 0.
+   681→    targetItems.forEach((it) => {
+   682→      if (isItemPromoEligible(it, promo)) {
+   683→        const share = Math.round((it.price * it.quantity * pct) / 100);
+   684→        updateInvoiceItemDiscount(activeTabId, it.id, share, "VND");
+   685→      } else {
+   686→        updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND");
+   687→      }
+   688→    });
+   689→    // Promo now lives per-item; clear the invoice-level discount + manual input.
+   690→    setDiscountInput("");
+   691→    setDiscountAmount(activeTabId, 0);
+   692→  };
+   693→
+   694→  // Apply a voucher by its code. Looks up the voucher in the incentives table
+   695→  // (type=voucher), validates it (active, branch-eligible, within validity
+   696→  // window, not fully used), then applies its discount to eligible items —
+   697→  // mirroring handlePromoSelect but for vouchers. On any validation failure,
+   698→  // clears the voucher + shows a human-readable error so the cashier knows why
+   699→  // the code was rejected. A voucher and a promotion are mutually exclusive:
+   700→  // applying a voucher clears any selected promotion (and vice versa) to avoid
+   701→  // double-discounting.
+   702→  const handleVoucherApply = async (code: string) => {
+   703→    setVoucherError("");
+   704→    const trimmed = code.trim();
+   705→    if (!trimmed) {
+   706→      // Empty code → clear any previously-applied voucher discount.
+   707→      if (selectedVoucher && activeTabId) {
+   708→        clearVoucherDiscount();
+   709→      }
+   710→      setSelectedVoucher(null);
+   711→      return;
+   712→    }
+   713→    if (!activeTabId) return;
+   714→    try {
+   715→      // Fetch vouchers matching the code (case-insensitive search via the
+   716→      // API's `search` param, which matches name OR code with ilike).
+   717→      const res = await fetch(
+   718→        `/api/supabase/incentives?type=voucher&search=${encodeURIComponent(trimmed)}&limit=50`
+   719→      );
+   720→      const json = await res.json();
+   721→      const candidates = (json.data?.items || []) as Array<{
+   722→        id: string;
+   723→        code: string | null;
+   724→        name: string;
+   725→        discountValue: number;
+   726→        discountType: string;
+   727→        serviceIds: string | null;
+   728→        branchIds: string | null;
+   729→        startDate: string | null;
+   730→        endDate: string | null;
+   731→        usageLimit: number;
+   732→        usedCount: number;
+   733→      }>;
+   734→      // Find an exact (case-insensitive) code match — the search param is a
+   735→      // fuzzy ilike on name+code, so we must filter client-side for exactness.
+   736→      const voucher = candidates.find(
+   737→        (v) => v.code && v.code.toLowerCase() === trimmed.toLowerCase()
+   738→      );
+   739→      if (!voucher) {
+   740→        setVoucherError("Mã voucher không tồn tại");
+   741→        if (selectedVoucher) clearVoucherDiscount();
+   742→        setSelectedVoucher(null);
+   743→        return;
+   744→      }
+   745→      // Validate: active (date + usage).
+   746→      if (!isPromotionActive(voucher)) {
+   747→        setVoucherError("Voucher đã hết hạn hoặc hết lượt sử dụng");
+   748→        if (selectedVoucher) clearVoucherDiscount();
+   749→        setSelectedVoucher(null);
+   750→        return;
+   751→      }
+   752→      // Validate: branch-eligible.
+   753→      if (!isPromotionForBranch(voucher, selectedBranchId)) {
+   754→        setVoucherError("Voucher không áp dụng cho chi nhánh này");
+   755→        if (selectedVoucher) clearVoucherDiscount();
+   756→        setSelectedVoucher(null);
+   757→        return;
+   758→      }
+   759→      // Valid → apply the discount to eligible items. Mutually exclusive with
+   760→      // a selected promotion: clear any promo first to avoid double-discount.
+   761→      if (selectedPromoId) {
+   762→        handlePromoSelect("");
+   763→      }
+   764→      setSelectedVoucher(voucher);
+   765→      const isProductVoucher = voucher.discountType === "product";
+   766→      const invoice = invoices[activeTabId];
+   767→      const targetItems = invoice.items.filter((it) =>
+   768→        isProductVoucher ? it.type === "product" : it.type !== "product"
+   769→      );
+   770→      const pct = Number(voucher.discountValue) || 0;
+   771→      const eligible = targetItems.filter((it) =>
+   772→        isItemPromoEligible(it, voucher)
+   773→      );
+   774→      if (pct <= 0 || eligible.length === 0) {
+   775→        setVoucherError(
+   776→          isProductVoucher
+   777→            ? "Voucher không được áp dụng cho sản phẩm hiện tại"
+   778→            : "Voucher không được áp dụng cho dịch vụ hiện tại"
+   779→        );
+   780→        return;
+   781→      }
+   782→      targetItems.forEach((it) => {
+   783→        if (isItemPromoEligible(it, voucher)) {
+   784→          const share = Math.round((it.price * it.quantity * pct) / 100);
+   785→          updateInvoiceItemDiscount(activeTabId, it.id, share, "VND");
+   786→        } else {
+   787→          updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND");
+   788→        }
+   789→      });
+   790→      setDiscountInput("");
+   791→      setDiscountAmount(activeTabId, 0);
+   792→    } catch {
+   793→      setVoucherError("Không thể kiểm tra mã voucher");
+   794→    }
+   795→  };
+   796→
+   797→  // Clear all per-line discounts that were applied by the current voucher.
+   798→  // Used when the voucher code is emptied or replaced. Targets the same item
+   799→  // types the voucher applied to (products for product vouchers, services+
+   800→  // packages otherwise) and resets their discount to 0.
+   801→  const clearVoucherDiscount = () => {
+   802→    if (!activeTabId || !selectedVoucher) return;
+   803→    const isProductVoucher = selectedVoucher.discountType === "product";
+   804→    const invoice = invoices[activeTabId];
+   805→    const targetItems = invoice.items.filter((it) =>
+   806→      isProductVoucher ? it.type === "product" : it.type !== "product"
+   807→    );
+   808→    targetItems.forEach((it) =>
+   809→      updateInvoiceItemDiscount(activeTabId, it.id, 0, "VND")
+   810→    );
+   811→  };
+   812→
+   813→  const handleTipChange = (value: string) => {
+   814→    setTipInput(value);
+   815→    if (activeTabId) {
+   816→      const amount = parseFloat(value) || 0;
+   817→      setTipAmount(activeTabId, amount);
+   818→    }
+   819→  };
+   820→
+   821→  // === Walk-in tab: invoice creation ===
+   822→  // Walk-in tabs NO LONGER create a pending standalone invoice on first item
+   823→  // add. That earlier behavior produced orphaned empty invoices (the effect
+   824→  // fired after the item was added but before the booking-creation async
+   825→  // completed, so `meta.bookingId` was still empty → a standalone invoice got
+   826→  // POSTed even for tabs that were about to be linked to a booking). The
+   827→  // invoice is now created only at checkout (POST with booking_id when a
+   828→  // booking exists, or a standalone invoice for product-only walk-in tabs).
+   829→  // This keeps "Danh sách đơn hàng" clean (no pending drafts) and avoids the
+   830→  // sync conflict with the Lịch hẹn module.
+   831→  const pendingInvoiceInFlightRef = useRef<string | null>(null);
+   832→  // Pre-compute the active tab's meta fields for the dep array (avoids
+   833→  // indexing tabMeta with a possibly-null activeTabId in the deps).
+   834→  const activeMetaType = activeTabId ? tabMeta[activeTabId]?.type : undefined;
+   835→  const activeMetaInvoiceId = activeTabId ? tabMeta[activeTabId]?.invoiceId : undefined;
+   836→  const activeMetaBookingId = activeTabId ? tabMeta[activeTabId]?.bookingId : undefined;
+   837→  useEffect(() => {
+   838→    // Disabled: no early standalone-invoice creation. Invoices are created at
+   839→    // checkout only (see checkoutMutation). The earlier behavior produced
+   840→    // orphaned empty invoices (the effect fired after an item was added but
+   841→    // before the booking-creation async completed, so `meta.bookingId` was
+   842→    // still empty → a standalone invoice got POSTed even for tabs that were
+   843→    // about to be linked to a booking). This is intentionally a no-op now.
+   844→  }, [
+   845→    activeTabId,
+   846→    invoice?.items?.length,
+   847→    activeMetaType,
+   848→    activeMetaInvoiceId,
+   849→    activeMetaBookingId,
+   850→    selectedBranchId,
+   851→  ]);
+   852→
+   853→  // "Thanh toán" handler: auto-checkin the booking (if not already checkin) +
+   854→  // create a PENDING invoice (so the Booking module's invoice dialog can open
+   855→  // it) + enter review mode. This makes the booking + invoice appear in the
+   856→  // Booking module as "Đã checkin" with a "Hóa đơn" link immediately — synced
+   857→  // via the shared payment-review store.
+   858→  const [thanhToanPending, setThanhToanPending] = useState(false);
+   859→  const handleThanhToan = async () => {
+   860→    if (!activeTabId || !invoice || invoice.items.length === 0) return;
+   861→    setThanhToanPending(true);
+   862→    try {
+   863→      const meta = tabMeta[activeTabId];
+   864→      const bookingId = meta?.bookingId;
+   865→      // 1. Auto-checkin the booking. FIRST fetch the booking's CURRENT status
+   866→      //    + date_time so we can detect the "Đã xác nhận → pay directly" case:
+   867→      //    when the booking was "confirmed" (NOT yet checked in), the checkin
+   868→      //    activity should be backdated to the booking's date_time (the service
+   869→      //    registration time) per the user's request. Then PATCH → "checkin".
+   870→      //    The PATCH is idempotent (if already checkin, it stays checkin).
+   871→      let checkinAt: string | null = null;
+   872→      if (bookingId) {
+   873→        try {
+   874→          // Read the booking's current status + date_time BEFORE patching, so
+   875→          // we know whether this is a "direct pay from confirmed" case.
+   876→          const getRes = await fetch(
+   877→            `/api/supabase/bookings/${encodeURIComponent(bookingId)}`
+   878→          );
+   879→          const getJson = await getRes.json();
+   880→          if (getJson.ok && getJson.data) {
+   881→            const b = getJson.data as { status?: string; date_time?: string };
+   882→            if (b.status === "confirmed" && b.date_time) {
+   883→              // Confirmed, NOT yet checked in → the checkin activity will be
+   884→              // backdated to the booking's date_time (registration time).
+   885→              checkinAt = b.date_time;
+   886→            }
+   887→          }
+   888→        } catch {
+   889→          // best-effort — if the GET fails, checkinAt stays null (defaults to now)
+   890→        }
+   891→        try {
+   892→          await fetch(`/api/supabase/bookings/${bookingId}`, {
+   893→            method: "PATCH",
+   894→            headers: { "Content-Type": "application/json" },
+   895→            body: JSON.stringify({ status: "checkin" }),
+   896→          });
+   897→          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+   898→          queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+   899→        } catch {
+   900→          // Best-effort — continue to review even if checkin fails.
+   901→        }
+   902→      }
+   903→      // 2. Create a PENDING invoice for this booking (if one doesn't exist yet)
+   904→      //    so the Booking module's invoice dialog can open it and show the
+   905→      //    Payment dialog (review mode synced). SKIP when the customer_id would
+   906→      //    be a synthetic "walkin-" id (not a real UUID) — the invoices API
+   907→      //    requires a valid customer_id UUID, and the real customer is created
+   908→      //    at checkout (checkoutMutation) anyway. This is best-effort (the
+   909→      //    pending invoice is only for the Booking module's preview); skipping
+   910→      //    it here avoids the "invalid input syntax for type uuid" error.
+   911→      if (bookingId && !meta?.invoiceId) {
+   912→        try {
+   913→          const realCustomerId = meta?.customerId || activeCustomer?.customerId || "";
+   914→          if (!realCustomerId || realCustomerId.startsWith("walkin-")) {
+   915→            // Synthetic id — skip the pending-invoice preview. The real
+   916→            // customer + completed invoice are created at checkout
+   917→            // (checkoutMutation handles customer creation for synthetic ids).
+   918→          } else {
+   919→            const hasServices = invoice.items.some((it) => it.type === "service");
+   920→            const res = await fetch("/api/supabase/invoices", {
+   921→              method: "POST",
+   922→              headers: { "Content-Type": "application/json" },
+   923→              body: JSON.stringify({
+   924→                customer_id: realCustomerId,
+   925→                branch_id: selectedBranchId || null,
+   926→                booking_id: shouldSyncBookingFor(activeTabId) ? bookingId : undefined,
+   927→                items: invoice.items.map((it) => ({
+   928→                  id: it.id,
+   929→                  itemId: it.itemId,
+   930→                  name: it.name,
+   931→                  type: it.type,
+   932→                  quantity: it.quantity,
+   933→                  price: it.price,
+   934→                  discount: it.discount,
+   935→                  discountType: it.discountType || "VND",
+   936→                  total: it.total,
+   937→                  staffName: it.staffName,
+   938→                })),
+   939→                subtotal: getSubtotal(activeTabId),
+   940→                discount: invoice.discountAmount,
+   941→                tip: getTipAmount(activeTabId),
+   942→                promotion: null,
+   943→                final_amount: getInvoiceTotal(activeTabId),
+   944→                payment_method: paymentMethod,
+   945→                status: "pending", // pending — not yet paid
+   946→                photos: [],
+   947→                created_by: useAuthStore.getState().user?.id,
+   948→                // Pass the backdated checkin timestamp when this is a "direct
+   949→                // pay from confirmed" case (booking was "confirmed", not yet
+   950→                // checked in). The server uses it for the CHECKIN activity's
+   951→                // created_at so the history shows the checkin at the booking's
+   952→                // date_time (service registration time). Null/omitted → now().
+   953→                checkin_at: checkinAt || undefined,
+   954→              }),
+   955→            });
+   956→            const json = await res.json();
+   957→            if (json.ok && json.data?.id) {
+   958→              updateTabMeta(activeTabId, { invoiceId: json.data.id });
+   959→            }
+   960→          }
+   961→        } catch {
+   962→          // Best-effort — continue to review even if invoice creation fails.
+   963→        }
+   964→      }
+   965→      // 3. Enter review mode (shared store → synced to Booking module).
+   966→      enterReview(reviewKey);
+   967→    } finally {
+   968→      setThanhToanPending(false);
+   969→    }
+   970→  };
+   971→  // Helper: check if the active tab's invoice should sync with the booking.
+   972→  function shouldSyncBookingFor(tabId: string): boolean {
+   973→    const inv = invoices[tabId];
+   974→    const m = tabMeta[tabId];
+   975→    if (!inv || !m?.bookingId) return false;
+   976→    return inv.items.some((it) => it.type === "service");
+   977→  }
+   978→
+   979→  // Create-invoice mutation: POSTs the draft to Supabase.
+   980→  const checkoutMutation = useMutation({
+   981→    mutationFn: async () => {
+   982→      if (!activeTabId || !activeCustomer || !invoice) {
+   983→        throw new Error("Chưa chọn khách hàng hoặc chưa có mặt hàng");
+   984→      }
+   985→      if (!selectedBranchId || selectedBranchId === "all") {
+   986→        throw new Error("Vui lòng chọn chi nhánh");
+   987→      }
+   988→      // No status restriction here — checkout is allowed from any non-terminal
+   989→      // booking status (new / confirmed / checkin) or for manual tabs with no
+   990→      // booking at all. The cashier can complete payment immediately; the
+   991→      // booking (if any) will be PATCHed straight to "checkout" below.
+   992→      const subtotal = getSubtotal(activeTabId);
+   993→      const total = getInvoiceTotal(activeTabId);
+   994→      const tip = getTipAmount(activeTabId);
+   995→      // Build promotion metadata (matches the booking invoice dialog shape) so
+   996→      // the invoices API increments the promotion's used_count on save. The
+   997→      // discountAmount is the SUM of the per-line promo discounts applied to
+   998→      // eligible items (computed from each item's discount field via
+   999→      // resolveDiscountAmount) — NOT invoice.discountAmount, which
+  1000→      // handlePromoSelect clears to 0. This ensures the saved invoice's
+  1001→      // promotion.discountAmount is correct so cashier/invoices, activity, and
+  1002→      // customer-history display "PromoName (−<actual>đ)" instead of "(−0đ)".
+  1003→      const promoDiscountSum = selectedPromo
+  1004→        ? invoice.items
+  1005→            .filter((it) => isItemPromoEligible(it, selectedPromo))
+  1006→            .reduce((sum, it) => sum + resolveDiscountAmount(it), 0)
+  1007→        : 0;
+  1008→      // Compute the voucher discount sum (same per-line approach as the
+  1009→      // promotion sum) when a voucher is applied instead of a promotion.
+  1010→      const voucherDiscountSum = selectedVoucher
+  1011→        ? invoice.items
+  1012→            .filter((it) => isItemPromoEligible(it, selectedVoucher))
+  1013→            .reduce((sum, it) => sum + resolveDiscountAmount(it), 0)
+  1014→        : 0;
+  1015→      // Build promotion metadata (matches the booking invoice dialog shape) so
+  1016→      // the invoices API increments the incentive's used_count on save. When a
+  1017→      // voucher is applied (no promotion), send the voucher as the "promotion"
+  1018→      // meta — the API only needs the id to increment used_count, and both
+  1019→      // promotions and vouchers live in the same `incentives` table. A voucher
+  1020→      // and a promotion are mutually exclusive, so only one is ever non-null.
+  1021→      const promotionMeta = selectedPromo
+  1022→        ? {
+  1023→            id: selectedPromo.id,
+  1024→            code: selectedPromo.code || "",
+  1025→            name: selectedPromo.name,
+  1026→            discountValue: selectedPromo.discountValue,
+  1027→            discountAmount: promoDiscountSum,
+  1028→          }
+  1029→        : selectedVoucher
+  1030→        ? {
+  1031→            id: selectedVoucher.id,
+  1032→            code: selectedVoucher.code || "",
+  1033→            name: selectedVoucher.name,
+  1034→            discountValue: selectedVoucher.discountValue,
+  1035→            discountAmount: voucherDiscountSum,
+  1036→          }
+  1037→        : null;
+  1038→
+  1039→      // Resolve the real customer_id: for booking tabs, activeCustomer.customerId
+  1040→      // is the booking.id (tab key), not the customer. Use tabMeta.customerId
+  1041→      // (set by handlePickBooking) to get the real customer.
+  1042→      const meta = tabMeta[activeTabId];
+  1043→      let realCustomerId = meta?.customerId || activeCustomer.customerId;
+  1044→      const bookingId = meta?.bookingId;
+  1045→
+  1046→      // === Walk-in tab: PUT the existing pending invoice to "completed" ===
+  1047→      // Walk-in tabs create a pending standalone invoice as soon as the first
+  1048→      // item is added (see the useEffect above). On "Hoàn tất" we PUT-update
+  1049→      // that invoice to "completed" with the final items/tip/promotion — NO
+  1050→      // new invoice is created, and NO booking is synced (walk-in invoices are
+  1051→      // standalone, booking_id = null). The success path shows the inline
+  1052→      // "Hóa đơn đã thanh toán thành công" banner (via paidSuccess).
+  1053→      if (meta?.type === "walkin" && meta?.invoiceId) {
+  1054→        const res = await fetch(
+  1055→          `/api/supabase/invoices/${encodeURIComponent(meta.invoiceId)}`,
+  1056→          {
+  1057→            method: "PUT",
+  1058→            headers: { "Content-Type": "application/json" },
+  1059→            body: JSON.stringify({
+  1060→              items: invoice.items.map((it) => ({
+  1061→                id: it.id,
+  1062→                itemId: it.itemId,
+  1063→                name: it.name,
+  1064→                type: it.type,
+  1065→                quantity: it.quantity,
+  1066→                price: it.price,
+  1067→                discount: it.discount,
+  1068→                discountType: it.discountType || "VND",
+  1069→                total: it.total,
+  1070→                staffName: it.staffName,
+  1071→              })),
+  1072→              subtotal,
+  1073→              discount: invoice.discountAmount,
+  1074→              tip,
+  1075→              promotion: promotionMeta,
+  1076→              final_amount: total,
+  1077→              payment_method: paymentMethod,
+  1078→              status: "completed",
+  1079→              photos: draftPhotos,
+  1080→            }),
+  1081→          }
+  1082→        );
+  1083→        const json = await res.json();
+  1084→        if (!json.ok) {
+  1085→          throw new Error(json.error || "Không thể thanh toán hóa đơn");
+  1086→        }
+  1087→        return {
+  1088→          code: (json.data as { code?: string })?.code,
+  1089→          id: (json.data as { id?: string })?.id,
+  1090→          // Walk-in invoices never sync with the Booking module.
+  1091→          syncedBooking: false,
+  1092→        } as { code?: string; id?: string; syncedBooking: boolean };
+  1093→      }
+  1094→
+  1095→      // Whether the invoice contains any services. Services come from bookings,
+  1096→      // so only service-containing invoices should sync with the Booking module
+  1097→      // (PATCH booking → checkout). Product-only invoices are standalone
+  1098→      // purchases (e.g. a walk-in buying shampoo) and simply appear in the
+  1099→      // Cashier's order/invoice history without touching any booking.
+  1100→      const hasServices = invoice.items.some((it) => it.type === "service");
+  1101→      const shouldSyncBooking = hasServices && !!bookingId;
+  1102→
+  1103→      // === Staff time-conflict check (block Hoàn tất) ===
+  1104→      // Before completing the invoice, verify none of this booking's services
+  1105→      // overlap with ANOTHER (non-cancelled) booking for the same staff on the
+  1106→      // same day. Services run consecutively from the booking's date_time, so
+  1107→      // we fetch the booking (with its services + durations) and check each
+  1108→      // slot against existing bookings, skipping the current booking itself.
+  1109→      // This is a safety net on top of the conflict checks done when each
+  1110→      // service was added (POST/PUT) — guards against stale state or bookings
+  1111→      // created/edited elsewhere after the cashier opened the tab.
+  1112→      if (shouldSyncBooking && bookingId) {
+  1113→        // Fetch this booking's full detail (services + durations + date_time).
+  1114→        const detailRes = await fetch(
+  1115→          `/api/supabase/bookings/${encodeURIComponent(bookingId)}`
+  1116→        );
+  1117→        const detailJson = await detailRes.json();
+  1118→        if (detailJson.ok && detailJson.data) {
+  1119→          const b = detailJson.data as {
+  1120→            date_time?: string;
+  1121→            branch_id?: string | null;
+  1122→            services?: Array<{
+  1123→              staff_id?: string | null;
+  1124→              service?: { duration?: number; name?: string } | null;
+  1125→            }>;
+  1126→          };
+  1127→          const bStart = b.date_time ? new Date(b.date_time).getTime() : NaN;
+  1128→          if (!isNaN(bStart) && Array.isArray(b.services)) {
+  1129→            // Build this booking's consecutive service slots.
+  1130→            let cursor = bStart;
+  1131→            const ownSlots = b.services
+  1132→              .map((s) => {
+  1133→                if (!s.staff_id) return null;
+  1134→                const dur = (Number(s.service?.duration) || 60) * 60 * 1000;
+  1135→                const start = cursor;
+  1136→                const end = start + dur;
+  1137→                cursor = end;
+  1138→                return { staffId: s.staff_id, start, end, name: s.service?.name || "dịch vụ" };
+  1139→              })
+  1140→              .filter(
+  1141→                (x): x is { staffId: string; start: number; end: number; name: string } =>
+  1142→                  x !== null
+  1143→              );
+  1144→
+  1145→            // Fetch existing bookings for the same Vietnam day + branch.
+  1146→            // Convert the booking's date_time (UTC) to its Vietnam calendar
+  1147→            // day, then to the UTC range for that VN day so the overlap check
+  1148→            // covers the full local day (consistent with the booking page).
+  1149→            const dayStart = new Date(bStart);
+  1150→            const vnDay = new Date(dayStart.getTime() + 7 * 60 * 60 * 1000);
+  1151→            const isoDay = `${vnDay.getUTCFullYear()}-${String(vnDay.getUTCMonth() + 1).padStart(2, "0")}-${String(vnDay.getUTCDate()).padStart(2, "0")}`;
+  1152→            const exParams = new URLSearchParams();
+  1153→            exParams.set("page", "1");
+  1154→            exParams.set("limit", "200");
+  1155→            const exDayRange = localDayToUtcRange(isoDay);
+  1156→            exParams.set("date_from", exDayRange.from);
+  1157→            exParams.set("date_to", exDayRange.to);
+  1158→            if (b.branch_id) exParams.set("branch_id", b.branch_id);
+  1159→            const exRes = await fetch(`/api/supabase/bookings?${exParams.toString()}`);
+  1160→            const exJson = await exRes.json();
+  1161→            if (exJson.ok && Array.isArray(exJson.data)) {
+  1162→              for (const ex of exJson.data as Array<{
+  1163→                id: string;
+  1164→                status: string;
+  1165→                date_time: string;
+  1166→                services?: Array<{
+  1167→                  staff_id?: string | null;
+  1168→                  service?: { duration?: number; name?: string } | null;
+  1169→                }>;
+  1170→              }>) {
+  1171→                if (ex.id === bookingId) continue; // skip self
+  1172→                if (ex.status === "cancelled" || ex.status === "no_show") continue;
+  1173→                const exStart = new Date(ex.date_time).getTime();
+  1174→                if (isNaN(exStart)) continue;
+  1175→                for (const exSvc of ex.services || []) {
+  1176→                  if (!exSvc.staff_id) continue;
+  1177→                  const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+  1178→                  const exEnd = exStart + exDur;
+  1179→                  for (const ns of ownSlots) {
+  1180→                    if (ns.staffId === exSvc.staff_id && ns.start < exEnd && exStart < ns.end) {
+  1181→                      const exTime = new Date(exStart).toLocaleTimeString("vi-VN", {
+  1182→                        hour: "2-digit",
+  1183→                        minute: "2-digit",
+  1184→                        timeZone: "UTC",
+  1185→                      });
+  1186→                      throw new Error(
+  1187→                        `Không thể hoàn tất: nhân viên bị trùng lịch — đã có lịch "${exSvc.service?.name || "dịch vụ"}" lúc ${exTime} ${isoDay.split("-").reverse().join("/")}. Vui lòng chỉnh giờ/nhân viên trước khi thanh toán.`
+  1188→                      );
+  1189→                    }
+  1190→                  }
+  1191→                }
+  1192→              }
+  1193→            }
+  1194→          }
+  1195→        }
+  1196→      }
+  1197→
+  1198→      // Ensure realCustomerId is a VALID UUID before building the invoice
+  1199→      // payload. Walk-in / new tabs use a SYNTHETIC tab id ("walkin-<uuid>") as
+  1200→      // the activeCustomer.customerId — that's NOT a real customer and NOT a
+  1201→      // valid UUID, so it can't be sent as `customer_id` (Postgres rejects it
+  1202→      // with "invalid input syntax for type uuid"). A real customer is
+  1203→      // normally created lazily when a SERVICE is added (createBookingForTab
+  1204→      // creates the customer + sets meta.customerId). But several edge cases
+  1205→      // leave meta.customerId unset with a synthetic activeCustomer.customerId:
+  1206→      //   - Product-only walk-in tabs (no service → no booking → no customer).
+  1207→      //   - Walk-in tabs where a service was added WITHOUT a staff (no booking
+  1208→      //     created → no customer) — e.g. when the cashier lacks assign_staff
+  1209→      //     permission, or the booking creation failed.
+  1210→      // In ALL these cases, create a real customer NOW so the invoice has a
+  1211→      // valid customer_id. This runs whenever realCustomerId is missing or
+  1212→      // synthetic (starts with "walkin-"), regardless of whether the invoice
+  1213→      // has services. Tabs that already have a real customer (booking tabs,
+  1214→      // walk-in tabs linked via search/Thêm-khách-mới) keep their real UUID —
+  1215→      // the condition is false → no duplicate customer is created.
+  1216→      const isSyntheticCustomerId =
+  1217→        !realCustomerId || realCustomerId.startsWith("walkin-");
+  1218→      if (
+  1219→        isSyntheticCustomerId &&
+  1220→        meta &&
+  1221→        (meta.type === "walkin" || meta.type === "new")
+  1222→      ) {
+  1223→        const isWalkin = meta.type === "walkin";
+  1224→        const custRes = await fetch("/api/supabase/customers", {
+  1225→          method: "POST",
+  1226→          headers: { "Content-Type": "application/json" },
+  1227→          body: JSON.stringify({
+  1228→            name: isWalkin
+  1229→              ? "Khách vãng lai"
+  1230→              : meta.customerInfo?.name || "Khách mới",
+  1231→            phone: meta.customerInfo?.phone || "",
+  1232→            source_id: isWalkin
+  1233→              ? "779ddad6-01fa-4887-8647-134ce699d643"
+  1234→              : meta.customerInfo?.sourceId || null,
+  1235→            branch_id: selectedBranchId || null,
+  1236→          }),
+  1237→        });
+  1238→        const custJson = await custRes.json();
+  1239→        if (custJson.ok && custJson.data?.id) {
+  1240→          realCustomerId = custJson.data.id;
+  1241→        } else if (custJson.existing_customer?.id) {
+  1242→          // Duplicate phone → use the existing customer.
+  1243→          realCustomerId = custJson.existing_customer.id;
+  1244→        } else {
+  1245→          throw new Error(custJson.error || "Không thể tạo khách hàng cho hóa đơn");
+  1246→        }
+  1247→      }
+  1248→
+  1249→      const payload = {
+  1250→        customer_id: realCustomerId,
+  1251→        branch_id: selectedBranchId,
+  1252→        // Only link the invoice to the booking when it contains services, so a
+  1253→        // product-only invoice doesn't show up as a partial payment on the
+  1254→        // booking in the Booking module.
+  1255→        booking_id: shouldSyncBooking ? bookingId : undefined,
+  1256→        items: invoice.items.map((it) => ({
+  1257→          id: it.id,
+  1258→          itemId: it.itemId,
+  1259→          name: it.name,
+  1260→          type: it.type,
+  1261→          quantity: it.quantity,
+  1262→          price: it.price,
+  1263→          discount: it.discount,
+  1264→          discountType: it.discountType || "VND",
+  1265→          total: it.total,
+  1266→          staffName: it.staffName,
+  1267→        })),
+  1268→        subtotal,
+  1269→        discount: invoice.discountAmount,
+  1270→        tip,
+  1271→        promotion: promotionMeta,
+  1272→        final_amount: total,
+  1273→        payment_method: paymentMethod,
+  1274→        status: "completed",
+  1275→        photos: draftPhotos,
+  1276→        created_by: useAuthStore.getState().user?.id,
+  1277→      };
+  1278→
+  1279→      // SYNC WITH BOOKING MODULE (only when the invoice has services):
+  1280→      // Before creating a new invoice, check if a (pending) invoice already
+  1281→      // exists for this booking (the Booking module's invoice dialog may have
+  1282→      // created one at checkin to hold photos/tip). If so, PUT-update it to
+  1283→      // "completed" with the cashier's items instead of POSTing a second
+  1284→      // invoice — this keeps a single invoice per booking and ensures the two
+  1285→      // modules stay in sync (same invoice id, same items, same totals).
+  1286→      // Product-only invoices skip this check entirely and always POST a new
+  1287→      // standalone invoice (no booking link, no duplicate-PUT path).
+  1288→      let existingInvoiceId: string | null = null;
+  1289→      if (shouldSyncBooking) {
+  1290→        try {
+  1291→          const checkRes = await fetch(
+  1292→            `/api/supabase/invoices?booking_id=${encodeURIComponent(bookingId!)}&limit=1`
+  1293→          );
+  1294→          const checkJson = await checkRes.json();
+  1295→          if (checkJson.ok && Array.isArray(checkJson.data) && checkJson.data.length > 0) {
+  1296→            existingInvoiceId = (checkJson.data[0] as { id: string }).id;
+  1297→          }
+  1298→        } catch {
+  1299→          // Best-effort check; if it fails, fall through to POST.
+  1300→        }
+  1301→      }
+  1302→
+  1303→      let json: { ok: boolean; data?: { code?: string }; error?: string };
+  1304→      if (existingInvoiceId) {
+  1305→        // PUT update the existing invoice → completed with the cashier's items.
+  1306→        const res = await fetch(`/api/supabase/invoices/${existingInvoiceId}`, {
+  1307→          method: "PUT",
+  1308→          headers: { "Content-Type": "application/json" },
+  1309→          body: JSON.stringify({
+  1310→            items: payload.items,
+  1311→            subtotal,
+  1312→            discount: invoice.discountAmount,
+  1313→            tip,
+  1314→            promotion: promotionMeta,
+  1315→            final_amount: total,
+  1316→            payment_method: payload.payment_method,
+  1317→            status: "completed",
+  1318→            photos: draftPhotos,
+  1319→            created_by: useAuthStore.getState().user?.id,
+  1320→          }),
+  1321→        });
+  1322→        json = await res.json();
+  1323→      } else {
+  1324→        // No existing invoice — create a new completed one.
+  1325→        const res = await fetch("/api/supabase/invoices", {
+  1326→          method: "POST",
+  1327→          headers: { "Content-Type": "application/json" },
+  1328→          body: JSON.stringify(payload),
+  1329→        });
+  1330→        json = await res.json();
+  1331→      }
+  1332→      if (!json.ok) throw new Error(json.error || "Không thể tạo hóa đơn");
+  1333→
+  1334→      // Only sync the booking status → checkout when the invoice contains
+  1335→      // services. This is what transitions the Booking module's "Thanh toán"
+  1336→      // column to "Đã thanh toán" + shows the Hóa đơn link, and the "Trạng
+  1337→      // thái" column to "Đã Checkout". Product-only invoices do NOT touch the
+  1338→      // booking — the customer simply bought retail products with no service
+  1339→      // appointment to check out.
+  1340→      if (shouldSyncBooking) {
+  1341→        try {
+  1342→          await fetch(`/api/supabase/bookings/${bookingId}`, {
+  1343→            method: "PATCH",
+  1344→            headers: { "Content-Type": "application/json" },
+  1345→            body: JSON.stringify({ status: "checkout" }),
+  1346→          });
+  1347→        } catch {
+  1348→          // Best-effort — the invoice was created; the booking status sync
+  1349→          // will happen on next data refresh.
+  1350→        }
+  1351→      }
+  1352→
+  1353→      return {
+  1354→        ...(json.data as { code?: string; id?: string }),
+  1355→        syncedBooking: shouldSyncBooking,
+  1356→      } as { code?: string; id?: string; syncedBooking: boolean };
+  1357→    },
+  1358→    onSuccess: (data) => {
+  1359→      // Refresh the invoices list so the new order appears.
+  1360→      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1361→      queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
+  1362→      // Refresh the incentives list so the CSKH counts update after a promotion use.
+  1363→      queryClient.invalidateQueries({ queryKey: ["cashier-promotions"] });
+  1364→      // Refresh the cashier day-bookings so the active tab's status updates
+  1365→      // (checkin -> checkout) and the paid invoice hides the action buttons.
+  1366→      queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+  1367→      // Refresh the standalone-invoice list so a newly-paid product-only order
+  1368→      // appears as a tab in the cashier list (it has no booking, so it only
+  1369→      // shows up via this query).
+  1370→      queryClient.invalidateQueries({ queryKey: ["cashier-day-standalone-invoices"] });
+  1371→      // Refresh the Booking module's list so the booking status → checkout.
+  1372→      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1373→
+  1374→      // For product-only orders (no booking link), record the created invoice's
+  1375→      // id on the tab so the InvoiceSummary can load its saved items/status.
+  1376→      // This keeps the just-paid draft tab linked to the real invoice.
+  1377→      if (activeTabId && data?.id && !data.syncedBooking) {
+  1378→        updateTabMeta(activeTabId, { invoiceId: data.id, bookingCode: data.code || undefined });
+  1379→      }
+  1380→
+  1381→      // Capture the booking code BEFORE resetting, so the success banner can
+  1382→      // show exactly which order was paid.
+  1383→      const bookingCode = activeTabId ? tabMeta[activeTabId]?.bookingCode ?? null : null;
+  1384→
+  1385→      // IMPORTANT: Do NOT close the customer tab here. Keeping the tab open lets
+  1386→      // the `isPaid` flag (driven by the refetched day-bookings) flip to true,
+  1387→      // which replaces the action buttons with the "Hóa đơn đã hoàn tất thanh
+  1388→      // toán" banner — making it visually obvious that ONLY this order was
+  1389→      // paid. Closing the tab would switch to another order and make it look
+  1390→      // like multiple orders were affected.
+  1391→      setDiscountInput("");
+  1392→      setTipInput("");
+  1393→      setSelectedPromoId("");
+  1394→      setPaymentMethod("cash");
+  1395→      if (activeTabId) {
+  1396→        setDraftPhotosByTab((prev) => {
+  1397→          const next = { ...prev };
+  1398→          delete next[activeTabId];
+  1399→          return next;
+  1400→        });
+  1401→      }
+  1402→      // Show a non-blocking inline banner (replaces the old blocking alert).
+  1403→      if (activeTabId) updateTabMeta(activeTabId, { paid: true });
+  1404→      // Exit review mode — the invoice is now paid (read-only banner shows).
+  1405→      exitReview(reviewKey);
+  1406→      setPaidSuccess({
+  1407→        tabId: activeTabId,
+  1408→        invoiceCode: data?.code || "(không có mã)",
+  1409→        bookingCode,
+  1410→        syncedBooking: data?.syncedBooking ?? false,
+  1411→      });
+  1412→    },
+  1413→    onError: (error: Error) => {
+  1414→      alert(`Lỗi thanh toán: ${error.message}`);
+  1415→    },
+  1416→  });
+  1417→
+  1418→  // Cancel order mutation — triggered by the "Hủy thanh toán" button.
+  1419→  // Two paths:
+  1420→  //  1) Order with a booking (has services): PATCH the booking status →
+  1421→  //     "cancelled" so the time slot is freed up. The cancelled booking stays
+  1422→  //     in the Cashier tab list (showing "Đơn hàng đã hủy").
+  1423→  //  2) Product-only order (no booking): there is no booking to cancel, so we
+  1424→  //     create a STANDALONE invoice with status="cancelled" to record the
+  1425→  //     cancelled product-only order. Per business rule, the cancelled order
+  1426→  //     stays visible in the Cashier list. We do NOT close the tab in either
+  1427→  //     case — keeping it open lets the "Đơn hàng đã hủy" banner show, and the
+  1428→  //     order remains in the list so the cashier can review what was cancelled.
+  1429→  const cancelBookingMutation = useMutation({
+  1430→    mutationFn: async () => {
+  1431→      // Capture the tabId at mutation START — NOT from the current
+  1432→      // activeTabId which may change if the user switches tabs while
+  1433→      // the PATCH/PUT request is in flight. Without this, onSuccess
+  1434→      // would set cancelled=true on the WRONG tab (the one the user
+  1435→      // switched to), making unrelated orders appear cancelled.
+  1436→      const capturedTabId = activeTabId;
+  1437→      if (!capturedTabId || !activeCustomer || !invoice) {
+  1438→        throw new Error("Chưa chọn đơn hàng");
+  1439→      }
+  1440→      const meta = tabMeta[capturedTabId];
+  1441→      const bookingId = meta?.bookingId;
+  1442→
+  1443→      // ---- Path 0: walk-in tab with an existing pending invoice ----
+  1444→      // Walk-in tabs create a pending standalone invoice as soon as the first
+  1445→      // item is added. Cancelling such a tab PUTs the EXISTING invoice to
+  1446→      // "cancelled" — we do NOT create a second (cancelled) invoice. This keeps
+  1447→      // a single invoice per walk-in tab, consistent with the checkout path.
+  1448→      // IMPORTANT: if the walk-in tab also has a bookingId (auto-linked to an
+  1449→      // existing booking), we must cancel the booking too. Otherwise the booking
+  1450→      // would remain active while its linked invoice is cancelled.
+  1451→      if (meta?.type === "walkin" && meta?.invoiceId) {
+  1452→        const res = await fetch(
+  1453→          `/api/supabase/invoices/${encodeURIComponent(meta.invoiceId)}`,
+  1454→          {
+  1455→            method: "PUT",
+  1456→            headers: { "Content-Type": "application/json" },
+  1457→            body: JSON.stringify({
+  1458→              items: invoice.items.map((it) => ({
+  1459→                id: it.id,
+  1460→                itemId: it.itemId,
+  1461→                name: it.name,
+  1462→                type: it.type,
+  1463→                quantity: it.quantity,
+  1464→                price: it.price,
+  1465→                discount: it.discount,
+  1466→                discountType: it.discountType || "VND",
+  1467→                total: it.total,
+  1468→                staffName: it.staffName,
+  1469→              })),
+  1470→              subtotal: getSubtotal(activeTabId),
+  1471→              discount: invoice.discountAmount,
+  1472→              tip: getTipAmount(activeTabId),
+  1473→              promotion: null,
+  1474→              final_amount: getInvoiceTotal(activeTabId),
+  1475→              payment_method: paymentMethod,
+  1476→              status: "cancelled",
+  1477→              photos: [],
+  1478→            }),
+  1479→          }
+  1480→        );
+  1481→        const json = await res.json();
+  1482→        if (!json.ok) throw new Error(json.error || "Không thể hủy đơn hàng");
+  1483→
+  1484→        // Also cancel the linked booking if one exists (walk-in tab auto-linked
+  1485→        // to an existing booking has both invoiceId AND bookingId).
+  1486→        if (bookingId) {
+  1487→          const bkRes = await fetch(`/api/supabase/bookings/${bookingId}`, {
+  1488→            method: "PATCH",
+  1489→            headers: { "Content-Type": "application/json" },
+  1490→            body: JSON.stringify({ status: "cancelled" }),
+  1491→          });
+  1492→          const bkJson = await bkRes.json();
+  1493→          if (!bkJson.ok) throw new Error(bkJson.error || "Không thể hủy lịch hẹn");
+  1494→        }
+  1495→
+  1496→        return {
+  1497→          code: (json.data as { code?: string })?.code || "",
+  1498→          id: (json.data as { id?: string })?.id,
+  1499→          productOnly: !bookingId,
+  1500→          capturedTabId,
+  1501→        } as { code: string; id?: string; productOnly: boolean; capturedTabId: string };
+  1502→      }
+  1503→
+  1504→      // ---- Path 1: order has a booking (contains services) ----
+  1505→      if (bookingId) {
+  1506→        const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
+  1507→          method: "PATCH",
+  1508→          headers: { "Content-Type": "application/json" },
+  1509→          body: JSON.stringify({ status: "cancelled" }),
+  1510→        });
+  1511→        const json = await res.json();
+  1512→        if (!json.ok) throw new Error(json.error || "Không thể hủy đơn hàng");
+  1513→        return { code: (json.data as { code?: string })?.code || "", productOnly: false, capturedTabId };
+  1514→      }
+  1515→
+  1516→      // ---- Path 2: product-only order (no booking) ----
+  1517→      // Create a standalone invoice with status="cancelled" so the cancelled
+  1518→      // product-only order is recorded and stays in the cashier list. Mirrors
+  1519→      // the checkout path's customer-creation for walk-in / new draft tabs.
+  1520→      if (!selectedBranchId || selectedBranchId === "all") {
+  1521→        throw new Error("Vui lòng chọn chi nhánh");
+  1522→      }
+  1523→      let realCustomerId = meta?.customerId || activeCustomer.customerId;
+  1524→      if (meta && (meta.type === "walkin" || meta.type === "new")) {
+  1525→        const isWalkin = meta.type === "walkin";
+  1526→        const custRes = await fetch("/api/supabase/customers", {
+  1527→          method: "POST",
+  1528→          headers: { "Content-Type": "application/json" },
+  1529→          body: JSON.stringify({
+  1530→            name: isWalkin
+  1531→              ? "Khách vãng lai"
+  1532→              : meta.customerInfo?.name || "Khách mới",
+  1533→            phone: meta.customerInfo?.phone || "",
+  1534→            source_id: isWalkin
+  1535→              ? "779ddad6-01fa-4887-8647-134ce699d643"
+  1536→              : meta.customerInfo?.sourceId || null,
+  1537→            branch_id: selectedBranchId || null,
+  1538→          }),
+  1539→        });
+  1540→        const custJson = await custRes.json();
+  1541→        if (custJson.ok && custJson.data?.id) {
+  1542→          realCustomerId = custJson.data.id;
+  1543→        } else if (custJson.existing_customer?.id) {
+  1544→          realCustomerId = custJson.existing_customer.id;
+  1545→        }
+  1546→      }
+  1547→      const subtotal = getSubtotal(activeTabId);
+  1548→      const total = getInvoiceTotal(activeTabId);
+  1549→      const tip = getTipAmount(activeTabId);
+  1550→      const payload = {
+  1551→        customer_id: realCustomerId,
+  1552→        branch_id: selectedBranchId,
+  1553→        // No booking_id → standalone product-only invoice.
+  1554→        items: invoice.items.map((it) => ({
+  1555→          id: it.id,
+  1556→          itemId: it.itemId,
+  1557→          name: it.name,
+  1558→          type: it.type,
+  1559→          quantity: it.quantity,
+  1560→          price: it.price,
+  1561→          discount: it.discount,
+  1562→          discountType: it.discountType || "VND",
+  1563→          total: it.total,
+  1564→          staffName: it.staffName,
+  1565→        })),
+  1566→        subtotal,
+  1567→        discount: invoice.discountAmount,
+  1568→        tip,
+  1569→        promotion: null,
+  1570→        final_amount: total,
+  1571→        payment_method: paymentMethod,
+  1572→        status: "cancelled",
+  1573→        photos: [],
+  1574→        created_by: useAuthStore.getState().user?.id,
+  1575→      };
+  1576→      const res = await fetch("/api/supabase/invoices", {
+  1577→        method: "POST",
+  1578→        headers: { "Content-Type": "application/json" },
+  1579→        body: JSON.stringify(payload),
+  1580→      });
+  1581→      const json = await res.json();
+  1582→      if (!json.ok) throw new Error(json.error || "Không thể hủy đơn hàng");
+  1583→      return {
+  1584→        code: (json.data as { code?: string; id?: string })?.code || "",
+  1585→        id: (json.data as { id?: string })?.id,
+  1586→        productOnly: true,
+  1587→        capturedTabId,
+  1588→      } as { code: string; id?: string; productOnly: boolean; capturedTabId: string };
+  1589→    },
+  1590→    onSuccess: (data) => {
+  1591→      // Use the capturedTabId (the tab that was active when the mutation
+  1592→      // started), NOT the current activeTabId which may have changed if
+  1593→      // the user switched tabs while the cancel request was in flight.
+  1594→      // Without this, cancelling Tab A then switching to Tab B before the
+  1595→      // response arrives would mark Tab B as cancelled — even though only
+  1596→      // Tab A's booking was actually cancelled in the database.
+  1597→      const tabId = data.capturedTabId;
+  1598→      if (tabId) updateTabMeta(tabId, { cancelled: true });
+  1599→      // Refresh both modules so the cancelled status shows everywhere.
+  1600→      queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+  1601→      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+  1602→      queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+  1603→      // Refresh the standalone-invoice list so a cancelled product-only order
+  1604→      // appears (and stays) as a tab in the cashier list.
+  1605→      queryClient.invalidateQueries({ queryKey: ["cashier-day-standalone-invoices"] });
+  1606→
+  1607→      // For product-only cancellations, link the tab to the created cancelled
+  1608→      // invoice so the InvoiceSummary shows the "Đơn hàng đã hủy" banner and
+  1609→      // the saved items. Use capturedTabId for the same race-condition reason.
+  1610→      if (tabId && data.productOnly && data.id) {
+  1611→        updateTabMeta(tabId, {
+  1612→          invoiceId: data.id,
+  1613→          bookingCode: data.code || undefined,
+  1614→        });
+  1615→      }
+  1616→
+  1617→      // Per business rule: do NOT close the tab for product-only orders — the
+  1618→      // cancelled order must stay in the list. For booking orders we also keep
+  1619→      // the tab open now so the "Đơn hàng đã hủy" banner shows (previously the
+  1620→      // tab was closed). The order remains in the day's booking list with
+  1621→      // status "cancelled".
+  1622→      alert(
+  1623→        data.productOnly
+  1624→          ? `Đã hủy đơn hàng ${data.code || ""}.`
+  1625→          : `Đã hủy đơn hàng ${data.code || ""}. Khung giờ đã được giải phóng.`
+  1626→      );
+  1627→    },
+  1628→    onError: (error: Error) => {
+  1629→      alert(`Lỗi hủy đơn: ${error.message}`);
+  1630→    },
+  1631→  });
+  1632→
+  1633→  if (!activeTabId || !invoice) {
+  1634→    return (
+  1635→      <div className="flex h-full items-center justify-center text-gray-400">
+  1636→        <p>Chọn khách hàng để xem hóa đơn</p>
+  1637→      </div>
+  1638→    );
+  1639→  }
+  1640→
+  1641→  const subtotal = getSubtotal(activeTabId);
+  1642→  const total = getInvoiceTotal(activeTabId);
+  1643→  const tip = getTipAmount(activeTabId);
+  1644→
+  1645→  // Paid AND cancelled orders display the SAVED invoice values (read-only) so
+  1646→  // the promotion, tip, items, and total reflect what was actually paid or
+  1647→  // cancelled — synced with the stored invoice.
+  1648→  const showSaved = (isPaid || isCancelled) && savedInvoice;
+  1649→  const displayItems = showSaved
+  1650→    ? (savedInvoice!.items || []).map((it) => ({
+  1651→        name: it.name || "Dịch vụ",
+  1652→        type: (it.type as "service" | "product" | "package") || "service",
+  1653→        price: Number(it.price) || 0,
+  1654→        quantity: Number(it.quantity) || 1,
+  1655→        discount: Number(it.discount) || 0,
+  1656→        // Read the persisted discount unit; default to "VND" for invoices
+  1657→        // saved before the percent-discount feature existed.
+  1658→        discountType:
+  1659→          (it as { discountType?: "VND" | "PERCENT" }).discountType === "PERCENT"
+  1660→            ? ("PERCENT" as const)
+  1661→            : ("VND" as const),
+  1662→        total: Number(it.total) || 0,
+  1663→        staffName: it.staffName,
+  1664→      }))
+  1665→    : invoice.items;
+  1666→  const displaySubtotal = showSaved
+  1667→    ? (savedInvoice!.items || []).reduce((s, it) => {
+  1668→        // Sum each saved line's `total` (net of per-line discount) so the
+  1669→        // footer "Thành tiền" matches the per-line "Thành tiền" column — for
+  1670→        // old invoices item.total == price*qty (no per-line discount), for new
+  1671→        // invoices it already subtracts per-line discounts. Fallback to
+  1672→        // price*qty if total is missing/zero unexpectedly.
+  1673→        const t = Number(it.total);
+  1674→        if (!isNaN(t) && t > 0) return s + t;
+  1675→        const price = Number(it.price) || 0;
+  1676→        const qty = Number(it.quantity) || 1;
+  1677→        return s + price * qty;
+  1678→      }, 0)
+  1679→    : subtotal;
+  1680→  const displayDiscount = showSaved ? Number(savedInvoice!.discount) || 0 : (invoice.discountAmount || 0);
+  1681→  const displayTip = showSaved ? Number(savedInvoice!.tip) || 0 : tip;
+  1682→  const displayPromo = showSaved ? savedInvoice!.promotion : null;
+  1683→  const displayTotal = showSaved ? Number(savedInvoice!.final_amount) || 0 : total;
+  1684→
+  1685→  // Multi-customer "Cùng lịch" booking detection (Cashier module only).
+  1686→  // When the active booking has number_of_customers >= 2 AND a [[MULTI]] note,
+  1687→  // each service line item is rendered with a 3-line layout:
+  1688→  //   line 1: customer name + phone (or "Khách vãng lai" when the slot is empty
+  1689→  //           or marked walkin)
+  1690→  //   line 2: service name
+  1691→  //   line 3: staff name
+  1692→  // The per-slot customer is stored in the booking's note as a [[MULTI]] JSON
+  1693→  // block; slots[i] maps 1:1 to the i-th service in the booking's services
+  1694→  // array. For the invoice display, service items appear first (in booking
+  1695→  // order), so a service-only counter is used to look up the correct slot.
+  1696→  const activeMultiNote = activeBooking?.note
+  1697→    ? parseMultiCustomerNote(activeBooking.note)
+  1698→    : null;
+  1699→  const isMultiCustomerBooking =
+  1700→    !!activeMultiNote && (activeBooking?.number_of_customers ?? 1) >= 2;
+  1701→  // Precompute the slot index for each display item (services only). Products
+  1702→  // and packages don't have a slot → -1 (no customer line shown for them).
+  1703→  // Uses an immutable reduce (no in-render variable mutation) to satisfy the
+  1704→  // react-hooks/immutability lint rule.
+  1705→  const itemSlotIndices: number[] = displayItems.reduce<{
+  1706→    arr: number[];
+  1707→    svc: number;
+  1708→  }>(
+  1709→    (acc, it) => {
+  1710→      const isService = (it as { type?: string }).type === "service";
+  1711→      return {
+  1712→        arr: [...acc.arr, isService ? acc.svc : -1],
+  1713→        svc: isService ? acc.svc + 1 : acc.svc,
+  1714→      };
+  1715→    },
+  1716→    { arr: [], svc: 0 }
+  1717→  ).arr;
+  1718→
+  1719→  // Resolve the invoice id for the activity-history table:
+  1720→  //  - Paid/cancelled tabs → the saved invoice's id.
+  1721→  //  - Editable tabs that already have a server invoice (walk-in pending, or a
+  1722→  //    booking-linked invoice created on first add) → meta.invoiceId.
+  1723→  // When no invoice exists yet (brand-new draft), there's no history to show.
+  1724→  const activityInvoiceId =
+  1725→    (showSaved && savedInvoice?.id) ||
+  1726→    (activeTabId ? tabMeta[activeTabId]?.invoiceId : undefined) ||
+  1727→    savedInvoice?.id ||
+  1728→    null;
+  1729→
+  1730→  return (
+  1731→    <div className="flex h-full flex-col bg-white">
+  1732→      {/* Inline success banner — shown for ~6s after a successful checkout.
+  1733→          Non-blocking (replaces the old alert). Clearly identifies WHICH
+  1734→          order was paid so the cashier doesn't think all orders were paid. */}
+  1735→      {paidSuccess && (
+  1736→        <div className="flex items-start gap-3 border-b border-emerald-200 bg-emerald-50 px-4 py-3">
+  1737→          <Check className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+  1738→          <div className="flex-1 text-sm">
+  1739→            <p className="font-semibold text-emerald-800">
+  1740→              Đã thanh toán thành công hóa đơn {paidSuccess.invoiceCode}
+  1741→            </p>
+  1742→            <p className="mt-0.5 text-emerald-700">
+  1743→              {paidSuccess.syncedBooking
+  1744→                ? `Đơn hàng ${paidSuccess.bookingCode || ""} đã được thanh toán. Cột "Thanh toán" → Đã thanh toán, cột "Trạng thái" → Đã Checkout.`
+  1745→                : "Hóa đơn đã được lưu vào Lịch sử đơn hàng."}
+  1746→            </p>
+  1747→            <p className="mt-0.5 text-xs text-emerald-600">
+  1748→              Chỉ đơn hàng này được thanh toán. Các đơn hàng khác không bị ảnh hưởng.
+  1749→            </p>
+  1750→          </div>
+  1751→          <button
+  1752→            type="button"
+  1753→            onClick={() => setPaidSuccess(null)}
+  1754→            className="shrink-0 rounded p-1 text-emerald-600 hover:bg-emerald-100"
+  1755→            aria-label="Đóng"
+  1756→          >
+  1757→            <X className="h-4 w-4" />
+  1758→          </button>
+  1759→        </div>
+  1760→      )}
+  1761→      {/* Invoice table header */}
+  1762→      <div className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-1 border-b bg-gray-50 px-4 py-2 text-xs font-medium text-gray-500">
+  1763→        <div>Tên</div>
+  1764→        <div className="text-center">Số lượng</div>
+  1765→        <div className="text-center">Đơn giá</div>
+  1766→        <div className="text-center">Giảm giá</div>
+  1767→        <div className="text-right">Thành tiền</div>
+  1768→      </div>
+  1769→
+  1770→      {/* Invoice items */}
+  1771→      <div className="flex-1 overflow-y-auto">
+  1772→        {displayItems.length === 0 ? (
+  1773→          <div className="flex h-64 items-center justify-center text-gray-400">
+  1774→            <p className="text-sm">Chưa có mặt hàng nào</p>
+  1775→          </div>
+  1776→        ) : (
+  1777→          <div className="divide-y">
+  1778→            {displayItems.map((item, idx) => (
+  1779→              <div
+  1780→                key={item.id || idx}
+  1781→                className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-1 px-4 py-2 text-sm"
+  1782→              >
+  1783→                <div>
+  1784→                  {/* Multi-customer "Cùng lịch" booking (Cashier module only):
+  1785→                      each service line shows 3 lines —
+  1786→                        line 1: customer name + phone (or "Khách vãng lai"
+  1787→                                when the slot has no name/phone or is marked
+  1788→                                walkin)
+  1789→                        line 2: service name
+  1790→                        line 3: staff name
+  1791→                      The per-slot customer is looked up from the booking's
+  1792→                      [[MULTI]] note by a service-only index (products/packages
+  1793→                      are skipped — they have no slot). */}
+  1794→                  {isMultiCustomerBooking && itemSlotIndices[idx] >= 0 &&
+  1795→                    (() => {
+  1796→                      const sc: SlotCustomer | undefined =
+  1797→                        activeMultiNote?.slots[itemSlotIndices[idx]];
+  1798→                      const isWalkin = !sc || sc.walkin;
+  1799→                      const label = isWalkin
+  1800→                        ? "Khách vãng lai"
+  1801→                        : `${sc!.name}${sc!.phone ? " " + sc!.phone : ""}`;
+  1802→                      // Walk-in slots have no customer profile → plain text.
+  1803→                      // Named slots are green clickable links to the history dialog.
+  1804→                      if (isWalkin || !sc?.id) {
+  1805→                        return (
+  1806→                          <p className="text-[11px] text-gray-600 leading-tight">
+  1807→                            {label}
+  1808→                          </p>
+  1809→                        );
+  1810→                      }
+  1811→                      return (
+  1812→                        <button
+  1813→                          type="button"
+  1814→                          onClick={() =>
+  1815→                            router.push(`/customers/${sc.id}`)
+  1816→                          }
+  1817→                          className="text-[11px] text-emerald-600 hover:text-emerald-700 hover:underline leading-tight cursor-pointer text-left"
+  1818→                          title="Xem lịch sử khách hàng"
+  1819→                        >
+  1820→                          {label}
+  1821→                        </button>
+  1822→                      );
+  1823→                    })()}
+  1824→                  {/* Service name 12px + leading-tight to reduce the name slot's
+  1825→                      line/row height. Staff name 11px, also leading-tight. */}
+  1826→                  <p className="font-medium text-gray-900 text-xs leading-tight">{item.name}</p>
+  1827→                  {editableDisplay ? (
+  1828→                    <div className="flex items-center gap-1 leading-tight">
+  1829→                      {/* "Xếp nhân viên" button — clicking opens a per-item
+  1830→                          staff picker dialog. Visible for ALL item types
+  1831→                          (service/product/package). The button shows the text
+  1832→                          "Xếp nhân viên" + a small UserCog icon (no longer an
+  1833→                          icon-only square) so the cashier immediately sees its
+  1834→                          purpose. Pre-fills with the current staff's id (if
+  1835→                          any). OK is required (disabled until a staff is
+  1836→                          picked). Compact: h-5, text-[10px], tight padding so
+  1837→                          it fits inline next to the "Nv: <name>" label. */}
+  1838→                      <button
+  1839→                        type="button"
+  1840→                        onClick={() => {
+  1841→                          // Pre-fill with the current staff's id (lookup by
+  1842→                          // name in the eligible branch staff list). When no
+  1843→                          // staff is assigned yet, leave the picker empty so
+  1844→                          // the cashier MUST pick one (OK disabled).
+  1845→                          const current = (eligibleBranchStaff || []).find(
+  1846→                            (s) => s.name === item.staffName
+  1847→                          );
+  1848→                          setChangeStaffPickStaffId(current?.id || "");
+  1849→                          setChangeStaffItemId(item.id);
+  1850→                          setChangeStaffError("");
+  1851→                        }}
+  1852→                        title={
+  1853→                          item.staffName
+  1854→                            ? `Xếp nhân viên (hiện: ${item.staffName})`
+  1855→                            : "Xếp nhân viên cho mặt hàng này"
+  1856→                        }
+  1857→                        className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+  1858→                      >
+  1859→                        <UserCog className="h-2.5 w-2.5" />
+  1860→                        Xếp nhân viên
+  1861→                      </button>
+  1862→                      <p className="text-[11px] text-yellow-600">
+  1863→                        {item.staffName ? `Nv: ${item.staffName}` : "Nv: (chưa có)"}
+  1864→                      </p>
+  1865→                    </div>
+  1866→                  ) : (
+  1867→                    item.staffName && (
+  1868→                      <p className="text-[11px] text-yellow-600 leading-tight">
+  1869→                        Nv: {item.staffName}
+  1870→                      </p>
+  1871→                    )
+  1872→                  )}
+  1873→                </div>
+  1874→                <div className="flex items-center justify-center">
+  1875→                  {/* Quantity: +/- controls for ALL item types (service, product,
+  1876→                      package). When editable, the cashier can increase or
+  1877→                      decrease the quantity; the store recomputes the line's
+  1878→                      `total` (price*qty − discount) AND the invoice subtotal /
+  1879→                      total live on every change. Minimum is 1 — at 1 the
+  1880→                      minus button is disabled (use the trash button to remove
+  1881→                      the line entirely). When NOT editable (paid / cancelled /
+  1882→                      review mode), the quantity is shown read-only. */}
+  1883→                  {editableDisplay ? (
+  1884→                    <div className="flex items-center gap-1">
+  1885→                      <button
+  1886→                        type="button"
+  1887→                        onClick={() =>
+  1888→                          updateInvoiceItemQuantity(
+  1889→                            activeTabId!,
+  1890→                            item.id,
+  1891→                            Math.max(1, item.quantity - 1)
+  1892→                          )
+  1893→                        }
+  1894→                        disabled={item.quantity <= 1}
+  1895→                        title="Giảm số lượng"
+  1896→                        className="flex h-5 w-5 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+  1897→                      >
+  1898→                        <Minus className="h-3 w-3" />
+  1899→                      </button>
+  1900→                      <span className="min-w-[20px] text-center text-[12px] font-medium text-gray-700">
+  1901→                        {item.quantity}
+  1902→                      </span>
+  1903→                      <button
+  1904→                        type="button"
+  1905→                        onClick={() =>
+  1906→                          updateInvoiceItemQuantity(
+  1907→                            activeTabId!,
+  1908→                            item.id,
+  1909→                            item.quantity + 1
+  1910→                          )
+  1911→                        }
+  1912→                        title="Tăng số lượng"
+  1913→                        className="flex h-5 w-5 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+  1914→                      >
+  1915→                        <Plus className="h-3 w-3" />
+  1916→                      </button>
+  1917→                    </div>
+  1918→                  ) : (
+  1919→                    <span className="text-center text-[12px] text-gray-700">
+  1920→                      {item.quantity}
+  1921→                    </span>
+  1922→                  )}
+  1923→                </div>
+  1924→                <div className="flex items-center justify-center text-[12px] text-gray-600">
+  1925→                  {item.price.toLocaleString("vi-VN")}
+  1926→                </div>
+  1927→                <div className="flex items-center justify-center gap-1">
+  1928→                  {/* All item types (service/product/package) can be manually
+  1929→                      discounted with either đ (VND) or % (PERCENT) — matching
+  1930→                      the product behavior. Previously only products had the
+  1931→                      editable discount input; services/packages showed a
+  1932→                      read-only value. Now the cashier can apply per-line
+  1933→                      discounts to services and packages too. */}
+  1934→                  {editableDisplay ? (
+  1935→                    <>
+  1936→                      <input
+  1937→                        type="number"
+  1938→                        inputMode="decimal"
+  1939→                        // data-slot excludes this input from the global 28px
+  1940→                        // min-height rule in globals.css (line 195), allowing
+  1941→                        // the compact h-6 (24px) class to take effect so the
+  1942→                        // discount input matches the adjacent đ/% select height.
+  1943→                        data-slot="discount-amount"
+  1944→                        min={0}
+  1945→                        // For PERCENT, cap at 100; for VND, no hard cap (the
+  1946→                        // store clamps to price*qty anyway).
+  1947→                        max={item.discountType === "PERCENT" ? 100 : undefined}
+  1948→                        step={item.discountType === "PERCENT" ? 1 : 1000}
+  1949→                        value={
+  1950→                          itemDiscountDrafts[item.id] !== undefined
+  1951→                            ? itemDiscountDrafts[item.id]
+  1952→                            : String(item.discount || "")
+  1953→                        }
+  1954→                        onChange={(e) => {
+  1955→                          const raw = e.target.value;
+  1956→                          setItemDiscountDrafts((prev) => ({
+  1957→                            ...prev,
+  1958→                            [item.id]: raw,
+  1959→                          }));
+  1960→                          // Commit live when it's a valid number so the total
+  1961→                          // updates as the user types. Empty string → 0.
+  1962→                          const num = Number(raw);
+  1963→                          if (raw === "" || !isNaN(num)) {
+  1964→                            updateInvoiceItemDiscount(
+  1965→                              activeTabId,
+  1966→                              item.id,
+  1967→                              raw === "" ? 0 : Math.max(0, num),
+  1968→                              item.discountType || "VND"
+  1969→                            );
+  1970→                          }
+  1971→                        }}
+  1972→                        onBlur={() => {
+  1973→                          // Drop the draft on blur — the committed value is
+  1974→                          // already in the store; next render reads from it.
+  1975→                          setItemDiscountDrafts((prev) => {
+  1976→                            const next = { ...prev };
+  1977→                            delete next[item.id];
+  1978→                            return next;
+  1979→                          });
+  1980→                        }}
+  1981→                        className="h-6 w-16 rounded border border-gray-300 px-1 text-center text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+  1982→                        placeholder="0"
+  1983→                      />
+  1984→                      <select
+  1985→                        value={item.discountType || "VND"}
+  1986→                        onChange={(e) => {
+  1987→                          const nextType = e.target.value as "VND" | "PERCENT";
+  1988→                          // Keep the same numeric value but switch unit; the
+  1989→                          // store recomputes the total with the new type.
+  1990→                          updateInvoiceItemDiscount(
+  1991→                            activeTabId,
+  1992→                            item.id,
+  1993→                            item.discount || 0,
+  1994→                            nextType
+  1995→                          );
+  1996→                        }}
+  1997→                        className="h-6 rounded border border-gray-300 bg-white px-1 text-[11px] text-gray-700 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+  1998→                        title="Đơn vị giảm giá: đ (số tiền) hoặc % (phần trăm)"
+  1999→                      >
+  2000→                        <option value="VND">đ</option>
+
+[showing lines 1-2000 of 3139; use offset=2001 with limit to continue reading]

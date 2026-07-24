@@ -1,0 +1,252 @@
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-540-            09:30 VN booking lands in the 09:00 row, NOT in 16:00 (avoids the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-541-            UTC→local TZ shift that previously mis-bucketed bookings; also
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-542-            accounts for the post-migration storage where the raw "THH:MM"
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:543:            segment of `date_time` is the UTC time, not the VN time).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-544-          ========================================================================= */}
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-545-      {dateRange && useMultiDayLayout && (
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-546-        <DayRangeGrid
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-909-  };
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-910-  const timeRange = `${fmtTime(startTotalMin)} - ${fmtTime(endTotalMin)}`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-911-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:912:  const dt = booking.date_time;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-913-  const d = dt ? new Date(dt) : null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-914-  const dateLabel = d && !isNaN(d.getTime())
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-915-    ? `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1163-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1164-/** Minutes from the timeline's START_HOUR (08:00) to the booking's start time.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1165- *  May be negative (booking starts before 08:00) — callers clamp into the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1166: *  visible window. Returns null when date_time is missing or unparseable. */
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1167-function getBookingStartMinutes(booking: Booking): number | null {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1168:  const dt = booking.date_time;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1169-  if (!dt) return null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1170-  // Use the timezone-safe Vietnam time helper. Supabase normalizes stored
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1171:  // date_time offsets to +00:00 (UTC), so the "THH:MM" segment is the UTC
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1172-  // time — NOT the Vietnam time the user entered. Parsing the segment directly
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1173-  // made bookings display at the wrong hour (and outside the visible window).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1174-  const hhmm = toVietnamTime(dt);
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1249-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1250-}
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1251-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1252:/** Extract { dayKey, hour, minute } from the booking's `date_time` as VIETNAM
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1253: *  wall-clock values. Post-migration (Task 6), `date_time` is stored as a UTC
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1254- *  ISO string (e.g. "2026-07-14T03:30:00+00:00" represents 10:30 VN), so the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1255- *  raw "THH:MM" segment is the UTC time, NOT the VN time the user entered.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1256- *  Using `toVietnamDay` + `toVietnamTime` ensures the booking lands in the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1257- *  correct row+column of the multi-day staff grid (a 10:30 VN booking lands in
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1258- *  the "10:00" row of column "2026-07-14", not the skipped "03:00" row). */
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1259-function getBookingDayHour(booking: Booking): { dayKey: string; hour: number; minute: number } | null {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1260:  const dt = booking.date_time;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1261-  if (!dt || typeof dt !== "string") return null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1262-  const dayKey = toVietnamDay(dt);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1263-  const hhmm = toVietnamTime(dt);
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1604-    timeText = "text-blue-800";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1605-  }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1606-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1607:  const timeStr = booking.date_time
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1608-    ? (() => {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1609-        // Timezone-safe Vietnam time (Supabase stores +00:00; the "THH:MM"
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1610-        // segment is UTC, not the VN time the user entered).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1611:        return toVietnamTime(booking.date_time!);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1612-      })()
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1613-    : "";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1614-
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1757-  onAssignStaff?: () => void;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1758-}) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1759-  // Parse date + time using the timezone-safe Vietnam helpers. Supabase
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1760:  // stores date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1761-  // is the UTC time — NOT the Vietnam wall-clock time the user entered.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1762-  // Parsing the raw segment directly would display "03:30" for a 10:30 VN
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1763-  // booking (off by 7h).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1764:  const dateStr = booking.date_time
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1765-    ? (() => {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1766:        const isoDayParts = toVietnamDay(booking.date_time).split("-");
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1767-        if (isoDayParts.length !== 3) return "";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx:1768:        return `${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]} ${toVietnamTime(booking.date_time)}`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1769-      })()
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1770-    : "";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-staff-view.tsx-1771-
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-649-  const watchedTimeForSlot = watch("time");
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-650-  const { data: dayBookingsForSlot } = useQuery<Array<{
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-651-    id: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:652:    date_time: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-653-    status: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-654-    services: Array<{ staff_id?: string | null }>;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-655-  }>>({
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-670-      const json = await res.json();
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-671-      return (json.data || []) as Array<{
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-672-        id: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:673:        date_time: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-674-        status: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-675-        services: Array<{ staff_id?: string | null }>;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-676-      }>;
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-693-    for (const b of dayBookingsForSlot || []) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-694-      if (b.status === "cancelled" || b.status === "no_show") continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-695-      if (booking && b.id === booking.id) continue; // exclude self when editing
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:696:      if (!b.date_time) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-697-      // Compare the booking's VIETNAM day + time (timezone-safe) to the form's
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:698:      // (date, time). Supabase stores date_time with +00:00 offset, so the ISO
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-699-      // segments are UTC — naively matching them to the form's VN time missed
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-700-      // every booking (offset by 7 hours).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:701:      const bDay = toVietnamDay(b.date_time);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:702:      const bTime = toVietnamTime(b.date_time);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-703-      if (bDay !== dayKey) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-704-      if (bTime !== timeKey) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-705-      for (const s of b.services || []) {
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-763-            for (const b of bookings) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-764-              if (b.status === "cancelled" || b.status === "no_show") continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-765-              if (booking && b.id === booking.id) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:766:              const exStart = new Date(b.date_time as string).getTime();
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-767-              if (isNaN(exStart)) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-768-              for (const s of (b.services as Array<Record<string, unknown>>) || []) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-769-                if (s.staff_id !== sid) continue;
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-802-    // dayBase = Vietnam midnight (00:00 VN) as a UTC ms epoch. The loop below
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-803-    // advances `min` minutes from dayBase to enumerate every VN wall-clock
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-804-    // minute of the day; min=540 → 09:00 VN (epoch). The busy intervals are
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:805:    // also UTC-ms epochs (from `new Date(b.date_time).getTime()`), so the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-806-    // overlap comparison is apples-to-apples. Previously dayBase used
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-807-    // Date.UTC(...,0,0,0) which is UTC midnight — that mapped min=540 to
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-808-    // 09:00 UTC (= 16:00 VN), so a 16:00-VN booking (stored as 09:00 UTC)
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1040-        customer_source_id?: string | null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1041-        customer_channel_id?: string | null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1042-        number_of_customers?: number;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1043:        date_time?: string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1044-        note?: string | null;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1045-      };
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1046:      // Derive the booking-level start date/time from booking.date_time (ISO).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1047-      // IMPORTANT: use the timezone-safe Vietnam helpers (toVietnamDay /
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1048:      // toVietnamTime). Supabase stores date_time normalized to +00:00 (UTC),
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1049-      // so the raw "THH:MM" segment of the ISO string is the UTC time — NOT
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1050-      // the Vietnam wall-clock time the user entered. Parsing the raw segment
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1051-      // directly would display "03:30" for a 10:30 VN booking (off by 7h).
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1053-      // converting via +7h gives the user's original VN time.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1054-      let startDate = booking.date || "";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1055-      let startTime = booking.time || "";
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1056:      if (b.date_time) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1057-        if (!startDate) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1058:          const isoDay = toVietnamDay(b.date_time).split("-");
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1059-          if (isoDay.length === 3) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1060-            startDate = `${isoDay[2]}/${isoDay[1]}/${isoDay[0]}`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1061-          }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1062-        }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1063-        if (!startTime) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1064:          startTime = toVietnamTime(b.date_time);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1065-        }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1066-      }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1067-      // Map booking services to form shape. Per-service date/time are no longer
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1195-      }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1196-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1197-      // Parse the booking-level start (dd/MM/yyyy + HH:mm) into ms (UTC, to
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1198:      // match how the API stores date_time).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1199-      const m = data.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1200-      const tm = data.time.match(/^(\d{1,2}):(\d{2})$/);
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1201-      if (!m || !tm) {
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1222-      // +07:00 offset so Postgres stores the VN time correctly (not as UTC).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1223-      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1224-      const payload = {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1225:        date_time: dateTime,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1226-        customer_id: data.customerId,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1227-        customer_source_id: data.customerSourceId || null,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1228-        customer_channel_id: data.customerChannelId || null,
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1314-      // +07:00 offset so Postgres stores the VN time correctly (not as UTC).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1315-      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1316-      const putPayload = {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1317:        date_time: dateTime,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1318-        customer_id: data.customerId,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1319-        customer_source_id: data.customerSourceId || null,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1320-        customer_channel_id: data.customerChannelId || null,
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1554-          if (status === "cancelled" || status === "no_show") continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1555-          // When editing, skip the booking being edited itself.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1556-          if (booking && existing.id === booking.id) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1557:          const exDateTime = existing.date_time as string;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1558-          if (!exDateTime) continue;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1559-          const exStart = new Date(exDateTime).getTime();
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1560-          if (isNaN(exStart)) continue;
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1782-  //     booking — a documented limitation).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1783-  //   - scheduleMode "different": N separate POSTs, each with 1 service
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1784-  //     and that slot's resolved customer_id. All N bookings share the
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1785:  //     same date_time + branch_id + status. Failures are reported but
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1786-  //     already-created bookings stay.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1787-  // ------------------------------------------------------------------
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1788-  const handleMultiCustomerSubmit = async (data: BookingFormValues) => {
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1813-        return;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1814-      }
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1815-
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1816:      // 3. Build the shared date_time + booking-level fields.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1817-      const firstDate = data.date.split("/").reverse().join("-");
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1818-      const dateTime = `${firstDate}T${data.time}:00+07:00`;
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1819-
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1844-          (data.note || "").trim()
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1845-        );
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1846-        const payload = {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1847:          date_time: dateTime,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1848-          customer_id: resolvedIds[0],
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1849-          customer_source_id: data.customerSourceId || null,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1850-          customer_channel_id: data.customerChannelId || null,
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1888-        for (let i = 0; i < data.services.length; i++) {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1889-          const svc = data.services[i];
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1890-          const payload = {
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:1891:            date_time: dateTime,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1892-            customer_id: resolvedIds[i],
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1893-            customer_source_id: data.customerSourceId || null,
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-1894-            customer_channel_id: data.customerChannelId || null,
+--
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2658-                {isMultiCustomerMode && (
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2659-                  // Cùng lịch / Khác lịch toggle — only in multi-customer mode.
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2660-                  // "Cùng lịch" (default): all N services share ONE booking
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx:2661:                  // (parallel staff, same date_time, 1 booking record).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2662-                  // "Khác lịch": each slot gets its OWN separate booking (N
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2663-                  // POST requests, each with 1 service + its own customer_id).
+/home/z/my-project/download/CRM/src/components/features/booking/booking-dialog.tsx-2664-                  <div className="flex items-center gap-1 rounded-md border bg-gray-100 p-0.5">
+--
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-92-  const { hasPermission } = useAuthStore();
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-93-  const canConfirmOldInvoice = hasPermission("confirm_old_invoice");
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-94-
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:95:  // Determine if this is a "past-date unpaid" booking: the booking's date_time
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-96-  // is before today AND the booking is not yet checked out.
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-97-  const isPastDateUnpaid = (() => {
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-98-    if (isCheckout) return false; // already paid → not "unpaid"
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:99:    if (!booking.date_time) return false;
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-100-    const today = new Date();
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-101-    today.setHours(0, 0, 0, 0);
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:102:    const bookingDate = new Date(booking.date_time);
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-103-    bookingDate.setHours(0, 0, 0, 0);
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-104-    return bookingDate < today;
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-105-  })();
+--
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-590-            <div className="flex justify-between">
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-591-              <span className="text-gray-500">Ngày giờ:</span>
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-592-              <span className="text-gray-900">
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:593:                {booking.date_time
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-594-                  ? (() => {
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-595-                      // Use the timezone-safe Vietnam helpers. Supabase
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:596:                      // stores date_time normalized to +00:00 (UTC), so the
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-597-                      // raw "THH:MM" segment is the UTC time — NOT the VN
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-598-                      // time the user entered. Parsing the raw segment
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-599-                      // directly would display "03:30" for a 10:30 VN
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-600-                      // booking (off by 7h).
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:601:                      const isoDayParts = toVietnamDay(booking.date_time).split("-");
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-602-                      if (isoDayParts.length !== 3) return "—";
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx:603:                      return `${toVietnamTime(booking.date_time)} ${isoDayParts[2]}/${isoDayParts[1]}/${isoDayParts[0]}`;
+/home/z/my-project/download/CRM/src/components/features/booking/invoice-dialog.tsx-604-                    })()
+
+[Showing results with pagination = limit: 250]
