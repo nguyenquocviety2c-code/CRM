@@ -43,3 +43,19 @@ Stage Summary:
 - Secondary cancel bug fixed (walk-in tab with both invoiceId and bookingId)
 - Primary cancellation bug (one cancel → both cancelled) is likely a Supabase trigger, not a code bug
 - Files modified: cashier/page.tsx, customer-tabs.tsx, invoice-summary.tsx, by-phone/route.ts, service-selector.tsx
+---
+Task ID: 5
+Agent: main
+Task: Remove date nav buttons from Cashier + verify Booking module button styling
+
+Work Log:
+- Removed the 3 DateNav buttons (Hôm nay, Ngày mai, 7 ngày) and the Button import from cashier/page.tsx
+- Simplified date state management in Cashier: removed dateNav state, handleDateNavChange, and DateNav type — now only dateRange + setDateRange remain
+- Simplified default dateRange initialization using inline function instead of getDateRangeFromNav helper
+- Verified Booking module date nav buttons: active button (Hôm nay) already shows green/emerald-600 bg with white text, inactive buttons (Ngày mai, 7 ngày) already show white bg with border
+- Verified with Agent Browser + VLM analysis: Cashier page shows only DateRangePicker without nav buttons, Booking page has correctly styled buttons
+
+Stage Summary:
+- Cashier module: removed 3 quick nav buttons, only DateRangePicker remains
+- Booking module: button styling already correct (active=green, inactive=white), no changes needed
+- Files modified: cashier/page.tsx only
