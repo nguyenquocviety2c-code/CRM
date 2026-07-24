@@ -26,6 +26,8 @@ import {
   HoverCardContent,
 } from "@/components/ui/hover-card";
 import { BookingHoverDetails } from "@/components/features/booking/booking-staff-view";
+import { useDraggablePopup } from "@/hooks/use-draggable-popup";
+import { GripVertical } from "lucide-react";
 
 interface BookingTimeGridProps {
   bookings: Booking[];
@@ -1525,6 +1527,10 @@ function CustomerGridChip({
   onDelete?: (bookingId: string) => void;
 }) {
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
+  // Draggable popup: click-hold drag handle → reposition, double-click → reset
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const { isDragging, isDraggingRef, style: dragStyle, onDragStart, resetPosition, hasStoredPosition } = useDraggablePopup();
+
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
   const serviceName = svc?.service?.name || "Dịch vụ";
@@ -1569,7 +1575,16 @@ function CustomerGridChip({
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 
   return (
-    <HoverCard openDelay={200} closeDelay={300}>
+    <HoverCard
+      open={hoverOpen}
+      onOpenChange={(open) => {
+        // Prevent closing while dragging
+        if (isDraggingRef.current && !open) return;
+        setHoverOpen(open);
+      }}
+      openDelay={200}
+      closeDelay={500}
+    >
       <HoverCardTrigger asChild>
         <button
           type="button"
@@ -1606,7 +1621,22 @@ function CustomerGridChip({
           {totalDuration > 0 && <div className="mt-0.5 text-[10px] font-medium text-gray-500">Tổng: {totalDuration} phút</div>}
         </button>
       </HoverCardTrigger>
-      <HoverCardContent side="bottom" align="start" sideOffset={0} className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl">
+      <HoverCardContent
+        side="bottom"
+        align="start"
+        sideOffset={0}
+        className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl"
+        style={dragStyle}
+      >
+        {/* Drag handle — click-hold to reposition popup, double-click to reset */}
+        <div
+          className="flex items-center justify-center h-5 cursor-grab active:cursor-grabbing bg-gray-50 border-b border-gray-200 select-none shrink-0"
+          onMouseDown={onDragStart}
+          onDoubleClick={resetPosition}
+          title="Kéo để thay đổi vị trí · Nhấp đúp để trở về mặc định"
+        >
+          <GripVertical className="h-3.5 w-3.5 text-gray-400" />
+        </div>
         <BookingHoverDetails
           booking={booking}
           canViewCustomerPhone={canViewCustomerPhone}

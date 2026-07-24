@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import { Pencil, Trash2, LogIn } from "lucide-react";
+import { Pencil, Trash2, LogIn, GripVertical } from "lucide-react";
+import { useDraggablePopup } from "@/hooks/use-draggable-popup";
 
 interface Staff {
   id: string;
@@ -1562,6 +1563,10 @@ function BookingChip({
       calls this; falls back to onEdit when not provided. */
   onAssignStaff?: () => void;
 }) {
+  // Draggable popup: click-hold drag handle → reposition, double-click → reset
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const { isDragging, isDraggingRef, style: dragStyle, onDragStart, resetPosition } = useDraggablePopup();
+
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
   const serviceName = svc?.service?.name || "Dịch vụ";
@@ -1615,7 +1620,16 @@ function BookingChip({
   const phone = booking.customer?.phone || "";
 
   return (
-    <HoverCard openDelay={200} closeDelay={300}>
+    <HoverCard
+      open={hoverOpen}
+      onOpenChange={(open) => {
+        // Prevent closing while dragging
+        if (isDraggingRef.current && !open) return;
+        setHoverOpen(open);
+      }}
+      openDelay={200}
+      closeDelay={500}
+    >
       <HoverCardTrigger asChild>
         <button
           type="button"
@@ -1699,9 +1713,19 @@ function BookingChip({
       <HoverCardContent
         side="right"
         align="start"
-        sideOffset={-2}
+        sideOffset={0}
         className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
+        style={dragStyle}
       >
+        {/* Drag handle — click-hold to reposition popup, double-click to reset */}
+        <div
+          className="flex items-center justify-center h-5 cursor-grab active:cursor-grabbing bg-gray-50 border-b border-gray-200 select-none shrink-0"
+          onMouseDown={onDragStart}
+          onDoubleClick={resetPosition}
+          title="Kéo để thay đổi vị trí · Nhấp đúp để trở về mặc định"
+        >
+          <GripVertical className="h-3.5 w-3.5 text-gray-400" />
+        </div>
         <BookingHoverDetails
           booking={booking}
           canViewCustomerPhone={canViewCustomerPhone}

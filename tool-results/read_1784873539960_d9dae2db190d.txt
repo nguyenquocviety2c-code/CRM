@@ -1,0 +1,1627 @@
+     1→"use client";
+     2→
+     3→import { useState, useMemo, useEffect, useRef } from "react";
+     4→import type { ReactNode } from "react";
+     5→import { Booking, BookingServiceRow } from "@/stores/booking-store";
+     6→import {
+     7→  BookingStatusLabel,
+     8→  BookingStatusBadgeColors,
+     9→  BookingStatusType,
+    10→} from "@/lib/constants";
+    11→import { useAuthStore } from "@/stores/auth-store";
+    12→import { useIsReviewing } from "@/stores/payment-review-store";
+    13→import { maskPhone } from "@/lib/phone-mask";
+    14→import { toVietnamTime, toVietnamDay } from "@/lib/utils";
+    15→import {
+    16→  Select,
+    17→  SelectContent,
+    18→  SelectItem,
+    19→  SelectTrigger,
+    20→  SelectValue,
+    21→} from "@/components/ui/select";
+    22→import { Pencil, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
+    23→import {
+    24→  HoverCard,
+    25→  HoverCardTrigger,
+    26→  HoverCardContent,
+    27→} from "@/components/ui/hover-card";
+    28→import { BookingHoverDetails } from "@/components/features/booking/booking-staff-view";
+    29→
+    30→interface BookingTimeGridProps {
+    31→  bookings: Booking[];
+    32→  onBookingClick?: (booking: Booking) => void;
+    33→  onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
+    34→  onEdit?: (booking: Booking) => void;
+    35→  /** Open the dedicated "Xếp nhân viên" dialog for a booking whose service has
+    36→      no staff assigned. Called by the "Xếp nhân viên" button on segment cards
+    37→      + in the hover popover. */
+    38→  onAssignStaff?: (booking: Booking) => void;
+    39→  onDelete?: (bookingId: string) => void;
+    40→  /**
+    41→   * Open the invoice dialog for a booking. Called when a PAID booking card
+    42→   * (checkout status = has a completed invoice) is clicked. Unpaid bookings
+    43→   * (confirmed / new / checkin / cancelled / no_show) fall back to the
+    44→   * regular onBookingClick (edit dialog).
+    45→   */
+    46→  onShowInvoice?: (booking: Booking) => void;
+    47→  /**
+    48→   * Called when the user clicks an EMPTY area of an hour row (not on an
+    49→   * existing booking card). Opens the "Create new booking" dialog with the
+    50→   * slot's hour pre-filled as the start time.
+    51→   * Slot shape: { date: "DD/MM/YYYY", time: "HH:mm" }
+    52→   */
+    53→  onSlotClick?: (slot: { date: string; time: string }) => void;
+    54→  /** The date to use when creating a new booking from an empty slot. */
+    55→  currentDate?: Date;
+    56→  /** When provided AND spanning 2+ days, the grid switches to a per-day column
+    57→   *  layout (one column per day) — mirroring the View nhân viên multi-day grid.
+    58→   *  4 days fill the table; 5+ days scroll horizontally. */
+    59→  dateRange?: { from: Date; to: Date };
+    60→}
+    61→
+    62→// =============================================================================
+    63→// LAYOUT CONSTANTS
+    64→// =============================================================================
+    65→// The timeline covers 08:00 → 21:00 (13 one-hour bands). Hour labels are drawn
+    66→// for 08:00 ... 20:00 at the TOP of each band. Booking blocks are absolutely
+    67→// positioned: `top` = (startMinutesSince08:00 / 60) * PX_PER_HOUR, `height` =
+    68→// (totalDuration / 60) * PX_PER_HOUR. Multi-service bookings therefore span
+    69→// multiple hour bands (the core fix for the "only first service shows" bug).
+    70→const START_HOUR = 8;
+    71→const END_HOUR = 21; // exclusive — the last visible band is 20:00 → 21:00
+    72→const HOUR_COUNT = END_HOUR - START_HOUR; // 13
+    73→const PX_PER_HOUR = 80;
+    74→const TRACK_HEIGHT = HOUR_COUNT * PX_PER_HOUR; // 1040px
+    75→/** Width of the left "Giờ" label column. */
+    76→const TIME_COL_WIDTH = 96; // w-24
+    77→/** Minimum height for a booking block — keeps short services readable. */
+    78→const MIN_BLOCK_HEIGHT = 44;
+    79→/** Horizontal gap (px) between side-by-side booking blocks. */
+    80→const CARD_GAP_PX = 4;
+    81→/** Default width of a single slot when it doesn't overlap any other segment.
+    82→ *  ~1/4 of the visible viewport (1200px ÷ 4 ≈ 300px) so each booking occupies
+    83→ *  about a quarter of the interface by default — multiple non-overlapping
+    84→ *  bookings sit side-by-side instead of one stretching to full width. */
+    85→const DEFAULT_SLOT_WIDTH = 300;
+    86→
+    87→/** Hour labels rendered down the left axis: 08:00 → 20:00. */
+    88→const HOURS: number[] = Array.from({ length: HOUR_COUNT }, (_, i) => START_HOUR + i);
+    89→
+    90→/** A service-segment of a booking, positioned on the timeline at
+    91→ *  [startMin, startMin + duration). A segment = one or more CONSECUTIVE
+    92→ *  services performed by the SAME staff, merged into a single slot. Services
+    93→ *  run back-to-back (cursor advances by each service's duration), so
+    94→ *  consecutive in sort_order = adjacent in time. A run of same-staff services
+    95→ *  becomes one merged slot whose height ∝ the sum of their durations;
+    96→ *  different-staff services stay in separate slots (mirrors View nhân viên). */
+    97→interface ServiceSegment {
+    98→  booking: Booking;
+    99→  /** One or more consecutive same-staff services merged into this slot. */
+   100→  services: BookingServiceRow[];
+   101→  staffId: string;
+   102→  staffName: string;
+   103→  /** 0-based index of this segment (group) within the booking's segment list. */
+   104→  segmentIndex: number;
+   105→  /** Total number of segments (groups) in the booking (for the "1/2" badge). */
+   106→  totalSegments: number;
+   107→  /** Minutes from the timeline's START_HOUR (08:00) to this segment's start. */
+   108→  startMin: number;
+   109→  /** This segment's total duration = Σ of its services' durations (minutes). */
+   110→  duration: number;
+   111→}
+   112→
+   113→/**
+   114→ * Timeline grid view ("Khung giờ") for the booking module.
+   115→ *
+   116→ * Layout:
+   117→ * - Vertical time axis on the left: one band per hour (08:00 → 21:00).
+   118→ * - Booking blocks are absolutely positioned over a continuous timeline so a
+   119→ *   multi-service booking visually spans the SUM of its services' durations
+   120→ *   (e.g. 3 services of 60+30+30 min → a 2-hour block). Overlapping bookings
+   121→ *   are laid out in side-by-side columns (greedy column assignment).
+   122→ * - Hovering a block shows a popover with full info + status select + edit/delete.
+   123→ */
+   124→export function BookingTimeGrid({
+   125→  bookings,
+   126→  onBookingClick,
+   127→  onStatusChange,
+   128→  onEdit,
+   129→  onAssignStaff,
+   130→  onDelete,
+   131→  onShowInvoice,
+   132→  onSlotClick,
+   133→  currentDate,
+   134→  dateRange,
+   135→}: BookingTimeGridProps) {
+   136→  const { hasPermission } = useAuthStore();
+   137→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   138→  const canBookPastDate = hasPermission("book_past_date");
+   139→  // Whether the viewed date is in the past (slot creation blocked when
+   140→  // !canBookPastDate).
+   141→  const isPastDate = (() => {
+   142→    if (!currentDate) return false;
+   143→    const today = new Date();
+   144→    today.setHours(0, 0, 0, 0);
+   145→    const d = new Date(currentDate);
+   146→    d.setHours(0, 0, 0, 0);
+   147→    return d < today;
+   148→  })();
+   149→  const slotLocked = isPastDate && !canBookPastDate;
+   150→
+   151→  // Row-band resize (single-day timeline only). The user drags a horizontal
+   152→  // handle on the "Giờ" axis to grow/shrink every hour band. Persisted to
+   153→  // localStorage so the choice survives page switches / refreshes.
+   154→  const MIN_PX_PER_HOUR = 40;
+   155→  const MAX_PX_PER_HOUR = 200;
+   156→  const [pxPerHour, setPxPerHour] = useState<number>(() => {
+   157→    try {
+   158→      const raw = localStorage.getItem("crm-cust-timegrid-pxph");
+   159→      const n = raw ? parseInt(raw, 10) : NaN;
+   160→      if (!isNaN(n) && n >= MIN_PX_PER_HOUR && n <= MAX_PX_PER_HOUR) return n;
+   161→    } catch { /* ignore */ }
+   162→    return PX_PER_HOUR;
+   163→  });
+   164→  const setPxPerHourPersisted = (n: number) => {
+   165→    const clamped = Math.max(MIN_PX_PER_HOUR, Math.min(MAX_PX_PER_HOUR, n));
+   166→    setPxPerHour(clamped);
+   167→    try { localStorage.setItem("crm-cust-timegrid-pxph", String(clamped)); } catch { /* ignore */ }
+   168→  };
+   169→
+   170→  // Decide whether to use the per-day column layout (when 2+ days selected).
+   171→  const rangeDayCount = useMemo(() => {
+   172→    if (!dateRange) return 0;
+   173→    const from = new Date(dateRange.from);
+   174→    from.setHours(0, 0, 0, 0);
+   175→    const to = new Date(dateRange.to);
+   176→    to.setHours(0, 0, 0, 0);
+   177→    if (to < from) return 1;
+   178→    return Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+   179→  }, [dateRange]);
+   180→  const useMultiDayLayout = rangeDayCount >= 2;
+   181→
+   182→  // Card factory shared by both layouts — keeps click/status/edit/delete logic
+   183→  // identical for the single-day and multi-day grids. Takes a SEGMENT (one
+   184→  // service of one booking) so multi-service bookings render as separate cards.
+   185→  const renderCard = (segment: ServiceSegment) => (
+   186→    <SegmentCard
+   187→      segment={segment}
+   188→      fullWidth
+   189→      onClick={() => {
+   190→        // checkout (paid) → full paid invoice view; checkin (being served) →
+   191→        // invoice/payment dialog; otherwise → edit booking dialog. Mirrors
+   192→        // the staff-view (View nhân viên) click logic so both views behave
+   193→        // identically when a checkin booking is clicked.
+   194→        const status = segment.booking.status;
+   195→        const isPaid = status === "checkout";
+   196→        const isCheckin = status === "checkin";
+   197→        if ((isPaid || isCheckin) && onShowInvoice) onShowInvoice(segment.booking);
+   198→        else onBookingClick?.(segment.booking);
+   199→      }}
+   200→      onStatusChange={(status) => onStatusChange?.(segment.booking.id, status)}
+   201→      onEdit={() => onEdit?.(segment.booking)}
+   202→      onDelete={() => onDelete?.(segment.booking.id)}
+   203→      onAssignStaff={() => onAssignStaff?.(segment.booking)}
+   204→    />
+   205→  );
+   206→
+   207→  return (
+   208→    <div className="flex flex-col flex-1 min-h-0 border bg-white" style={{ maxHeight: "calc(100vh - 200px)" }}>
+   209→      {/* Header (sticky at top — does not scroll with the rows) */}
+   210→      <div className="flex items-center justify-between border-b bg-gray-50 px-4 py-2 shrink-0">
+   211→        <span className="text-sm font-semibold text-gray-700">Khung giờ</span>
+   212→        <span className="text-xs text-gray-500">{bookings.length} lịch hẹn</span>
+   213→      </div>
+   214→
+   215→      {/* When 2+ days are selected, render a tidy grid-table (rows = hours,
+   216→          columns = days, chips stacked non-overlapping) — mirrors View nhân
+   217→          viên's multi-day layout so the customer view stays neat. */}
+   218→      {useMultiDayLayout && dateRange ? (
+   219→        <CustomerDayRangeGrid
+   220→          dateRange={dateRange}
+   221→          bookings={bookings}
+   222→          onBookingClick={onBookingClick}
+   223→          onEdit={onEdit}
+   224→          onDelete={onDelete}
+   225→          onShowInvoice={onShowInvoice}
+   226→          onSlotClick={onSlotClick}
+   227→          slotLocked={slotLocked}
+   228→          canViewCustomerPhone={canViewCustomerPhone}
+   229→        />
+   230→      ) : (
+   231→        /* Single-day continuous timeline. The body scrolls both vertically and
+   232→           horizontally (many overlapping booking blocks may extend beyond the
+   233→           container width). time-grid-scroll → always-visible styled scrollbar.
+   234→           --px-per-hour is set on this root so all descendants (axis labels,
+   235→           gridlines, booking blocks) can resize hour bands via CSS var. */
+   236→        <div
+   237→          className="flex-1 overflow-auto time-grid-scroll"
+   238→          style={{ "--px-per-hour": `${pxPerHour}px` } as React.CSSProperties}
+   239→        >
+   240→          <TimelineColumn
+   241→            bookings={bookings}
+   242→            showLabels
+   243→            slotDate={currentDate}
+   244→            onSlotClick={onSlotClick}
+   245→            slotLocked={slotLocked}
+   246→            renderCard={renderCard}
+   247→            pxPerHour={pxPerHour}
+   248→            onPxPerHourChange={setPxPerHourPersisted}
+   249→          />
+   250→        </div>
+   251→      )}
+   252→    </div>
+   253→  );
+   254→}
+   255→
+   256→// =============================================================================
+   257→// TimelineColumn — a single continuous-timeline column with absolutely
+   258→// positioned booking blocks. Used for the single-day view (with labels) and
+   259→// once per day in the multi-day view (without labels).
+   260→// =============================================================================
+   261→
+   262→interface TimelineColumnProps {
+   263→  bookings: Booking[];
+   264→  /** Render the "Giờ" label column on the left (single-day view). */
+   265→  showLabels: boolean;
+   266→  /** Date used when creating a new booking from an empty slot. */
+   267→  slotDate?: Date;
+   268→  onSlotClick?: (slot: { date: string; time: string }) => void;
+   269→  slotLocked: boolean;
+   270→  renderCard: (segment: ServiceSegment) => ReactNode;
+   271→  /** Fixed pixel width (multi-day scroll mode). When omitted the column is flex-1. */
+   272→  fixedWidth?: number;
+   273→  /** Current hour-band height (single-day view). Used to render drag handles on
+   274→   *  the "Giờ" axis that resize every band. When omitted, falls back to PX_PER_HOUR. */
+   275→  pxPerHour?: number;
+   276→  /** Called when the user drags an hour-band handle (single-day view). */
+   277→  onPxPerHourChange?: (px: number) => void;
+   278→}
+   279→
+   280→function TimelineColumn({
+   281→  bookings,
+   282→  showLabels,
+   283→  slotDate,
+   284→  onSlotClick,
+   285→  slotLocked,
+   286→  renderCard,
+   287→  fixedWidth,
+   288→  pxPerHour,
+   289→  onPxPerHourChange,
+   290→}: TimelineColumnProps) {
+   291→  // Per-hour count of bookings STARTING in that hour (shown next to the label).
+   292→  const countByHour = useMemo(() => {
+   293→    const m = new Map<number, number>();
+   294→    for (const b of bookings) {
+   295→      const h = getBookingStartHour(b);
+   296→      if (h === null) continue;
+   297→      m.set(h, (m.get(h) || 0) + 1);
+   298→    }
+   299→    return m;
+   300→  }, [bookings]);
+   301→
+   302→  // Split each booking into one segment per service, then position every
+   303→  // segment absolutely with overlap-aware column assignment. A multi-service
+   304→  // booking therefore appears as separate blocks at consecutive time slices
+   305→  // (services run back-to-back) — different services by different staff are
+   306→  // never merged (mirrors View nhân viên).
+   307→  const positioned = useMemo(() => {
+   308→    const items: { segment: ServiceSegment; startMin: number; endMin: number }[] = [];
+   309→    const trackMinutes = HOUR_COUNT * 60;
+   310→    for (const b of bookings) {
+   311→      for (const seg of bookingToSegments(b)) {
+   312→        const segEnd = seg.startMin + seg.duration;
+   313→        // Skip only segments that start AFTER the visible window ends.
+   314→        // Segments that END before the visible window (e.g. a booking at 03:30
+   315→        // AM with a 2-hour duration ending at 05:30 — before 08:00) are NOT
+   316→        // skipped: they're CLAMPED to the top of the grid so the user can
+   317→        // SEE them and click to fix the time. Without this, a booking at
+   318→        // 03:30 VN (e.g. from a timezone bug) would be invisible in the
+   319→        // Khung giờ view — the user would see 4 bookings in the list but
+   320→        // only 3 in the grid.
+   321→        if (seg.startMin >= trackMinutes) continue;
+   322→        const clampedStart = Math.max(seg.startMin, 0);
+   323→        // If the entire segment is before the visible window (segEnd <= 0),
+   324→        // give it a minimum visible height (30 min) at the top of the grid
+   325→        // so the user can see + click it.
+   326→        const clampedEnd = segEnd <= 0
+   327→          ? Math.max(clampedStart + 30, Math.min(segEnd, trackMinutes))
+   328→          : Math.min(segEnd, trackMinutes);
+   329→        items.push({ segment: seg, startMin: clampedStart, endMin: clampedEnd });
+   330→      }
+   331→    }
+   332→    return layoutSegments(items);
+   333→  }, [bookings]);
+   334→
+   335→  // Effective hour-band height for JS arithmetic (segment block positioning).
+   336→  // When pxPerHour is provided (single-day view), use it; otherwise fall back
+   337→  // to the PX_PER_HOUR constant (multi-day dead code / fixedWidth mode).
+   338→  const pph = pxPerHour ?? PX_PER_HOUR;
+   339→  const trackHeightPx = HOUR_COUNT * pph;
+   340→  // CSS calc strings so all descendants resize when --px-per-hour changes.
+   341→  // Only set when pxPerHour is provided (single-day root sets the CSS var);
+   342→  // otherwise use the constant pixel values (multi-day fixedWidth).
+   343→  const useVar = pxPerHour !== undefined;
+   344→  const trackHeight = useVar ? `calc(${HOUR_COUNT} * var(--px-per-hour))` : `${trackHeightPx}px`;
+   345→  const bandTop = (h: number) => useVar ? `calc(${h - START_HOUR} * var(--px-per-hour))` : `${(h - START_HOUR) * pph}px`;
+   346→  const bandHeight = useVar ? "var(--px-per-hour)" : `${pph}px`;
+   347→
+   348→  const rootStyle: React.CSSProperties = fixedWidth
+   349→    ? { width: `${fixedWidth}px`, flexShrink: 0, height: trackHeightPx }
+   350→    : { flex: "1 1 0%", minWidth: 0, height: trackHeight };
+   351→
+   352→  return (
+   353→    <div className="flex" style={rootStyle}>
+   354→      {showLabels && (
+   355→        <div
+   356→          className="relative shrink-0 border-r bg-gray-50/60"
+   357→          style={{ width: TIME_COL_WIDTH, height: trackHeight }}
+   358→        >
+   359→          {HOURS.map((h) => {
+   360→            const count = countByHour.get(h) || 0;
+   361→            return (
+   362→              <div
+   363→                key={h}
+   364→                className="absolute left-0 right-0 px-3"
+   365→                style={{ top: bandTop(h) }}
+   366→              >
+   367→                <div className="text-sm font-medium text-gray-700">
+   368→                  {`${String(h).padStart(2, "0")}:00`}
+   369→                </div>
+   370→                {count > 0 && <div className="text-xs text-gray-400">({count})</div>}
+   371→              </div>
+   372→            );
+   373→          })}
+   374→          {/* Hour-band drag handles — one at each gridline (between hour h and
+   375→              h+1). The user grabs any handle and drags up/down to grow/shrink
+   376→              EVERY hour band (all bands share the same --px-per-hour). Only
+   377→              rendered when onPxPerHourChange is provided (single-day view). */}
+   378→          {onPxPerHourChange && pxPerHour !== undefined && HOURS.slice(0, -1).map((h) => (
+   379→            <div
+   380→              key={`handle-${h}`}
+   381→              data-hour-resizer
+   382→              className="absolute left-0 right-0 z-30 cursor-row-resize hover:bg-emerald-200/50"
+   383→              style={{
+   384→                top: `calc(${h + 1 - START_HOUR} * var(--px-per-hour) - 4px)`,
+   385→                height: "8px",
+   386→              }}
+   387→              onMouseDown={(e) => {
+   388→                e.preventDefault();
+   389→                e.stopPropagation();
+   390→                const startY = e.clientY;
+   391→                const startPph = pxPerHour;
+   392→                document.body.style.cursor = "row-resize";
+   393→                document.body.style.userSelect = "none";
+   394→                const onMove = (ev: MouseEvent) => {
+   395→                  const delta = ev.clientY - startY;
+   396→                  onPxPerHourChange(startPph + delta);
+   397→                };
+   398→                const onUp = () => {
+   399→                  document.body.style.cursor = "";
+   400→                  document.body.style.userSelect = "";
+   401→                  document.removeEventListener("mousemove", onMove);
+   402→                  document.removeEventListener("mouseup", onUp);
+   403→                };
+   404→                document.addEventListener("mousemove", onMove);
+   405→                document.addEventListener("mouseup", onUp);
+   406→              }}
+   407→            />
+   408→          ))}
+   409→        </div>
+   410→      )}
+   411→
+   412→      {/* The continuous timeline track. */}
+   413→      <div className="relative flex-1" style={{ height: trackHeight }}>
+   414→        {/* Horizontal hour gridlines. */}
+   415→        {HOURS.map((h) => (
+   416→          <div
+   417→            key={h}
+   418→            className="absolute left-0 right-0 border-t border-gray-300"
+   419→            style={{ top: bandTop(h) }}
+   420→          />
+   421→        ))}
+   422→        {/* Bottom border (21:00 line). */}
+   423→        <div className="absolute left-0 right-0 border-t border-gray-300" style={{ top: trackHeight }} />
+   424→
+   425→        {/* Clickable empty hour bands — open the "Create booking" dialog with
+   426→            the band's hour pre-filled. Rendered BEHIND the booking blocks so
+   427→            clicking a block hits the block (not the band). */}
+   428→        {onSlotClick && !slotLocked && slotDate && HOURS.map((h) => (
+   429→          <div
+   430→            key={h}
+   431→            className="absolute left-0 right-0 cursor-pointer hover:bg-sky-50/40"
+   432→            style={{
+   433→              top: bandTop(h),
+   434→              height: bandHeight,
+   435→            }}
+   436→            onClick={(e) => {
+   437→              if (e.target !== e.currentTarget) return;
+   438→              const hh = String(h).padStart(2, "0");
+   439→              const dd = String(slotDate.getDate()).padStart(2, "0");
+   440→              const mo = String(slotDate.getMonth() + 1).padStart(2, "0");
+   441→              const yyyy = slotDate.getFullYear();
+   442→              onSlotClick({ date: `${dd}/${mo}/${yyyy}`, time: `${hh}:00` });
+   443→            }}
+   444→          />
+   445→        ))}
+   446→
+   447→        {/* Segment blocks — one per service, absolutely positioned at
+   448→            [start, start+duration). Different services by different staff are
+   449→            never merged. Default width ~1/4 of the interface; overlapping
+   450→            segments split the column evenly. Uses pxPerHour (JS) for the
+   451→            Math.max height clamp. */}
+   452→        {positioned.map((p) => {
+   453→          const top = (p.startMin / 60) * pph;
+   454→          const height = Math.max(MIN_BLOCK_HEIGHT, ((p.endMin - p.startMin) / 60) * pph);
+   455→          const widthPx = DEFAULT_SLOT_WIDTH;
+   456→          const leftPx = p.col * (widthPx + CARD_GAP_PX);
+   457→          return (
+   458→            <div
+   459→              key={`${p.segment.booking.id}-${p.segment.segmentIndex}`}
+   460→              className="absolute"
+   461→              style={{
+   462→                top: `${top}px`,
+   463→                height: `${height}px`,
+   464→                left: `${leftPx}px`,
+   465→                width: `${widthPx}px`,
+   466→              }}
+   467→            >
+   468→              {renderCard(p.segment)}
+   469→            </div>
+   470→          );
+   471→        })}
+   472→      </div>
+   473→    </div>
+   474→  );
+   475→}
+   476→
+   477→/** The "Xếp nhân viên" button shown on segment cards whose service has NO
+   478→ *  staff assigned (staffName === "—"). Renders as a small blue pill below the
+   479→ *  service name. stopPropagation on click so it doesn't trigger the parent
+   480→ *  card's onClick (which would open the edit/invoice dialog); instead it
+   481→ *  calls onAssignStaff to open the booking edit dialog focused on staff
+   482→ *  assignment. (Same component as AssignStaffButton in booking-staff-view.) */
+   483→function AssignStaffButtonTG({ onAssignStaff }: { onAssignStaff?: () => void }) {
+   484→  return (
+   485→    <button
+   486→      type="button"
+   487→      onClick={(e) => {
+   488→        e.stopPropagation();
+   489→        onAssignStaff?.();
+   490→      }}
+   491→      className="mt-0.5 inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+   492→      title="Xếp nhân viên cho dịch vụ này"
+   493→    >
+   494→      Xếp nhân viên
+   495→    </button>
+   496→  );
+   497→}
+   498→
+   499→/** A single service-segment card. The face shows THIS segment's service +
+   500→ *  duration + staff + time range; the hover popover shows the FULL booking
+   501→ *  (all services, status, edit/delete) for context. A multi-service booking
+   502→ *  therefore appears as multiple SegmentCards stacked at consecutive time
+   503→ *  slices — different services by different staff are never merged. */
+   504→function SegmentCard({
+   505→  segment,
+   506→  onClick,
+   507→  onStatusChange,
+   508→  onEdit,
+   509→  onDelete,
+   510→  onAssignStaff,
+   511→  fullWidth = false,
+   512→}: {
+   513→  segment: ServiceSegment;
+   514→  onClick: () => void;
+   515→  onStatusChange: (status: BookingStatusType) => void;
+   516→  onEdit: () => void;
+   517→  onDelete: () => void;
+   518→  /** Open the booking edit dialog to assign a staff to this segment's
+   519→      service(s). Called by the "Xếp nhân viên" button shown ONLY when this
+   520→      segment has no staff assigned (staffName === "—"). */
+   521→  onAssignStaff?: () => void;
+   522→  fullWidth?: boolean;
+   523→}) {
+   524→  const booking = segment.booking;
+   525→  // Segment-specific face values (the popover below uses `booking` for the
+   526→  // full-booking context).
+   527→  const segStaffName = segment.staffName;
+   528→  const isMultiSegment = segment.totalSegments > 1;
+   529→  const isMergedSlot = segment.services.length > 1;
+   530→  const segStartTotalMin = START_HOUR * 60 + segment.startMin;
+   531→  const segEndTotalMin = segStartTotalMin + segment.duration;
+   532→  const fmtMin = (t: number) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+   533→  const segTimeRange = `${fmtMin(segStartTotalMin)} - ${fmtMin(segEndTotalMin)}`;
+   534→  const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
+   535→  const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
+   536→  const [hovered, setHovered] = useState(false);
+   537→  const [selectOpen, setSelectOpen] = useState(false);
+   538→
+   539→  // Segment-specific service info — the popover shows ONLY this slot's
+   540→  // service(s) (the segment's), not the full booking's. A multi-service booking
+   541→  // with different staff appears as separate slots; each slot's popover shows
+   542→  // only its own service + the staff who performs it (per the user's request:
+   543→  // "slot dành cho dịch vụ nào thì chỉ hiển thị thông tin của dịch vụ đấy").
+   544→  // NOTE: the hover popover now uses the shared BookingHoverDetails component
+   545→  // (same as View nhân viên), so the segment-specific service summary vars are
+   546→  // no longer needed here — BookingHoverDetails fetches the full booking +
+   547→  // invoice and shows all services with durations.
+   548→  const dateLabel = getBookingDateLabel(booking);
+   549→
+   550→  // Card background color — based on booking status + payment-review state
+   551→  // (per user's color spec for View khách hàng > Khung giờ & View nhân viên):
+   552→  // - confirmed / new → XANH DƯƠNG (blue)
+   553→  // - checkin, chưa bấm Thanh toán → XANH (green)
+   554→  // - checkin + đã bấm Thanh toán (đang ở chế độ review, chưa Hoàn tất) → TÍM ĐẬM (darker purple)
+   555→  // - no_show → yellow
+   556→  // - cancelled → red
+   557→  // - checkout (đã Hoàn tất) → TRẮNG (white)
+   558→  //
+   559→  // IMPORTANT: "đã bấm Thanh toán" is tracked by the shared payment-review
+   560→  // store (useIsReviewing), which is set when the cashier presses "Thanh toán"
+   561→  // and cleared on "Hủy" / "Hoàn tất". It is NOT the invoice's "pending"
+   562→  // status — every checkin booking has a pending invoice (auto-created at
+   563→  // checkin), so pending-status alone cannot distinguish "chưa bấm Thanh toán"
+   564→  // from "đã bấm Thanh toán". The review flag (persisted to sessionStorage,
+   565→  // shared across Booking + Cashier) is the only reliable signal.
+   566→  const isPaid = booking.status === "checkout";
+   567→  const isCancelled = booking.status === "cancelled";
+   568→  const isNoShow = booking.status === "no_show";
+   569→  const isCheckin = booking.status === "checkin";
+   570→  const isReviewing = useIsReviewing(booking.id);
+   571→
+   572→  let cardBg: string;
+   573→  let timeText: string;
+   574→  if (isPaid) {
+   575→    // Completed payment (đã Hoàn tất) → TRẮNG (white background, neutral border).
+   576→    cardBg = "bg-white border-gray-300";
+   577→    timeText = "text-gray-700";
+   578→  } else if (isCancelled) {
+   579→    cardBg = "bg-red-50 border-red-200";
+   580→    timeText = "text-red-700";
+   581→  } else if (isNoShow) {
+   582→    cardBg = "bg-amber-50 border-amber-300";
+   583→    timeText = "text-amber-700";
+   584→  } else if (isCheckin && isReviewing) {
+   585→    // Payment started but not completed (đã bấm Thanh toán, đang review) → TÍM ĐẬM (darker purple).
+   586→    cardBg = "bg-purple-300 border-purple-600";
+   587→    timeText = "text-purple-900";
+   588→  } else if (isCheckin) {
+   589→    // Checked in, chưa bấm Thanh toán → XANH (green).
+   590→    cardBg = "bg-green-200 border-green-500";
+   591→    timeText = "text-green-900";
+   592→  } else {
+   593→    // confirmed / new → XANH DƯƠNG (blue).
+   594→    cardBg = "bg-blue-100 border-blue-500";
+   595→    timeText = "text-blue-800";
+   596→  }
+   597→
+   598→  // Determine which next-statuses are allowed — SAME logic as the list view
+   599→  // (booking-customer-view.tsx). Terminal statuses (checkout/no_show/cancelled)
+   600→  // cannot be changed (app-wide rule: đã checkout/Xác nhận thanh toán then no
+   601→  // status change allowed). The select is hidden for terminal statuses.
+   602→  let statusOptions: BookingStatusType[] = [];
+   603→  if (booking.status === "confirmed" || booking.status === "new") {
+   604→    statusOptions = ["checkin", "no_show", "cancelled"];
+   605→  } else if (booking.status === "checkin") {
+   606→    // checkin → can cancel (customer showed up but changed mind before paying;
+   607→    // the slot is freed for a new booking).
+   608→    statusOptions = ["cancelled"];
+   609→  }
+   610→
+   611→  return (
+   612→    <div
+   613→      className="relative h-full"
+   614→      onMouseEnter={() => setHovered(true)}
+   615→      onMouseLeave={() => {
+   616→        // Don't close the popover while the status select dropdown is open —
+   617→        // its content renders in a portal outside this container, so the mouse
+   618→        // leaving would otherwise dismiss the popover before a selection lands.
+   619→        if (selectOpen) return;
+   620→        setHovered(false);
+   621→      }}
+   622→    >
+   623→      {/* Card (clickable → opens edit or invoice depending on paid status).
+   624→          Rendered as a <div role="button"> instead of <button> so it can
+   625→          contain a nested "Xếp nhân viên" button for unassigned-staff segments
+   626→          (nested <button> is invalid HTML). Keyboard accessibility is
+   627→          preserved via role + tabIndex + onKeyDown. */}
+   628→      <div
+   629→        role="button"
+   630→        tabIndex={0}
+   631→        onClick={onClick}
+   632→        onKeyDown={(e) => {
+   633→          if (e.key === "Enter" || e.key === " ") {
+   634→            e.preventDefault();
+   635→            onClick();
+   636→          }
+   637→        }}
+   638→        className={`group flex h-full w-full ${fullWidth ? "" : "w-[220px] shrink-0"} cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${cardBg}`}
+   639→      >
+   640→        {/* Time range for THIS segment's slice + date + multi-service badge.
+   641→            shrink-0 → always visible even when the slot is short. */}
+   642→        <div className="flex shrink-0 items-center justify-between">
+   643→          <span className={`text-sm font-semibold ${timeText}`}>
+   644→            {segTimeRange}
+   645→            {dateLabel && <span className="ml-1 text-xs font-normal text-gray-500">{dateLabel}</span>}
+   646→          </span>
+   647→          <div className="flex items-center gap-1">
+   648→            {isMultiSegment && (
+   649→              <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+   650→                {segment.segmentIndex + 1}/{segment.totalSegments}
+   651→              </span>
+   652→            )}
+   653→            {booking.numberOfCustomers > 1 && (
+   654→              <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+   655→                ×{booking.numberOfCustomers}
+   656→              </span>
+   657→            )}
+   658→          </div>
+   659→        </div>
+   660→        {/* Customer — prioritized over services. shrink-0 → always visible
+   661→            even when the slot is short; services below absorb the overflow. */}
+   662→        <div className="mt-0.5 shrink-0 truncate text-sm font-medium text-gray-900">
+   663→          {booking.customer?.name || "Khách"}
+   664→          {booking.customer?.phone && (
+   665→            <span className="ml-1 text-xs font-normal text-gray-500">
+   666→              {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
+   667→            </span>
+   668→          )}
+   669→        </div>
+   670→        {/* Services — list ALL services in this merged slot, each with its
+   671→            duration. This section is flex-1 + overflow-hidden so it fills the
+   672→            remaining height and CLIPS from the bottom when the slot is too
+   673→            short: time range + customer always show first, services that don't
+   674→            fit are simply hidden (per the user's request). */}
+   675→        {isMergedSlot ? (
+   676→          <div className="mt-0.5 min-h-0 flex-1 overflow-hidden">
+   677→            <div className="space-y-0.5">
+   678→              {segment.services.map((s, i) => (
+   679→                <div key={i} className="truncate text-xs text-gray-700">
+   680→                  {s.service?.name || "Dịch vụ"}
+   681→                  {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
+   682→                </div>
+   683→              ))}
+   684→            </div>
+   685→            {segStaffName === "—" ? (
+   686→              <AssignStaffButtonTG onAssignStaff={onAssignStaff} />
+   687→            ) : (
+   688→              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {segStaffName}</div>
+   689→            )}
+   690→          </div>
+   691→        ) : (
+   692→          segStaffName === "—" ? (
+   693→            <div className="mt-0.5 min-h-0 flex-1 overflow-hidden text-xs">
+   694→              <div className="truncate text-gray-700">
+   695→                {segment.services[0]?.service?.name || "Dịch vụ"}
+   696→                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+   697→              </div>
+   698→              <AssignStaffButtonTG onAssignStaff={onAssignStaff} />
+   699→            </div>
+   700→          ) : (
+   701→            <div className="mt-0.5 min-h-0 flex-1 overflow-hidden flex items-center gap-1 text-xs">
+   702→              <span className="truncate text-gray-700">
+   703→                {segment.services[0]?.service?.name || "Dịch vụ"}
+   704→                {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
+   705→              </span>
+   706→              <span className="shrink-0 font-medium text-sky-600">NV: {segStaffName}</span>
+   707→            </div>
+   708→          )
+   709→        )}
+   710→      </div>
+   711→
+   712→      {/* Hover popover — uses the SAME BookingHoverDetails component as the
+   713→          View nhân viên (staff-view) so the hover experience is identical
+   714→          across both views: customer name | phone, status + select, services
+   715→          with duration + staff in blue, "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn"
+   716→          link, edit + trash buttons. */}
+   717→      {hovered && (
+   718→        <div className="absolute left-0 top-0 z-50 mt-1 w-[255px] border bg-white shadow-xl">
+   719→          <BookingHoverDetails
+   720→            booking={booking}
+   721→            canViewCustomerPhone={canViewCustomerPhone}
+   722→            statusOptions={statusOptions}
+   723→            onStatusChange={onStatusChange}
+   724→            selectOpen={selectOpen}
+   725→            setSelectOpen={setSelectOpen}
+   726→            onEdit={onEdit}
+   727→            onDelete={onDelete}
+   728→            canCancelPayment={canCancelPayment}
+   729→            onOpenInvoice={onClick}
+   730→            onAssignStaff={onAssignStaff}
+   731→          />
+   732→        </div>
+   733→      )}
+   734→    </div>
+   735→  );
+   736→}
+   737→
+   738→// =============================================================================
+   739→// HELPERS
+   740→// =============================================================================
+   741→
+   742→/** Split a booking into SEGMENTS where each segment = a run of same-staff
+   743→ *  services merged into one slot. PARALLEL model: every service in the booking
+   744→ *  starts at the SAME booking-level start time (each runs on a different staff,
+   745→ *  simultaneously), so every segment's startMin = the booking's startMin (NO
+   746→ *  cursor advance). A run of same-staff services still merges into one taller
+   747→ *  block (duration = sum of their durations). Matches the parallel server-side
+   748→ *  conflict check in /api/supabase/bookings/route.ts. */
+   749→function bookingToSegments(booking: Booking): ServiceSegment[] {
+   750→  const startMin = getBookingStartMinutesFromOpen(booking);
+   751→  if (startMin === null) return [];
+   752→  const services = getAllServices(booking)
+   753→    .slice()
+   754→    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+   755→  // Group consecutive same-staff services into one segment.
+   756→  const groups: BookingServiceRow[][] = [];
+   757→  for (const s of services) {
+   758→    const last = groups.length > 0 ? groups[groups.length - 1] : null;
+   759→    const lastStaffId = last && last.length > 0 ? last[last.length - 1].staff_id : null;
+   760→    if (last && lastStaffId && lastStaffId === s.staff_id) {
+   761→      last.push(s);
+   762→    } else {
+   763→      groups.push([s]);
+   764→    }
+   765→  }
+   766→  const total = groups.length;
+   767→  // PARALLEL: every segment starts at the booking's startMin. Previously a
+   768→  // cursor advanced by each segment's duration (consecutive model), making the
+   769→  // 2nd service of a multi-staff booking appear at startMin + 1st duration
+   770→  // (e.g. 11:00 instead of 09:30). Fixed to parallel.
+   771→  const segs: ServiceSegment[] = [];
+   772→  groups.forEach((group, i) => {
+   773→    const duration = group.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+   774→    segs.push({
+   775→      booking,
+   776→      services: group,
+   777→      staffId: group[0].staff_id || "",
+   778→      staffName: group[0].staff?.name || "—",
+   779→      segmentIndex: i,
+   780→      totalSegments: total,
+   781→      startMin,
+   782→      duration,
+   783→    });
+   784→  });
+   785→  return segs;
+   786→}
+   787→
+   788→/** All service rows on the booking that carry a service or staff reference. */
+   789→function getAllServices(booking: Booking): BookingServiceRow[] {
+   790→  const services = booking.services as BookingServiceRow[];
+   791→  if (!Array.isArray(services)) return [];
+   792→  return services.filter((s) => s && (s.service || s.staff));
+   793→}
+   794→
+   795→function getBookingStartHour(booking: Booking): number | null {
+   796→  const dt = booking.date_time;
+   797→  if (!dt) return null;
+   798→  const m = dt.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+   799→  if (!m) return null;
+   800→  const hour = parseInt(m[4], 10);
+   801→  return isNaN(hour) ? null : hour;
+   802→}
+   803→
+   804→/** Minutes since the timeline's START_HOUR (08:00). May be negative (booking
+   805→ *  starts before the visible window) — callers clamp as needed. */
+   806→function getBookingStartMinutesFromOpen(booking: Booking): number | null {
+   807→  const dt = booking.date_time;
+   808→  if (!dt) return null;
+   809→  // Timezone-safe Vietnam time (Supabase stores +00:00; the "THH:MM" segment
+   810→  // is UTC, not the VN time the user entered).
+   811→  const hhmm = toVietnamTime(dt);
+   812→  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
+   813→  if (!m) return null;
+   814→  const hour = parseInt(m[1], 10);
+   815→  const minute = parseInt(m[2], 10);
+   816→  if (isNaN(hour) || isNaN(minute)) return null;
+   817→  return (hour - START_HOUR) * 60 + minute;
+   818→}
+   819→
+   820→/** Format the booking's date as "dd/MM" (compact) for display alongside the time. */
+   821→function getBookingDateLabel(booking: Booking): string {
+   822→  const dt = booking.date_time;
+   823→  if (!dt) return "";
+   824→  const d = new Date(dt);
+   825→  if (isNaN(d.getTime())) return "";
+   826→  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+   827→}
+   828→
+   829→// =============================================================================
+   830→// OVERLAP-AWARE SEGMENT LAYOUT (Google-Calendar style)
+   831→// =============================================================================
+   832→// Segments are grouped into clusters of mutually-overlapping intervals, then
+   833→// each cluster is split into the fewest parallel columns needed so no two
+   834→// blocks in the same column overlap. Every block in a cluster gets an equal
+   835→// 1/cols slice of the column width.
+   836→
+   837→type LaidOutSegment = {
+   838→  segment: ServiceSegment;
+   839→  startMin: number;
+   840→  endMin: number;
+   841→  col: number;
+   842→  cols: number;
+   843→};
+   844→
+   845→function layoutSegments(
+   846→  items: { segment: ServiceSegment; startMin: number; endMin: number }[],
+   847→): LaidOutSegment[] {
+   848→  if (items.length === 0) return [];
+   849→
+   850→  // Sort by start time (earlier first), then by longer duration first so wide
+   851→  // blocks claim the leftmost column.
+   852→  const sorted = [...items].sort(
+   853→    (a, b) => a.startMin - b.startMin || b.endMin - a.endMin,
+   854→  );
+   855→
+   856→  // Cluster segments whose [start, end) intervals overlap transitively.
+   857→  const clusters: typeof items[] = [];
+   858→  let current: typeof items = [];
+   859→  let clusterEnd = -Infinity;
+   860→  for (const it of sorted) {
+   861→    if (current.length === 0 || it.startMin < clusterEnd) {
+   862→      current.push(it);
+   863→      clusterEnd = Math.max(clusterEnd, it.endMin);
+   864→    } else {
+   865→      clusters.push(current);
+   866→      current = [it];
+   867→      clusterEnd = it.endMin;
+   868→    }
+   869→  }
+   870→  if (current.length) clusters.push(current);
+   871→
+   872→  const result: LaidOutSegment[] = [];
+   873→  for (const cluster of clusters) {
+   874→    // Greedy column assignment: place each segment in the leftmost column
+   875→    // whose current tail ends at or before this segment's start.
+   876→    const columnTails: number[] = [];
+   877→    const placement: { it: (typeof items)[0]; col: number }[] = [];
+   878→    for (const it of cluster) {
+   879→      let placed = false;
+   880→      for (let c = 0; c < columnTails.length; c++) {
+   881→        if (columnTails[c] <= it.startMin) {
+   882→          columnTails[c] = it.endMin;
+   883→          placement.push({ it, col: c });
+   884→          placed = true;
+   885→          break;
+   886→        }
+   887→      }
+   888→      if (!placed) {
+   889→        columnTails.push(it.endMin);
+   890→        placement.push({ it, col: columnTails.length - 1 });
+   891→      }
+   892→    }
+   893→    const cols = columnTails.length;
+   894→    for (const { it, col } of placement) {
+   895→      result.push({
+   896→        segment: it.segment,
+   897→        startMin: it.startMin,
+   898→        endMin: it.endMin,
+   899→        col,
+   900→        cols,
+   901→      });
+   902→    }
+   903→  }
+   904→  return result;
+   905→}
+   906→
+   907→// =============================================================================
+   908→// MULTI-DAY COLUMN LAYOUT — DayColumnGrid
+   909→// =============================================================================
+   910→// Renders one TimelineColumn per day in the selected date range, sharing a
+   911→// single left "Giờ" label column. Booking blocks span the SUM of their
+   912→// services' durations exactly like the single-day view (the fix applies to
+   913→// both layouts).
+   914→//
+   915→// Sizing (mirrors View nhân viên):
+   916→//   - 2–4 days → columns fill the full table width (flex-1 each), no scroll.
+   917→//   - 5+ days → each column keeps the SAME width as 4 days would have had
+   918→//     (measured via ResizeObserver), and the table scrolls horizontally.
+   919→//
+   920→// Vertical scrolling happens INSIDE the table body (overflow-y-auto) so the
+   921→// module header / filters stay fixed — the whole page doesn't scroll.
+   922→// =============================================================================
+   923→
+   924→interface DayColumnGridProps {
+   925→  dateRange: { from: Date; to: Date };
+   926→  bookings: Booking[];
+   927→  onSlotClick?: (slot: { date: string; time: string }) => void;
+   928→  slotLocked: boolean;
+   929→  renderCard: (segment: ServiceSegment) => ReactNode;
+   930→}
+   931→
+   932→/** Minimum day column width (used as a floor when computing scrollColWidth). */
+   933→const TG_DAY_COL_MIN_WIDTH = 220;
+   934→/** The 4-day baseline: 1–4 days fill the table; 5+ keep that column width. */
+   935→const TG_BASELINE_DAYS = 4;
+   936→
+   937→/** Build the list of calendar days (inclusive) between `from` and `to`. */
+   938→function buildDays(from: Date, to: Date): Date[] {
+   939→  const days: Date[] = [];
+   940→  const start = new Date(from);
+   941→  start.setHours(0, 0, 0, 0);
+   942→  const end = new Date(to);
+   943→  end.setHours(0, 0, 0, 0);
+   944→  if (end < start) return [start];
+   945→  const cur = new Date(start);
+   946→  while (cur <= end) {
+   947→    days.push(new Date(cur));
+   948→    cur.setDate(cur.getDate() + 1);
+   949→  }
+   950→  return days;
+   951→}
+   952→
+   953→/** Build a `YYYY-MM-DD` dayKey from a local Date (no UTC shift). */
+   954→function dateToDayKey(d: Date): string {
+   955→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+   956→}
+   957→
+   958→/** Extract { dayKey, hour } from the ISO date_time (regex, no TZ shift). */
+   959→function getBookingDayHourKey(booking: Booking): { dayKey: string; hour: number } | null {
+   960→  const dt = booking.date_time;
+   961→  if (!dt || typeof dt !== "string") return null;
+   962→  const m = dt.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):/);
+   963→  if (!m) return null;
+   964→  const hour = parseInt(m[4], 10);
+   965→  if (isNaN(hour)) return null;
+   966→  return { dayKey: `${m[1]}-${m[2]}-${m[3]}`, hour };
+   967→}
+   968→
+   969→function DayColumnGrid({
+   970→  dateRange,
+   971→  bookings,
+   972→  onSlotClick,
+   973→  slotLocked,
+   974→  renderCard,
+   975→}: DayColumnGridProps) {
+   976→  const days = useMemo(() => buildDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
+   977→
+   978→  // Measure container width to compute scrollColWidth = (container - timeCol) / 4.
+   979→  const containerRef = useRef<HTMLDivElement>(null);
+   980→  const [containerWidth, setContainerWidth] = useState(0);
+   981→  useEffect(() => {
+   982→    const el = containerRef.current;
+   983→    if (!el) return;
+   984→    const update = () => setContainerWidth(el.getBoundingClientRect().width);
+   985→    update();
+   986→    const ro = new ResizeObserver(update);
+   987→    ro.observe(el);
+   988→    return () => ro.disconnect();
+   989→  }, []);
+   990→
+   991→  const dayCount = days.length;
+   992→  const needsScroll = dayCount > TG_BASELINE_DAYS;
+   993→  const scrollColWidth = containerWidth > 0
+   994→    ? Math.max(TG_DAY_COL_MIN_WIDTH, (containerWidth - TIME_COL_WIDTH) / TG_BASELINE_DAYS)
+   995→    : 280;
+   996→  const totalWidth = needsScroll
+   997→    ? TIME_COL_WIDTH + dayCount * scrollColWidth
+   998→    : undefined;
+   999→
+  1000→  // Horizontal scroll tracking — shows left/right arrow buttons when the grid
+  1001→  // content overflows horizontally (many days selected). The buttons let the
+  1002→  // user scroll left/right one column at a time, complementing the native
+  1003→  // scrollbar (which may be invisible on overlay-scrollbar browsers).
+  1004→  const scrollRef = useRef<HTMLDivElement>(null);
+  1005→  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  1006→  const [canScrollRight, setCanScrollRight] = useState(false);
+  1007→  const updateScrollFlags = () => {
+  1008→    const el = scrollRef.current;
+  1009→    if (!el) return;
+  1010→    setCanScrollLeft(el.scrollLeft > 1);
+  1011→    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  1012→  };
+  1013→  useEffect(() => {
+  1014→    updateScrollFlags();
+  1015→    const el = scrollRef.current;
+  1016→    if (!el) return;
+  1017→    el.addEventListener("scroll", updateScrollFlags);
+  1018→    const ro = new ResizeObserver(updateScrollFlags);
+  1019→    ro.observe(el);
+  1020→    return () => {
+  1021→      el.removeEventListener("scroll", updateScrollFlags);
+  1022→      ro.disconnect();
+  1023→    };
+  1024→  }, [days, containerWidth]);
+  1025→  const scrollByColumns = (dir: 1 | -1) => {
+  1026→    const el = scrollRef.current;
+  1027→    if (!el) return;
+  1028→    el.scrollBy({ left: dir * scrollColWidth, behavior: "smooth" });
+  1029→  };
+  1030→
+  1031→  // Index bookings by day so each day column only renders its own bookings.
+  1032→  const byDay = useMemo(() => {
+  1033→    const m = new Map<string, Booking[]>();
+  1034→    for (const b of bookings) {
+  1035→      const info = getBookingDayHourKey(b);
+  1036→      if (!info) continue;
+  1037→      const arr = m.get(info.dayKey);
+  1038→      if (arr) arr.push(b);
+  1039→      else m.set(info.dayKey, [b]);
+  1040→    }
+  1041→    return m;
+  1042→  }, [bookings]);
+  1043→
+  1044→  const weekdayVi = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  1045→
+  1046→  return (
+  1047→    <div
+  1048→      ref={containerRef}
+  1049→      className="border bg-white flex flex-col relative"
+  1050→      style={{ maxHeight: "calc(100vh - 200px)" }}
+  1051→    >
+  1052→      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto time-grid-scroll">
+  1053→        <div
+  1054→          style={
+  1055→            needsScroll
+  1056→              ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` }
+  1057→              : { width: "100%" }
+  1058→          }
+  1059→        >
+  1060→          {/* Header: "Giờ" + day columns — sticky at top during vertical scroll */}
+  1061→          <div className="flex border-b bg-gray-50 sticky top-0 z-10">
+  1062→            <div
+  1063→              className="shrink-0 border-r px-3 py-2 text-sm font-semibold text-gray-700"
+  1064→              style={{ width: TIME_COL_WIDTH }}
+  1065→            >
+  1066→              Khung giờ
+  1067→            </div>
+  1068→            {days.map((day, idx) => {
+  1069→              const isToday = (() => {
+  1070→                const t = new Date();
+  1071→                t.setHours(0, 0, 0, 0);
+  1072→                const d = new Date(day);
+  1073→                d.setHours(0, 0, 0, 0);
+  1074→                return t.getTime() === d.getTime();
+  1075→              })();
+  1076→              return (
+  1077→                <div
+  1078→                  key={idx}
+  1079→                  className={`border-r px-3 py-2 text-center ${isToday ? "bg-emerald-50" : ""}`}
+  1080→                  style={needsScroll ? { width: scrollColWidth, flexShrink: 0 } : { flex: "1 1 0%", minWidth: 0 }}
+  1081→                >
+  1082→                  <div className="text-[11px] font-medium text-gray-500">{weekdayVi[day.getDay()]}</div>
+  1083→                  <div className={`text-sm font-semibold ${isToday ? "text-emerald-700" : "text-gray-800"}`}>
+  1084→                    {`${String(day.getDate()).padStart(2, "0")}/${String(day.getMonth() + 1).padStart(2, "0")}`}
+  1085→                  </div>
+  1086→                </div>
+  1087→              );
+  1088→            })}
+  1089→          </div>
+  1090→
+  1091→          {/* Body: shared "Giờ" label column + one TimelineColumn per day. */}
+  1092→          <div className="flex" style={{ height: TRACK_HEIGHT }}>
+  1093→            {/* Giờ label column */}
+  1094→            <div
+  1095→              className="relative shrink-0 border-r bg-gray-50/60"
+  1096→              style={{ width: TIME_COL_WIDTH, height: TRACK_HEIGHT }}
+  1097→            >
+  1098→              {HOURS.map((h) => (
+  1099→                <div
+  1100→                  key={h}
+  1101→                  className="absolute left-0 right-0 px-3"
+  1102→                  style={{ top: (h - START_HOUR) * PX_PER_HOUR }}
+  1103→                >
+  1104→                  <div className="text-sm font-medium text-gray-700">
+  1105→                    {`${String(h).padStart(2, "0")}:00`}
+  1106→                  </div>
+  1107→                </div>
+  1108→              ))}
+  1109→            </div>
+  1110→
+  1111→            {/* Day columns */}
+  1112→            {days.map((day, idx) => {
+  1113→              const dayKey = dateToDayKey(day);
+  1114→              const dayBookings = byDay.get(dayKey) || [];
+  1115→              return (
+  1116→                <TimelineColumn
+  1117→                  key={idx}
+  1118→                  bookings={dayBookings}
+  1119→                  showLabels={false}
+  1120→                  slotDate={day}
+  1121→                  onSlotClick={onSlotClick}
+  1122→                  slotLocked={slotLocked}
+  1123→                  renderCard={renderCard}
+  1124→                  fixedWidth={needsScroll ? scrollColWidth : undefined}
+  1125→                />
+  1126→              );
+  1127→            })}
+  1128→          </div>
+  1129→        </div>
+  1130→      </div>
+  1131→
+  1132→      {/* Left/right scroll arrows — always-visible clickable buttons that scroll
+  1133→          the grid horizontally by one column. Shown only when there is content
+  1134→          beyond the visible edge (canScrollLeft / canScrollRight). Complements
+  1135→          the native scrollbar (which may be invisible on overlay-scrollbar
+  1136→          browsers) so the user can always navigate when many days are selected. */}
+  1137→      {needsScroll && canScrollLeft && (
+  1138→        <button
+  1139→          type="button"
+  1140→          onClick={() => scrollByColumns(-1)}
+  1141→          aria-label="Cuộn sang trái"
+  1142→          className="absolute left-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
+  1143→          style={{ marginLeft: TIME_COL_WIDTH }}
+  1144→        >
+  1145→          <ChevronLeft className="h-5 w-5" />
+  1146→        </button>
+  1147→      )}
+  1148→      {needsScroll && canScrollRight && (
+  1149→        <button
+  1150→          type="button"
+  1151→          onClick={() => scrollByColumns(1)}
+  1152→          aria-label="Cuộn sang phải"
+  1153→          className="absolute right-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
+  1154→        >
+  1155→          <ChevronRight className="h-5 w-5" />
+  1156→        </button>
+  1157→      )}
+  1158→    </div>
+  1159→  );
+  1160→}
+  1161→
+  1162→// =============================================================================
+  1163→// MULTI-DAY GRID TABLE (CustomerDayRangeGrid) — grid-table layout mirroring
+  1164→// View nhân viên's DayRangeGrid. Rows = hours, columns = days, each cell holds
+  1165→// non-overlapping chips stacked top-to-bottom. This replaces the absolute-
+  1166→// positioning DayColumnGrid for multi-day so the layout stays tidy when many
+  1167→// days/bookings are selected (per the user's request).
+  1168→// =============================================================================
+  1169→
+  1170→const CDG_TIME_COL_WIDTH = 64;
+  1171→const CDG_DAY_COL_MIN_WIDTH = 160;
+  1172→const CDG_ROW_HEIGHT = 90;
+  1173→const CDG_BASELINE_DAYS = 4;
+  1174→
+  1175→/** Build the inclusive list of local-midnight Dates between `from` and `to`. */
+  1176→function cdgBuildDays(from: Date, to: Date): Date[] {
+  1177→  const days: Date[] = [];
+  1178→  const start = new Date(from);
+  1179→  start.setHours(0, 0, 0, 0);
+  1180→  const end = new Date(to);
+  1181→  end.setHours(0, 0, 0, 0);
+  1182→  if (end < start) return [start];
+  1183→  const cur = new Date(start);
+  1184→  while (cur <= end) {
+  1185→    days.push(new Date(cur));
+  1186→    cur.setDate(cur.getDate() + 1);
+  1187→  }
+  1188→  return days;
+  1189→}
+  1190→
+  1191→/** `YYYY-MM-DD` key from a local Date (no UTC shift). */
+  1192→function cdgDateKey(d: Date): string {
+  1193→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  1194→}
+  1195→
+  1196→/** Extract { dayKey, hour, minute } from the booking's `date_time` as VIETNAM
+  1197→ *  wall-clock values. Post-migration (Task 6), `date_time` is stored as a UTC
+  1198→ *  ISO string (e.g. "2026-07-14T03:30:00+00:00" represents 10:30 VN), so the
+  1199→ *  raw "THH:MM" segment is the UTC time, NOT the VN time the user entered.
+  1200→ *  Using `toVietnamDay` + `toVietnamTime` ensures the booking lands in the
+  1201→ *  correct row+column of the multi-day grid (a 10:30 VN booking lands in the
+  1202→ *  "10:00" row of column "2026-07-14", not the skipped "03:00" row). */
+  1203→function cdgBookingDayHour(booking: Booking): { dayKey: string; hour: number; minute: number } | null {
+  1204→  const dt = booking.date_time;
+  1205→  if (!dt || typeof dt !== "string") return null;
+  1206→  const dayKey = toVietnamDay(dt);
+  1207→  const hhmm = toVietnamTime(dt);
+  1208→  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
+  1209→  if (!m) return null;
+  1210→  const hour = parseInt(m[1], 10);
+  1211→  const minute = parseInt(m[2], 10);
+  1212→  if (isNaN(hour) || isNaN(minute)) return null;
+  1213→  return { dayKey, hour, minute };
+  1214→}
+  1215→
+  1216→interface CustomerDayRangeGridProps {
+  1217→  dateRange: { from: Date; to: Date };
+  1218→  bookings: Booking[];
+  1219→  onBookingClick?: (booking: Booking) => void;
+  1220→  onEdit?: (booking: Booking) => void;
+  1221→  onDelete?: (bookingId: string) => void;
+  1222→  onShowInvoice?: (booking: Booking) => void;
+  1223→  onSlotClick?: (slot: { date: string; time: string }) => void;
+  1224→  slotLocked: boolean;
+  1225→  canViewCustomerPhone: boolean;
+  1226→}
+  1227→
+  1228→function CustomerDayRangeGrid({
+  1229→  dateRange,
+  1230→  bookings,
+  1231→  onBookingClick,
+  1232→  onEdit,
+  1233→  onDelete,
+  1234→  onShowInvoice,
+  1235→  onSlotClick,
+  1236→  slotLocked,
+  1237→  canViewCustomerPhone,
+  1238→}: CustomerDayRangeGridProps) {
+  1239→  const days = useMemo(() => cdgBuildDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
+  1240→  const hours = HOURS;
+  1241→
+  1242→  // Measure container width to compute per-day column width for 5+ days.
+  1243→  const containerRef = useRef<HTMLDivElement>(null);
+  1244→  const scrollRef = useRef<HTMLDivElement>(null);
+  1245→  const [containerWidth, setContainerWidth] = useState(0);
+  1246→  useEffect(() => {
+  1247→    const el = containerRef.current;
+  1248→    if (!el) return;
+  1249→    const update = () => setContainerWidth(el.getBoundingClientRect().width);
+  1250→    update();
+  1251→    const ro = new ResizeObserver(update);
+  1252→    ro.observe(el);
+  1253→    return () => ro.disconnect();
+  1254→  }, []);
+  1255→
+  1256→  // Index bookings by `${dayKey}|${hour}` for O(1) cell lookup. Bookings whose
+  1257→  // start hour falls outside [START_HOUR, END_HOUR) are skipped (not shown).
+  1258→  const cellMap = useMemo(() => {
+  1259→    const m = new Map<string, Booking[]>();
+  1260→    for (const b of bookings) {
+  1261→      const info = cdgBookingDayHour(b);
+  1262→      if (!info) continue;
+  1263→      if (info.hour < START_HOUR || info.hour >= END_HOUR) continue;
+  1264→      const key = `${info.dayKey}|${info.hour}`;
+  1265→      const arr = m.get(key);
+  1266→      if (arr) arr.push(b);
+  1267→      else m.set(key, [b]);
+  1268→    }
+  1269→    // Sort each cell's bookings:
+  1270→    // 1. UNPAID bookings (pending/new/confirmed/checkin) take priority and
+  1271→    //    render ON TOP of cancelled/no_show ones. When a cancelled booking
+  1272→    //    would occupy the same slot as an unpaid booking (same start minute),
+  1273→    //    the unpaid one wins the visible position. This implements the user's
+  1274→    //    requirement: "lịch chưa thanh toán hiển thị đè lên lịch đã hủy".
+  1275→    // 2. Within the same priority, sort by start minute (earlier → top) so
+  1276→    //    the cell still reads top-to-bottom chronologically.
+  1277→    const PRIORITY: Record<string, number> = {
+  1278→      // unpaid / active → priority 0 (top)
+  1279→      pending: 0,
+  1280→      new: 0,
+  1281→      confirmed: 0,
+  1282→      checkin: 0,
+  1283→      // paid → priority 1
+  1284→      checkout: 1,
+  1285→      // cancelled / no-show → priority 2 (bottom, "hidden under" unpaid)
+  1286→      cancelled: 2,
+  1287→      no_show: 2,
+  1288→    };
+  1289→    for (const arr of m.values()) {
+  1290→      arr.sort((a, b) => {
+  1291→        const pa = PRIORITY[a.status] ?? 1;
+  1292→        const pb = PRIORITY[b.status] ?? 1;
+  1293→        if (pa !== pb) return pa - pb;
+  1294→        const ai = cdgBookingDayHour(a);
+  1295→        const bi = cdgBookingDayHour(b);
+  1296→        return (ai?.minute ?? 0) - (bi?.minute ?? 0);
+  1297→      });
+  1298→      // When an UNPAID booking and a CANCELLED booking share the EXACT same
+  1299→      // start minute (a true slot collision — e.g. a cancelled booking at
+  1300→      // 10:30 and a new confirmed booking at 10:30 for the same staff), hide
+  1301→      // the cancelled one entirely so the unpaid booking's chip is fully
+  1302→      // visible (not stacked under/over the cancelled chip). Bookings with
+  1303→      // different start minutes stay (they're different time slots within
+  1304→      // the same hour cell).
+  1305→      const hasUnpaid = arr.some(
+  1306→        (b) => (PRIORITY[b.status] ?? 1) === 0
+  1307→      );
+  1308→      if (hasUnpaid) {
+  1309→        // Build a set of start-minutes that have an unpaid booking.
+  1310→        const unpaidMinutes = new Set<number>();
+  1311→        for (const b of arr) {
+  1312→          if ((PRIORITY[b.status] ?? 1) === 0) {
+  1313→            const info = cdgBookingDayHour(b);
+  1314→            if (info) unpaidMinutes.add(info.minute);
+  1315→          }
+  1316→        }
+  1317→        // Remove cancelled/no_show bookings whose start minute collides with
+  1318→        // an unpaid booking's start minute. Keep non-colliding cancelled ones
+  1319→        // (different slot within the same hour) so the staff still sees them.
+  1320→        for (let i = arr.length - 1; i >= 0; i--) {
+  1321→          const b = arr[i];
+  1322→          const isCancelled = b.status === "cancelled" || b.status === "no_show";
+  1323→          if (!isCancelled) continue;
+  1324→          const info = cdgBookingDayHour(b);
+  1325→          if (info && unpaidMinutes.has(info.minute)) {
+  1326→            arr.splice(i, 1);
+  1327→          }
+  1328→        }
+  1329→      }
+  1330→    }
+  1331→    return m;
+  1332→  }, [bookings]);
+  1333→
+  1334→  const dayCount = days.length;
+  1335→  const needsScroll = dayCount > CDG_BASELINE_DAYS;
+  1336→  const scrollColWidth = containerWidth > 0
+  1337→    ? Math.max(CDG_DAY_COL_MIN_WIDTH, (containerWidth - CDG_TIME_COL_WIDTH) / CDG_BASELINE_DAYS)
+  1338→    : 240;
+  1339→  const totalWidth = needsScroll
+  1340→    ? CDG_TIME_COL_WIDTH + dayCount * scrollColWidth
+  1341→    : undefined;
+  1342→
+  1343→  // Horizontal scroll-arrow visibility (mirrors DayColumnGrid's logic).
+  1344→  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  1345→  const [canScrollRight, setCanScrollRight] = useState(false);
+  1346→  const updateScrollFlags = () => {
+  1347→    const el = scrollRef.current;
+  1348→    if (!el) return;
+  1349→    setCanScrollLeft(el.scrollLeft > 1);
+  1350→    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  1351→  };
+  1352→  useEffect(() => {
+  1353→    updateScrollFlags();
+  1354→    const el = scrollRef.current;
+  1355→    if (!el) return;
+  1356→    el.addEventListener("scroll", updateScrollFlags);
+  1357→    const ro = new ResizeObserver(updateScrollFlags);
+  1358→    ro.observe(el);
+  1359→    return () => {
+  1360→      el.removeEventListener("scroll", updateScrollFlags);
+  1361→      ro.disconnect();
+  1362→    };
+  1363→  }, [days, containerWidth]);
+  1364→  const scrollByColumns = (dir: 1 | -1) => {
+  1365→    const el = scrollRef.current;
+  1366→    if (!el) return;
+  1367→    el.scrollBy({ left: dir * scrollColWidth, behavior: "smooth" });
+  1368→  };
+  1369→
+  1370→  const weekdayVi = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  1371→
+  1372→  const handleCellClick = (day: Date, hour: number, e: React.MouseEvent<HTMLDivElement>) => {
+  1373→    if (!onSlotClick || slotLocked) return;
+  1374→    if (e.target !== e.currentTarget) return; // only empty area
+  1375→    const dd = String(day.getDate()).padStart(2, "0");
+  1376→    const mo = String(day.getMonth() + 1).padStart(2, "0");
+  1377→    const yyyy = day.getFullYear();
+  1378→    onSlotClick({ date: `${dd}/${mo}/${yyyy}`, time: `${String(hour).padStart(2, "0")}:00` });
+  1379→  };
+  1380→
+  1381→  const handleChipClick = (booking: Booking) => {
+  1382→    // checkout (paid) → full paid invoice view; checkin (being served) →
+  1383→    // invoice/payment dialog; otherwise → edit booking dialog. Mirrors the
+  1384→    // staff-view click logic so both views behave identically.
+  1385→    const status = booking.status;
+  1386→    const isPaid = status === "checkout";
+  1387→    const isCheckin = status === "checkin";
+  1388→    if ((isPaid || isCheckin) && onShowInvoice) onShowInvoice(booking);
+  1389→    else onBookingClick?.(booking);
+  1390→  };
+  1391→
+  1392→  return (
+  1393→    <div ref={containerRef} className="border bg-white flex flex-col relative" style={{ maxHeight: "calc(100vh - 200px)" }}>
+  1394→      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto time-grid-scroll" data-grid-resizable>
+  1395→        <div style={needsScroll ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%" }}>
+  1396→          {/* Header: "Giờ" + day columns — sticky at top during vertical scroll */}
+  1397→          <div
+  1398→            data-grid-header
+  1399→            className="grid border-b bg-gray-50 sticky top-0 z-10"
+  1400→            style={{
+  1401→              gridTemplateColumns: needsScroll
+  1402→                ? `${CDG_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`
+  1403→                : `${CDG_TIME_COL_WIDTH}px repeat(${dayCount}, minmax(0, 1fr))`,
+  1404→            }}
+  1405→          >
+  1406→            <div className="border-r p-2 text-center text-xs font-semibold text-gray-600">Giờ</div>
+  1407→            {days.map((day, idx) => {
+  1408→              const isToday = (() => {
+  1409→                const t = new Date(); t.setHours(0, 0, 0, 0);
+  1410→                const d = new Date(day); d.setHours(0, 0, 0, 0);
+  1411→                return t.getTime() === d.getTime();
+  1412→              })();
+  1413→              return (
+  1414→                <div key={idx} className={`border-r p-2 text-center ${isToday ? "bg-emerald-50" : ""}`}>
+  1415→                  <div className="text-[11px] font-medium text-gray-500">{weekdayVi[day.getDay()]}</div>
+  1416→                  <div className={`text-sm font-semibold ${isToday ? "text-emerald-700" : "text-gray-800"}`}>
+  1417→                    {`${String(day.getDate()).padStart(2, "0")}/${String(day.getMonth() + 1).padStart(2, "0")}`}
+  1418→                  </div>
+  1419→                </div>
+  1420→              );
+  1421→            })}
+  1422→          </div>
+  1423→
+  1424→          {/* Body: one row per hour. minHeight so rows expand when a cell has
+  1425→              many bookings — no internal cell scroll. */}
+  1426→          <div data-grid-body>
+  1427→            {hours.map((hour) => (
+  1428→              <div
+  1429→                key={hour}
+  1430→                className="grid border-b last:border-b-0"
+  1431→                style={{
+  1432→                  gridTemplateColumns: needsScroll
+  1433→                    ? `${CDG_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`
+  1434→                    : `${CDG_TIME_COL_WIDTH}px repeat(${dayCount}, minmax(0, 1fr))`,
+  1435→                  minHeight: `${CDG_ROW_HEIGHT}px`,
+  1436→                }}
+  1437→              >
+  1438→                <div className="border-r bg-gray-50/60 px-2 py-1 text-[11px] text-gray-500">
+  1439→                  {String(hour).padStart(2, "0")}:00
+  1440→                </div>
+  1441→                {days.map((day, dayIdx) => {
+  1442→                  const dayKey = cdgDateKey(day);
+  1443→                  const cellBookings = cellMap.get(`${dayKey}|${hour}`) || [];
+  1444→                  const isToday = (() => {
+  1445→                    const t = new Date(); t.setHours(0, 0, 0, 0);
+  1446→                    const d = new Date(day); d.setHours(0, 0, 0, 0);
+  1447→                    return t.getTime() === d.getTime();
+  1448→                  })();
+  1449→                  return (
+  1450→                    <div
+  1451→                      key={dayIdx}
+  1452→                      onClick={(e) => handleCellClick(day, hour, e)}
+  1453→                      className={`border-r p-1 ${slotLocked ? "bg-gray-50/40" : "cursor-pointer hover:bg-orange-100"} ${isToday ? "bg-emerald-50/20" : ""}`}
+  1454→                    >
+  1455→                      <div className="grid grid-cols-2 gap-1">
+  1456→                        {cellBookings.map((b, i) => (
+  1457→                          <div
+  1458→                            key={b.id}
+  1459→                            className={i === cellBookings.length - 1 && cellBookings.length % 2 === 1 ? "col-span-2" : ""}
+  1460→                          >
+  1461→                            <CustomerGridChip
+  1462→                              booking={b}
+  1463→                              canViewCustomerPhone={canViewCustomerPhone}
+  1464→                              onClick={() => handleChipClick(b)}
+  1465→                              onEdit={onEdit}
+  1466→                              onAssignStaff={onAssignStaff}
+  1467→                              onDelete={onDelete}
+  1468→                            />
+  1469→                          </div>
+  1470→                        ))}
+  1471→                      </div>
+  1472→                    </div>
+  1473→                  );
+  1474→                })}
+  1475→              </div>
+  1476→            ))}
+  1477→          </div>
+  1478→        </div>
+  1479→      </div>
+  1480→
+  1481→      {/* Left/right scroll arrows — same UX as DayColumnGrid. */}
+  1482→      {needsScroll && canScrollLeft && (
+  1483→        <button
+  1484→          type="button"
+  1485→          onClick={() => scrollByColumns(-1)}
+  1486→          aria-label="Cuộn sang trái"
+  1487→          className="absolute left-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
+  1488→          style={{ marginLeft: CDG_TIME_COL_WIDTH }}
+  1489→        >
+  1490→          <ChevronLeft className="h-5 w-5" />
+  1491→        </button>
+  1492→      )}
+  1493→      {needsScroll && canScrollRight && (
+  1494→        <button
+  1495→          type="button"
+  1496→          onClick={() => scrollByColumns(1)}
+  1497→          aria-label="Cuộn sang phải"
+  1498→          className="absolute right-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
+  1499→        >
+  1500→          <ChevronRight className="h-5 w-5" />
+  1501→        </button>
+  1502→      )}
+  1503→    </div>
+  1504→  );
+  1505→}
+  1506→
+  1507→/** Compact booking chip for the customer multi-day grid cells. Non-overlapping:
+  1508→ *  each chip is a flex child in its cell so multiple bookings stack vertically.
+  1509→ *  Hovering opens a popover with service breakdown + edit/delete. */
+  1510→function CustomerGridChip({
+  1511→  booking,
+  1512→  canViewCustomerPhone,
+  1513→  onClick,
+  1514→  onEdit,
+  1515→  onAssignStaff,
+  1516→  onDelete,
+  1517→}: {
+  1518→  booking: Booking;
+  1519→  canViewCustomerPhone: boolean;
+  1520→  onClick: () => void;
+  1521→  onEdit?: (booking: Booking) => void;
+  1522→  /** Open the dedicated "Xếp nhân viên" dialog (preferred over onEdit for the
+  1523→      assign-staff button in the popover). */
+  1524→  onAssignStaff?: (booking: Booking) => void;
+  1525→  onDelete?: (bookingId: string) => void;
+  1526→}) {
+  1527→  const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
+  1528→  const serviceRows = getAllServices(booking);
+  1529→  const svc = serviceRows[0] || null;
+  1530→  const serviceName = svc?.service?.name || "Dịch vụ";
+  1531→  const totalDuration = serviceRows.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+  1532→  const isPaid = booking.status === "checkout";
+  1533→  const isCancelled = booking.status === "cancelled";
+  1534→  const isNoShow = booking.status === "no_show";
+  1535→  const isCheckin = booking.status === "checkin";
+  1536→  const isReviewing = useIsReviewing(booking.id);
+  1537→  // SAME scheme as SegmentCard above (user's color spec):
+  1538→  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
+  1539→  let chipBg: string;
+  1540→  let timeText: string;
+  1541→  if (isPaid) {
+  1542→    chipBg = "bg-white border-gray-300";
+  1543→    timeText = "text-gray-700";
+  1544→  } else if (isCancelled) {
+  1545→    chipBg = "bg-red-50 border-red-200";
+  1546→    timeText = "text-red-700";
+  1547→  } else if (isNoShow) {
+  1548→    chipBg = "bg-amber-50 border-amber-300";
+  1549→    timeText = "text-amber-700";
+  1550→  } else if (isCheckin && isReviewing) {
+  1551→    chipBg = "bg-purple-300 border-purple-600";
+  1552→    timeText = "text-purple-900";
+  1553→  } else if (isCheckin) {
+  1554→    chipBg = "bg-green-200 border-green-500";
+  1555→    timeText = "text-green-900";
+  1556→  } else {
+  1557→    chipBg = "bg-blue-100 border-blue-500";
+  1558→    timeText = "text-blue-800";
+  1559→  }
+  1560→
+  1561→  const timeStr = booking.date_time
+  1562→    ? (() => {
+  1563→        // Timezone-safe Vietnam time (Supabase stores +00:00; the "THH:MM"
+  1564→        // segment is UTC, not the VN time the user entered).
+  1565→        return toVietnamTime(booking.date_time!);
+  1566→      })()
+  1567→    : "";
+  1568→  const phone = booking.customer?.phone || "";
+  1569→  const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
+  1570→
+  1571→  return (
+  1572→    <HoverCard openDelay={200} closeDelay={300}>
+  1573→      <HoverCardTrigger asChild>
+  1574→        <button
+  1575→          type="button"
+  1576→          onClick={onClick}
+  1577→          title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName}`}
+  1578→          className={`group flex w-full cursor-pointer flex-col overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${chipBg}`}
+  1579→        >
+  1580→          <div className="flex items-center justify-between">
+  1581→            <span className={`text-sm font-semibold ${timeText}`}>{timeStr}</span>
+  1582→            {booking.numberOfCustomers > 1 && (
+  1583→              <span className="border bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">×{booking.numberOfCustomers}</span>
+  1584→            )}
+  1585→          </div>
+  1586→          <div className="mt-0.5 truncate text-sm font-medium text-gray-900">
+  1587→            {booking.customer?.name || "Khách"}
+  1588→            {phone && (
+  1589→              <span className="ml-1 text-xs font-normal text-gray-500">
+  1590→                {canViewCustomerPhone ? phone : maskPhone(phone)}
+  1591→              </span>
+  1592→            )}
+  1593→          </div>
+  1594→          <div className="mt-0.5 space-y-0.5">
+  1595→            {serviceRows.map((s, i) => (
+  1596→              <div key={i} className="flex items-center justify-between gap-1">
+  1597→                <span className="truncate text-xs text-gray-700">
+  1598→                  {s.service?.name || "Dịch vụ"}
+  1599→                  {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
+  1600→                </span>
+  1601→                {s.staff?.name && <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>}
+  1602→              </div>
+  1603→            ))}
+  1604→            {serviceRows.length === 0 && <div className="truncate text-xs text-gray-600">{serviceName}</div>}
+  1605→          </div>
+  1606→          {totalDuration > 0 && <div className="mt-0.5 text-[10px] font-medium text-gray-500">Tổng: {totalDuration} phút</div>}
+  1607→        </button>
+  1608→      </HoverCardTrigger>
+  1609→      <HoverCardContent side="bottom" align="start" sideOffset={0} className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl">
+  1610→        <BookingHoverDetails
+  1611→          booking={booking}
+  1612→          canViewCustomerPhone={canViewCustomerPhone}
+  1613→          statusOptions={[]}
+  1614→          onStatusChange={() => {}}
+  1615→          selectOpen={false}
+  1616→          setSelectOpen={() => {}}
+  1617→          onEdit={() => onEdit?.(booking)}
+  1618→          onDelete={() => onDelete?.(booking.id)}
+  1619→          canCancelPayment={canCancelPayment}
+  1620→          onOpenInvoice={onClick}
+  1621→          onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
+  1622→        />
+  1623→      </HoverCardContent>
+  1624→    </HoverCard>
+  1625→  );
+  1626→}
+  1627→
