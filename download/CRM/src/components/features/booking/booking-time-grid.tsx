@@ -529,7 +529,6 @@ function SegmentCard({
   const segTimeRange = `${fmtMin(segStartTotalMin)} - ${fmtMin(segEndTotalMin)}`;
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
   const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
-  const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
 
   // Segment-specific service info — the popover shows ONLY this slot's
@@ -605,16 +604,27 @@ function SegmentCard({
   }
 
   return (
-    <div
-      className="relative h-full"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => {
-        // Don't close the popover while the status select dropdown is open —
-        // its content renders in a portal outside this container, so the mouse
-        // leaving would otherwise dismiss the popover before a selection lands.
-        if (selectOpen) return;
-        setHovered(false);
-      }}
+    <DraggableHoverPopup
+      side="bottom"
+      align="start"
+      sideOffset={4}
+      className="w-[255px] max-w-[255px] text-xs"
+      keepOpen={selectOpen}
+      renderPopup={() => (
+        <BookingHoverDetails
+          booking={booking}
+          canViewCustomerPhone={canViewCustomerPhone}
+          statusOptions={statusOptions}
+          onStatusChange={onStatusChange}
+          selectOpen={selectOpen}
+          setSelectOpen={setSelectOpen}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          canCancelPayment={canCancelPayment}
+          onOpenInvoice={onClick}
+          onAssignStaff={onAssignStaff}
+        />
+      )}
     >
       {/* Card (clickable → opens edit or invoice depending on paid status).
           Rendered as a <div role="button"> instead of <button> so it can
@@ -704,30 +714,7 @@ function SegmentCard({
           )
         )}
       </div>
-
-      {/* Hover popover — uses the SAME BookingHoverDetails component as the
-          View nhân viên (staff-view) so the hover experience is identical
-          across both views: customer name | phone, status + select, services
-          with duration + staff in blue, "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn"
-          link, edit + trash buttons. */}
-      {hovered && (
-        <div className="absolute left-0 top-0 z-50 mt-1 w-[255px] border bg-white shadow-xl">
-          <BookingHoverDetails
-            booking={booking}
-            canViewCustomerPhone={canViewCustomerPhone}
-            statusOptions={statusOptions}
-            onStatusChange={onStatusChange}
-            selectOpen={selectOpen}
-            setSelectOpen={setSelectOpen}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            canCancelPayment={canCancelPayment}
-            onOpenInvoice={onClick}
-            onAssignStaff={onAssignStaff}
-          />
-        </div>
-      )}
-    </div>
+    </DraggableHoverPopup>
   );
 }
 

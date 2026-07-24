@@ -998,12 +998,33 @@ function SegmentBlock({
   const zIndex = hovered ? 50 : baseZ;
 
   return (
+    <DraggableHoverPopup
+      side="right"
+      align="start"
+      sideOffset={4}
+      className="w-[340px] max-w-[340px] text-xs"
+      keepOpen={selectOpen}
+      renderPopup={() => (
+        <BookingHoverDetails
+          booking={booking}
+          canViewCustomerPhone={canViewCustomerPhone}
+          statusOptions={statusOptions}
+          onStatusChange={onStatusChange}
+          selectOpen={selectOpen}
+          setSelectOpen={setSelectOpen}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          canCancelPayment={canCancelPayment}
+          onOpenInvoice={onClick}
+          onAssignStaff={onAssignStaff}
+        />
+      )}
+    >
     <div
       className="absolute left-1 right-1"
       style={{ top: `${topPx}px`, height: `${heightPx}px`, zIndex }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
-        // Keep popover open while the status select dropdown is open (it portals outside).
         if (selectOpen) return;
         setHovered(false);
       }}
@@ -1134,28 +1155,8 @@ function SegmentBlock({
           )
         )}
       </div>
-
-      {/* Hover popover — full booking + invoice details (services, products,
-          promotion, tip, total) via BookingHoverDetails. Action buttons
-          (edit / delete) stay at the bottom. */}
-      {hovered && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-[255px] border bg-white shadow-xl">
-          <BookingHoverDetails
-            booking={booking}
-            canViewCustomerPhone={canViewCustomerPhone}
-            statusOptions={statusOptions}
-            onStatusChange={onStatusChange}
-            selectOpen={selectOpen}
-            setSelectOpen={setSelectOpen}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            canCancelPayment={canCancelPayment}
-            onOpenInvoice={onClick}
-            onAssignStaff={onAssignStaff}
-          />
-        </div>
-      )}
     </div>
+    </DraggableHoverPopup>
   );
 }
 
