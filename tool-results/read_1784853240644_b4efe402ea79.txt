@@ -1,0 +1,1432 @@
+     1→"use client";
+     2→
+     3→import { useState, useMemo, useRef, useEffect } from "react";
+     4→import dynamic from "next/dynamic";
+     5→import { useRouter } from "next/navigation";
+     6→// Lazy-load PaidInvoiceView — only opened on demand. Customer history now
+     7→// navigates to /customers/[id].
+     8→const PaidInvoiceView = dynamic(
+     9→  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+    10→  { ssr: false }
+    11→);
+    12→import { User, Phone, Plus, Calendar, Search, X, UserPlus, Loader2, RotateCcw } from "lucide-react";
+    13→import { useQuery, useQueryClient } from "@tanstack/react-query";
+    14→import { useCashierStore, type InvoiceItem, type TabMeta } from "@/stores/cashier-store";
+    15→import { useBranchStore } from "@/stores/branch-store";
+    16→import { useAuthStore } from "@/stores/auth-store";
+    17→import { useBookingStore } from "@/stores/booking-store";
+    18→import { maskPhone } from "@/lib/phone-mask";
+    19→import { localDayToUtcRange, toVietnamDay, toVietnamTime } from "@/lib/utils";
+    20→import {
+    21→  BookingStatusLabel,
+    22→  BookingStatusBadgeColors,
+    23→  BookingStatusType,
+    24→} from "@/lib/constants";
+    25→import {
+    26→  Dialog,
+    27→  DialogContent,
+    28→  DialogHeader,
+    29→  DialogTitle,
+    30→  DialogFooter,
+    31→} from "@/components/ui/dialog";
+    32→import { Input } from "@/components/ui/input";
+    33→import { Label } from "@/components/ui/label";
+    34→import { Button } from "@/components/ui/button";
+    35→import { useToast } from "@/hooks/use-toast";
+    36→import { queryKeys } from "@/lib/query-keys";
+    37→import { parseMultiCustomerNote } from "@/lib/multi-customer";
+    38→
+    39→// Fetch a customer's "Khách cũ" status from the API. A customer counts as
+    40→// "old" (Khách cũ) when they have at least one completed invoice OR belong
+    41→// to a customer group whose name contains "khách cũ". This mirrors the
+    42→// booking dialog's determination so both modules filter service categories
+    43→// consistently. Returns "new" on any error (safe default: show the
+    44→// new-customer cut).
+    45→async function fetchCustomerOldStatus(customerId: string): Promise<"old" | "new"> {
+    46→  try {
+    47→    const res = await fetch(
+    48→      `/api/supabase/customers/${encodeURIComponent(customerId)}`
+    49→    );
+    50→    const json = await res.json();
+    51→    if (!json.ok || !json.data) return "new";
+    52→    const groupName = (json.data.group?.name || "").toLowerCase();
+    53→    const isOld =
+    54→      json.data.customer_type === "old" || groupName.includes("khách cũ");
+    55→    return isOld ? "old" : "new";
+    56→  } catch {
+    57→    return "new";
+    58→  }
+    59→}
+    60→
+    61→interface BookingServiceRow {
+    62→  id: string;
+    63→  staff_id: string | null;
+    64→  service_category_id?: string | null;
+    65→  service: { id: string; name: string; duration: number; price?: number } | null;
+    66→  staff: { id: string; name: string } | null;
+    67→}
+    68→
+    69→interface TodayBooking {
+    70→  id: string;
+    71→  code: string | null;
+    72→  date_time: string;
+    73→  status: string;
+    74→  note: string | null;
+    75→  number_of_customers: number | null;
+    76→  customer: { id: string; name: string; phone: string | null } | null;
+    77→  services: BookingServiceRow[];
+    78→}
+    79→
+    80→// A standalone invoice (no linked booking) — created when a customer buys
+    81→// ONLY products (no service) at the cashier. These show as tabs in the tab
+    82→// bar alongside the day's bookings so the cashier can see / re-open product-
+    83→// only orders. `status` is "completed" (paid) or "cancelled".
+    84→interface StandaloneInvoice {
+    85→  id: string;
+    86→  code: string | null;
+    87→  status: string;
+    88→  booking_id: string | null;
+    89→  final_amount: number;
+    90→  created_at: string;
+    91→  customer: { id: string; name: string; phone: string | null } | null;
+    92→  items: Array<{
+    93→    name: string;
+    94→    type?: string;
+    95→    quantity: number;
+    96→    price: number;
+    97→    discount?: number;
+    98→    total: number;
+    99→  }>;
+   100→}
+   101→
+   102→interface CustomerTabsProps {
+   103→  selectedDate: string; // "YYYY-MM-DD" — the date whose bookings are shown in the tab bar.
+   104→}
+   105→
+   106→export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
+   107→  const {
+   108→    activeCustomers,
+   109→    activeTabId,
+   110→    openCustomerTab,
+   111→    setActiveTab,
+   112→    addInvoiceItem,
+   113→    replaceServiceItems,
+   114→    invoices,
+   115→    tabMeta,
+   116→    setTabMeta,
+   117→    updateTabMeta,
+   118→    closeCustomerTab,
+   119→    updateCustomerTab,
+   120→  } = useCashierStore();
+   121→  const { selectedBranchId } = useBranchStore();
+   122→  const { hasPermission } = useAuthStore();
+   123→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   124→  const { setViewMode: setBookingViewMode, setDateNav: setBookingDateNav, setHighlightBookingId } = useBookingStore();
+   125→  const { toast } = useToast();
+   126→  const queryClient = useQueryClient();
+   127→  // Paid invoice full-page view state — opened when clicking "Hóa đơn: HDxxx"
+   128→  // on a paid booking's info bar.
+   129→  const [paidInvoiceView, setPaidInvoiceView] = useState<{
+   130→    invoiceId: string;
+   131→    customerName?: string;
+   132→    customerPhone?: string;
+   133→    bookingCode?: string | null;
+   134→  } | null>(null);
+   135→
+   136→  // === Walk-in tab: customer search + add-new-customer dialogs ===
+   137→  // State for the search dialog (find an existing customer by phone). When a
+   138→  // result is clicked, the walk-in tab is linked to that real customer:
+   139→  // tabMeta.customerId + customerInfo are updated, and the activeCustomer's
+   140→  // displayed name/phone update too (via updateCustomerTab).
+   141→  // Inline customer search for walk-in tabs — real-time autocomplete as the
+   142→  // user types a phone number or name. Results show in a dropdown below the
+   143→  // input. Replaces the old square-button + dialog approach.
+   144→  const [inlineSearch, setInlineSearch] = useState("");
+   145→  const [showInlineResults, setShowInlineResults] = useState(false);
+   146→  const inlineSearchRef = useRef<HTMLDivElement>(null);
+   147→
+   148→  // Debounced search — fires when inlineSearch has ≥ 2 chars.
+   149→  const { data: inlineResults, isFetching: inlineFetching } = useQuery({
+   150→    queryKey: ["cashier-inline-customer-search", inlineSearch],
+   151→    queryFn: async () => {
+   152→      const res = await fetch(
+   153→        `/api/supabase/customers?search=${encodeURIComponent(inlineSearch)}&limit=10&include_guests=true`
+   154→      );
+   155→      const json = await res.json();
+   156→      if (!json.ok) return [];
+   157→      return (json.data as Array<{ id: string; name: string; phone: string | null; code: string | null }>) || [];
+   158→    },
+   159→    enabled: inlineSearch.trim().length >= 2,
+   160→    staleTime: 10_000,
+   161→  });
+   162→
+   163→  // Close the results dropdown on outside click.
+   164→  useEffect(() => {
+   165→    const handler = (e: MouseEvent) => {
+   166→      if (inlineSearchRef.current && !inlineSearchRef.current.contains(e.target as Node)) {
+   167→        setShowInlineResults(false);
+   168→      }
+   169→    };
+   170→    document.addEventListener("mousedown", handler);
+   171→    return () => document.removeEventListener("mousedown", handler);
+   172→  }, []);
+   173→
+   174→  // State for the "Thêm khách mới" dialog (name + phone → POST a new customer).
+   175→  // On submit, the new customer is linked to the walk-in tab same as search.
+   176→  const [showAddCustomer, setShowAddCustomer] = useState(false);
+   177→  const [newCustomerName, setNewCustomerName] = useState("");
+   178→  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+   179→  const [addingCustomer, setAddingCustomer] = useState(false);
+   180→  const router = useRouter();
+   181→
+   182→  const activeCustomer = activeCustomers.find(
+   183→    (c) => c.customerId === activeTabId
+   184→  );
+   185→
+   186→  // Fetch the selected date's bookings (shown as buttons in the tab bar).
+   187→  const { data: dayBookings } = useQuery<TodayBooking[]>({
+   188→    queryKey: ["cashier-day-bookings", selectedDate, selectedBranchId],
+   189→    queryFn: async () => {
+   190→      const params = new URLSearchParams();
+   191→      params.set("page", "1");
+   192→      params.set("limit", "100");
+   193→      // Timezone-safe: convert the selected Vietnam day to its UTC range so
+   194→      // Supabase filters by the correct UTC window (no 7-hour shift).
+   195→      const dayRange = localDayToUtcRange(selectedDate);
+   196→      params.set("date_from", dayRange.from);
+   197→      params.set("date_to", dayRange.to);
+   198→      if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
+   199→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   200→      const json = await res.json();
+   201→      if (!json.ok) return [];
+   202→      return (json.data as TodayBooking[]) || [];
+   203→    },
+   204→  });
+   205→
+   206→  // Fetch the selected date's STANDALONE invoices (booking_id IS NULL) — these
+   207→  // are product-only orders created at the cashier (walk-in / new / old customer
+   208→  // who bought ONLY products, no service). They show as tabs alongside the
+   209→  // day's bookings so the cashier can re-open / review them. Per business
+   210→  // rule, both completed (paid) and cancelled standalone invoices stay in the
+   211→  // list for the day.
+   212→  const { data: dayStandaloneInvoices } = useQuery<StandaloneInvoice[]>({
+   213→    queryKey: ["cashier-day-standalone-invoices", selectedDate, selectedBranchId],
+   214→    queryFn: async () => {
+   215→      const params = new URLSearchParams();
+   216→      params.set("page", "1");
+   217→      params.set("limit", "100");
+   218→      // Timezone-safe: same Vietnam-day → UTC range conversion as bookings.
+   219→      const invDayRange = localDayToUtcRange(selectedDate);
+   220→      params.set("date_from", invDayRange.from);
+   221→      params.set("date_to", invDayRange.to);
+   222→      if (selectedBranchId && selectedBranchId !== "all") params.set("branch_id", selectedBranchId);
+   223→      const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
+   224→      const json = await res.json();
+   225→      if (!json.ok) return [];
+   226→      // Only standalone invoices (no booking link) — product-only orders.
+   227→      const all = (json.data as StandaloneInvoice[]) || [];
+   228→      return all.filter((inv) => !inv.booking_id);
+   229→    },
+   230→  });
+   231→
+   232→  // The active tab's booking (if the tab was opened from a booking).
+   233→  // Tabs opened via "Thêm khách hàng" (manual customer picker) have no booking,
+   234→  // so no status is shown for them.
+   235→  // Walk-in tabs that were auto-linked to an existing booking (via
+   236→  // handleSelectInlineResult) have type "booking" but their activeTabId is
+   237→  // still "walkin-xxx" — look them up by meta.bookingId in that case so the
+   238→  // info bar's status badge, date, and code-link render correctly.
+   239→  const activeMetaForBooking = activeTabId ? tabMeta[activeTabId] : undefined;
+   240→  const activeBooking = activeTabId
+   241→    ? (dayBookings || []).find(
+   242→        (b) => b.id === activeTabId || b.id === activeMetaForBooking?.bookingId
+   243→      ) || null
+   244→    : null;
+   245→
+   246→  // Multi-customer "Cùng lịch" booking detection (Cashier module only).
+   247→  // When a booking has number_of_customers >= 2 AND a [[MULTI]] note, the
+   248→  // customer info bar hides the name + phone (those are shown per-service
+   249→  // instead) and only displays the appointment code + date/time.
+   250→  const activeIsMultiCustomer = activeBooking
+   251→    ? (() => {
+   252→        const multi = parseMultiCustomerNote(activeBooking.note);
+   253→        return !!multi && (activeBooking.number_of_customers ?? 1) >= 2;
+   254→      })()
+   255→    : false;
+   256→
+   257→  // When the selected date changes, a previously-opened booking tab (or
+   258→  // standalone-invoice tab) from an EARLIER day can still be the active tab
+   259→  // (its id is persisted in the cashier store). Its content would then show
+   260→  // on the new day even though the booking/invoice doesn't belong to that
+   261→  // day — making it look like the module is "out of sync" with Lịch hẹn.
+   262→  //
+   263→  // Fix: once the new day's bookings + standalone invoices have loaded, if the
+   264→  // active tab is a booking-type tab (not a walk-in draft) AND it isn't in the
+   265→  // current day's lists, deselect it so its stale content stops rendering.
+   266→  // Walk-in drafts (type "walkin") are intentionally kept — a cashier may
+   267→  // start a draft and return to it later, and drafts aren't tied to a day.
+   268→  //
+   269→  // Edge case: a walk-in tab that was auto-linked to an existing booking (via
+   270→  // handleSelectInlineResult) has type "booking" but its activeTabId is still
+   271→  // "walkin-xxx" (not the booking's id). Such a tab is valid as long as its
+   272→  // meta.bookingId points to a booking in the current day's list — don't
+   273→  // deselect it.
+   274→  useEffect(() => {
+   275→    if (!activeTabId) return;
+   276→    const meta = tabMeta[activeTabId];
+   277→    if (!meta || meta.type !== "booking") return; // only booking/standalone tabs
+   278→    // Wait until the current day's data has been fetched.
+   279→    if (!dayBookings || !dayStandaloneInvoices) return;
+   280→    const inDayBookings = dayBookings.some((b) => b.id === activeTabId);
+   281→    const inDayStandalone = dayStandaloneInvoices.some((inv) => inv.id === activeTabId);
+   282→    // Walk-in tabs auto-linked to a booking: check by meta.bookingId too.
+   283→    const linkedBookingInDay = meta.bookingId
+   284→      ? dayBookings.some((b) => b.id === meta.bookingId)
+   285→      : false;
+   286→    if (!inDayBookings && !inDayStandalone && !linkedBookingInDay) {
+   287→      // The active tab's booking/invoice doesn't belong to this day — deselect.
+   288→      setActiveTab("");
+   289→    }
+   290→  }, [activeTabId, tabMeta, dayBookings, dayStandaloneInvoices, setActiveTab]);
+   291→
+   292→  // AUTO-REBUILD: when the active tab is a booking tab AND the current day's
+   293→  // bookings have loaded, sync the invoice's service items from the booking.
+   294→  // This self-heals persisted stale state (e.g. a 2-service booking that was
+   295→  // merged into 1 line with quantity 2 by an older code version) WITHOUT
+   296→  // requiring the user to re-click the tab. Product items + discount + tip +
+   297→  // voucher are preserved (replaceServiceItems keeps them).
+   298→  // Also handles walk-in tabs that were auto-linked to a booking (activeTabId
+   299→  // is "walkin-xxx", but meta.bookingId points to a real booking in dayBookings).
+   300→  useEffect(() => {
+   301→    if (!activeTabId) return;
+   302→    const meta = tabMeta[activeTabId];
+   303→    if (!meta || meta.type !== "booking") return;
+   304→    if (!dayBookings) return;
+   305→    // Look up the booking by activeTabId (direct booking tab) OR by
+   306→    // meta.bookingId (walk-in tab that was auto-linked to a booking).
+   307→    const b = dayBookings.find(
+   308→      (x) => x.id === activeTabId || x.id === meta.bookingId
+   309→    );
+   310→    if (!b || !b.services) return;
+   311→    // Build the fresh service items list from the booking's current services.
+   312→    const serviceItems: InvoiceItem[] = b.services
+   313→      .filter((s) => s.service)
+   314→      .map((s) => {
+   315→        const price = Number(s.service!.price) || 0;
+   316→        return {
+   317→          id: `${s.service!.id}-${crypto.randomUUID()}`,
+   318→          itemId: s.service!.id,
+   319→          name: s.service!.name,
+   320→          type: "service" as const,
+   321→          price,
+   322→          quantity: 1,
+   323→          discount: 0,
+   324→          total: price,
+   325→          staffName: s.staff?.name || undefined,
+   326→        };
+   327→      });
+   328→    replaceServiceItems(activeTabId, serviceItems);
+   329→    // Only depend on activeTabId + dayBookings (the booking's services). Don't
+   330→    // depend on `invoices` (would loop — replaceServiceItems changes invoices).
+   331→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   332→  }, [activeTabId, dayBookings]);
+   333→
+   334→  // Sort the day's bookings for the tab bar:
+   335→  // 1. Paid/cancelled/no_show (terminal) → LEFT, unpaid (active) → RIGHT.
+   336→  // 2. Within each group: earlier created → LEFT, later created → RIGHT
+   337→  //    (chronological order left-to-right).
+   338→  const sortedDayBookings = useMemo(() => {
+   339→    const bookings = (dayBookings || []).slice();
+   340→    bookings.sort((a, b) => {
+   341→      // 1. Terminal statuses first (left), active last (right).
+   342→      const aTerminal = a.status === "checkout" || a.status === "cancelled" || a.status === "no_show";
+   343→      const bTerminal = b.status === "checkout" || b.status === "cancelled" || b.status === "no_show";
+   344→      if (aTerminal !== bTerminal) return aTerminal ? -1 : 1;
+   345→      // 2. Earlier time first (left), later time last (right) → ascending.
+   346→      const aTime = a.date_time ? new Date(a.date_time).getTime() : 0;
+   347→      const bTime = b.date_time ? new Date(b.date_time).getTime() : 0;
+   348→      return aTime - bTime;
+   349→    });
+   350→    return bookings;
+   351→  }, [dayBookings]);
+   352→
+   353→  // Merge standalone (product-only) invoices into the tab list. Each invoice
+   354→  // becomes a tab button with the invoice's time + customer name. We reuse a
+   355→  // TodayBooking-shaped object so the rendering code stays uniform (the
+   356→  // services array is empty for product-only orders — items live in the
+   357→  // invoice, not the booking). Terminal invoices (completed/cancelled) sort
+   358→  // left, pending sort right; within each group by created_at ascending.
+   359→  const standaloneAsBookings: TodayBooking[] = useMemo(() => {
+   360→    return ((dayStandaloneInvoices || []) as StandaloneInvoice[]).map((inv) => ({
+   361→      id: inv.id,
+   362→      code: inv.code,
+   363→      // Use the invoice's creation time as the tab's "time" label.
+   364→      date_time: inv.created_at,
+   365→      // Map invoice status → a status the tab bar badge understands.
+   366→      status: inv.status === "completed" ? "checkout" : inv.status,
+   367→      customer: inv.customer
+   368→        ? { id: inv.customer.id, name: inv.customer.name, phone: inv.customer.phone }
+   369→        : { id: "", name: "Khách", phone: null },
+   370→      services: [],
+   371→    }));
+   372→  }, [dayStandaloneInvoices]);
+   373→
+   374→  // Badge color helper (same as the Booking module's getStatusBadgeClass).
+   375→  const getStatusBadgeClass = (status: BookingStatusType) => {
+   376→    const colors = BookingStatusBadgeColors[status];
+   377→    return `${colors.bg} ${colors.text}`;
+   378→  };
+   379→
+   380→  // "Tạo hóa đơn" — open a new walk-in customer tab immediately with a
+   381→  // synthetic id ("walkin-<uuid>"). A guest customer + booking are only
+   382→  // created lazily when a service is added to the tab.
+   383→  //
+   384→  // Two store updates happen here: openCustomerTab (sets activeTabId + adds
+   385→  // the tab to activeCustomers) and setTabMeta (sets tabMeta[tabId]). Both
+   386→  // are Zustand `set` calls, which are SYNCHRONOUS — they immediately mutate
+   387→  // the store. React (via useSyncExternalStore) batches the resulting
+   388→  // re-render, so by the time the component re-renders, BOTH activeTabId and
+   389→  // tabMeta[tabId] are set. This guarantees the fresh walk-in tab renders
+   390→  // with isWalkinTab=true and walkinHasCustomer=false on the very first
+   391→  // render after the click — the inline search + "Thêm khách mới" button
+   392→  // appear immediately. No race condition.
+   393→  //
+   394→  // (Previously this opened a 3-option dropdown: Khách vãng lai / Khách mới /
+   395→  // Khách cũ — the latter two were removed per request.)
+   396→  const handleAddCustomer = () => {
+   397→    const tabId = `walkin-${crypto.randomUUID()}`;
+   398→    openCustomerTab({
+   399→      customerId: tabId,
+   400→      customerName: "Khách vãng lai",
+   401→      phone: "",
+   402→    });
+   403→    // Walk-in = not a "Khách cũ" → treated as new for service filtering.
+   404→    // setTabMeta OVERWRITES the entry at tabId (no merge) — and since tabId
+   405→    // is a brand-new UUID, there's no stale persisted entry to clobber.
+   406→    setTabMeta(tabId, { type: "walkin", customerType: "new" });
+   407→  };
+   408→
+   409→  // "Đổi khách" — reset a walk-in tab's customer link so the inline search +
+   410→  // "Thêm khách mới" button reappear. Lets the cashier recover from a
+   411→  // previously-linked customer (e.g. a walk-in tab from an earlier session
+   412→  // whose customerId is still set in the persisted cashier-store, OR simply
+   413→  // picking the wrong customer via search / add-new). Only allowed when the
+   414→  // tab is still a fresh walk-in draft (type="walkin", NO invoice items, NO
+   415→  // booking created) — once services are added or a booking exists, the
+   416→  // customer link can't be undone without losing data. Auto-linked walk-in
+   417→  // tabs (type flipped to "booking" by handleSelectInlineResult) are also
+   418→  // excluded: their booking link is real and shouldn't be reset here.
+   419→  const handleResetWalkinCustomer = () => {
+   420→    if (!activeTabId || !activeMeta) return;
+   421→    if (activeMeta.type !== "walkin") return;
+   422→    const items = invoices[activeTabId]?.items || [];
+   423→    if (items.length > 0 || activeMeta.bookingCreated) {
+   424→      alert(
+   425→        "Không thể đổi khách khi đã thêm dịch vụ/sản phẩm hoặc đã tạo lịch hẹn."
+   426→      );
+   427→      return;
+   428→    }
+   429→    // Clear the customer link (customerId → undefined makes walkinHasCustomer
+   430→    // false → search + "Thêm khách mới" button reappear). Reset the displayed
+   431→    // name/phone back to the walk-in defaults. customerType stays "new".
+   432→    updateTabMeta(activeTabId, {
+   433→      customerId: undefined,
+   434→      customerInfo: undefined,
+   435→      customerType: "new",
+   436→    });
+   437→    updateCustomerTab(activeTabId, {
+   438→      customerName: "Khách vãng lai",
+   439→      phone: "",
+   440→    });
+   441→    setInlineSearch("");
+   442→    setShowInlineResults(false);
+   443→  };
+   444→
+   445→  // Pick a day's booking → opens a customer tab AND adds the booking's services
+   446→  // to that customer's invoice (so they show in the invoice area below instead of
+   447→  // "Chưa có mặt hàng nào"). Each booking gets its OWN tab (keyed by booking.id,
+   448→  // not customer.id) so that a customer with 2 separate bookings (e.g. 8:30 and
+   449→  // 10:30) has 2 separate tabs — each showing only that booking's services and
+   450→  // payable independently. Avoids duplicate items within the same booking's tab.
+   451→  const handlePickBooking = (b: TodayBooking) => {
+   452→    if (!b.customer) return;
+   453→    // Use booking.id as the tab key so separate bookings = separate tabs.
+   454→    const tabId = b.id;
+   455→    openCustomerTab({
+   456→      customerId: tabId,
+   457→      customerName: b.customer.name,
+   458→      phone: b.customer.phone || "",
+   459→    });
+   460→    // Mark this tab as an existing booking tab so adding more services can
+   461→    // decide same-booking (PUT, gap ≤ 15 min) vs new-booking (POST, gap > 15).
+   462→    if (!tabMeta[tabId]) {
+   463→      // Compute the booking's last service end time for gap checking.
+   464→      const bookingStart = b.date_time ? new Date(b.date_time).getTime() : 0;
+   465→      let maxEnd = bookingStart;
+   466→      const bookingServices = (b.services || [])
+   467→        .filter((s) => s.service)
+   468→        .map((s) => ({
+   469→          service_id: s.service!.id,
+   470→          staff_id: s.staff_id || "",
+   471→          service_category_id: s.service_category_id || null,
+   472→        }));
+   473→      for (const s of b.services || []) {
+   474→        if (!s.service) continue;
+   475→        const dur = (Number(s.service.duration) || 60) * 60 * 1000;
+   476→        const end = bookingStart + dur;
+   477→        if (end > maxEnd) maxEnd = end;
+   478→      }
+   479→      setTabMeta(tabId, {
+   480→        type: "booking",
+   481→        bookingCreated: true,
+   482→        bookingId: b.id,
+   483→        bookingCode: b.code || undefined,
+   484→        customerId: b.customer?.id,
+   485→        bookingServices,
+   486→        lastServiceEndMs: maxEnd,
+   487→        // PARALLEL model: the booking's start time is the reference for all
+   488→        // services. Used by ServiceSelector to default the 2nd service's time
+   489→        // to the SAME start (parallel), and by the gap check to decide
+   490→        // same-booking (PUT) vs new-booking (POST).
+   491→        lastServiceStartMs: bookingStart,
+   492→      });
+   493→    }
+   494→    // Fetch the booking customer's real "Khách cũ" status so the
+   495→    // ServiceSelector filters cut categories for booking tabs too (previously
+   496→    // booking tabs showed every category). Khách cũ → "Dịch Vụ Cắt" only;
+   497→    // otherwise → "Dành cho khách hàng mới - DV Cắt" only.
+   498→    if (b.customer?.id) {
+   499→      fetchCustomerOldStatus(b.customer.id).then((ct) =>
+   500→        updateTabMeta(tabId, { customerType: ct })
+   501→      );
+   502→    }
+   503→    // REBUILD the service items from the booking every time the tab is opened.
+   504→    // This guarantees the invoice's services always mirror the booking's current
+   505→    // services — even if the persisted localStorage state was corrupted by an
+   506→    // older code version (e.g. 2 same-id services with different staff merged
+   507→    // into 1 line with quantity 2). Product items + discount + tip are kept.
+   508→    // Each service becomes its OWN line (no quantity-merge) so 2 same-id
+   509→    // services with different staff = 2 distinct lines.
+   510→    const serviceItems: InvoiceItem[] = (b.services || [])
+   511→      .filter((s) => s.service)
+   512→      .map((s) => {
+   513→        const price = Number(s.service!.price) || 0;
+   514→        return {
+   515→          id: `${s.service!.id}-${crypto.randomUUID()}`,
+   516→          itemId: s.service!.id,
+   517→          name: s.service!.name,
+   518→          type: "service" as const,
+   519→          price,
+   520→          quantity: 1,
+   521→          discount: 0,
+   522→          total: price,
+   523→          staffName: s.staff?.name || undefined,
+   524→        };
+   525→      });
+   526→    replaceServiceItems(tabId, serviceItems);
+   527→  };
+   528→
+   529→  // Pick a standalone (product-only) invoice → opens a tab keyed by the
+   530→  // invoice id. The invoice's saved items are loaded into the tab so the
+   531→  // InvoiceSummary shows what was actually purchased, and the status drives
+   532→  // the paid / cancelled banners. Re-opening a tab that's already open just
+   533→  // activates it (openCustomerTab dedupes by customerId).
+   534→  const handlePickStandaloneInvoice = (inv: StandaloneInvoice) => {
+   535→    // Defensive: the caller may pass undefined when the invoice isn't in the
+   536→    // current day's list (e.g. a tab from a previous day). Bail out gracefully
+   537→    // instead of crashing on `inv.id`.
+   538→    if (!inv) return;
+   539→    const tabId = inv.id;
+   540→    openCustomerTab({
+   541→      customerId: tabId,
+   542→      customerName: inv.customer?.name || "Khách",
+   543→      phone: inv.customer?.phone || "",
+   544→    });
+   545→    if (!tabMeta[tabId]) {
+   546→      setTabMeta(tabId, {
+   547→        type: "booking",
+   548→        bookingCreated: true,
+   549→        invoiceId: inv.id,
+   550→        bookingCode: inv.code || undefined,
+   551→        customerId: inv.customer?.id,
+   552→        bookingServices: [],
+   553→      });
+   554→    }
+   555→  };
+   556→
+   557→  // Merge day bookings + standalone invoices + walk-in draft tabs into one
+   558→  // list, then sort:
+   559→  // 1. Terminal (paid/cancelled/no_show) → LEFT, active (unpaid) → RIGHT.
+   560→  // 2. Within active group: empty walk-in drafts (no items) → RIGHTMOST,
+   561→  //    then active bookings/invoices with items by time ascending.
+   562→  // 3. Within terminal group: earlier created → LEFT, later → RIGHT.
+   563→  // Walk-in tabs that have an invoiceId are kept (they show the paid/unpaid
+   564→  // status from the linked invoice). Standalone invoices that match a walk-in
+   565→  // tab's invoiceId are deduplicated — the walk-in tab takes priority so the
+   566→  // tab doesn't "disappear" after payment.
+   567→  const mergedTabList = useMemo(() => {
+   568→    // Collect invoiceIds AND bookingIds from walk-in tabs so we can deduplicate:
+   569→    // 1. Standalone invoices that match a walk-in tab's invoiceId.
+   570→    // 2. Day bookings that match a walk-in tab's bookingId — this prevents the
+   571→    //    DUPLICATE TAB issue: when the cashier adds a service to a walk-in tab,
+   572→    //    createBookingForTab creates a booking in Supabase. The
+   573→    //    cashier-day-bookings query then returns that booking as a SEPARATE
+   574→    //    tab entry. Without this dedup, the sidebar shows BOTH the walk-in tab
+   575→    //    AND the booking tab (same time, same customer, same services) —
+   576→    //    looking like a duplicate. The walk-in tab takes priority (it carries
+   577→    //    the cashier's draft state: items, discount, tip).
+   578→    //
+   579→    // Note: a walk-in tab whose customerId starts with "walkin-" is treated
+   580→    // as a walk-in-style tab for dedup/rendering purposes EVEN if its meta.type
+   581→    // has been flipped to "booking" by handleSelectInlineResult's auto-link
+   582→    // (when the cashier picked a customer who already had a booking for the
+   583→    // day). The id is the stable identifier — the type field changes during
+   584→    // the tab's lifecycle but the tab itself is still the same draft.
+   585→    const isWalkinStyleTab = (customerId: string, meta?: TabMeta) =>
+   586→      customerId.startsWith("walkin-") || meta?.type === "walkin";
+   587→
+   588→    const walkinInvoiceIds = new Set<string>();
+   589→    const walkinBookingIds = new Set<string>();
+   590→    for (const c of activeCustomers) {
+   591→      const meta = tabMeta[c.customerId];
+   592→      if (isWalkinStyleTab(c.customerId, meta)) {
+   593→        if (meta?.invoiceId) walkinInvoiceIds.add(meta.invoiceId);
+   594→        if (meta?.bookingId) walkinBookingIds.add(meta.bookingId);
+   595→      }
+   596→    }
+   597→
+   598→    // Build walk-in tab entries from activeCustomers that are walk-in drafts.
+   599→    // Include the invoiceId + status so paid walk-in tabs sort to the left.
+   600→    // For walk-in tabs that were auto-linked to a booking (meta.type ===
+   601→    // "booking" but customerId starts with "walkin-"), also look up the
+   602→    // linked booking's status so the tab badge reflects the booking's actual
+   603→    // status (e.g. "confirmed" → "Đã xác nhận") instead of the default "new".
+   604→    const walkinTabs: TodayBooking[] = activeCustomers
+   605→      .filter((c) => {
+   606→        const meta = tabMeta[c.customerId];
+   607→        return isWalkinStyleTab(c.customerId, meta);
+   608→      })
+   609→      .map((c) => {
+   610→        const meta = tabMeta[c.customerId];
+   611→        // Determine status: check the persisted paid/cancelled flags first
+   612→        // (survives page navigation), then fall back to the linked invoice's
+   613→        // status, then to the linked booking's status (for auto-linked
+   614→        // walk-in tabs whose meta.type is "booking").
+   615→        const linkedInv = meta?.invoiceId
+   616→          ? (dayStandaloneInvoices || []).find((inv) => inv.id === meta.invoiceId)
+   617→          : null;
+   618→        const linkedBooking = meta?.bookingId
+   619→          ? (dayBookings || []).find((b) => b.id === meta.bookingId)
+   620→          : null;
+   621→        const status = meta?.paid || linkedInv?.status === "completed" ? "checkout"
+   622→          : meta?.cancelled || linkedInv?.status === "cancelled" ? "cancelled"
+   623→          : linkedBooking?.status || "new";
+   624→        // For walk-in tabs that have a booking created (via createBookingForTab
+   625→        // OR auto-linked via handleSelectInlineResult), use the booking's start
+   626→        // time (lastServiceStartMs) as the tab's time so the tab button shows
+   627→        // the service's scheduled time BEFORE the customer name — per the
+   628→        // user's request. Convert the epoch ms to an ISO string so
+   629→        // toVietnamTime() in the render works correctly.
+   630→        const walkinDateTime = meta?.lastServiceStartMs
+   631→          ? new Date(meta.lastServiceStartMs).toISOString()
+   632→          : linkedInv?.created_at || null;
+   633→        return {
+   634→          id: c.customerId,
+   635→          code: meta?.bookingCode || linkedInv?.code || null,
+   636→          date_time: walkinDateTime,
+   637→          status,
+   638→          customer: { id: c.customerId, name: c.customerName, phone: c.phone || null },
+   639→          services: [],
+   640→        };
+   641→      });
+   642→
+   643→    // Filter out standalone invoices that are already represented by a walk-in tab.
+   644→    const dedupedStandalone = (standaloneAsBookings || []).filter(
+   645→      (inv) => !walkinInvoiceIds.has(inv.id)
+   646→    );
+   647→
+   648→    // Filter out day bookings that are already represented by a walk-in tab's
+   649→    // bookingId. Without this, the sidebar shows BOTH the walk-in tab AND the
+   650→    // booking tab — a duplicate. The walk-in tab takes priority (it carries
+   651→    // the cashier's draft state: items, discount, tip, photos).
+   652→    const dedupedDayBookings = (sortedDayBookings || []).filter(
+   653→      (b) => !walkinBookingIds.has(b.id)
+   654→    );
+   655→
+   656→    const merged = [...dedupedDayBookings, ...dedupedStandalone, ...walkinTabs];
+   657→    merged.sort((a, b) => {
+   658→      const aTerminal = a.status === "checkout" || a.status === "cancelled" || a.status === "no_show";
+   659→      const bTerminal = b.status === "checkout" || b.status === "cancelled" || b.status === "no_show";
+   660→      // 1. Terminal → LEFT, active → RIGHT.
+   661→      if (aTerminal !== bTerminal) return aTerminal ? -1 : 1;
+   662→      // Within the active (non-terminal) group:
+   663→      if (!aTerminal) {
+   664→        // 2. Empty walk-in drafts (no items, no invoice) → RIGHTMOST.
+   665→        const aIsEmptyWalkin = a.id.startsWith("walkin-") &&
+   666→          (invoices[a.id]?.items || []).length === 0 && !tabMeta[a.id]?.invoiceId;
+   667→        const bIsEmptyWalkin = b.id.startsWith("walkin-") &&
+   668→          (invoices[b.id]?.items || []).length === 0 && !tabMeta[b.id]?.invoiceId;
+   669→        if (aIsEmptyWalkin !== bIsEmptyWalkin) return aIsEmptyWalkin ? 1 : -1;
+   670→      }
+   671→      // 3. Earlier time → LEFT, later → RIGHT (ascending).
+   672→      const aTime = a.date_time ? new Date(a.date_time).getTime() : 0;
+   673→      const bTime = b.date_time ? new Date(b.date_time).getTime() : 0;
+   674→      return aTime - bTime;
+   675→    });
+   676→    return merged;
+   677→  }, [sortedDayBookings, standaloneAsBookings, activeCustomers, tabMeta, invoices, dayStandaloneInvoices]);
+   678→
+   679→  // The active tab's draft metadata (walk-in / new / old). Used to show the
+   680→  // booking code under the customer info once a booking is created.
+   681→  const activeMeta = activeTabId ? tabMeta[activeTabId] : undefined;
+   682→
+   683→  // Whether the active tab is a walk-in draft (opened via "Tạo hóa đơn").
+   684→  // Walk-in tabs show Search + "Thêm khách mới" buttons instead of the
+   685→  // customer name link (the link 404s for synthetic walkin-xxx ids).
+   686→  const isWalkinTab = activeMeta?.type === "walkin";
+   687→  // Whether a real customer (old or newly created) has been linked to this
+   688→  // walk-in tab. Once linked, the inline search + "Thêm khách mới" button
+   689→  // are hidden — the customer is already chosen.
+   690→  // A walk-in tab "has a customer" only when a REAL customer is linked — NOT
+   691→  // when the synthetic "Khách vãng lai" guest customer is set (isGuestCustomer).
+   692→  // When the guest customer is set, the inline search stays visible so the
+   693→  // cashier can link a real customer (which PATCHes the booking's customer_id).
+   694→  const walkinHasCustomer =
+   695→    isWalkinTab &&
+   696→    Boolean(activeMeta?.customerId) &&
+   697→    !activeMeta?.isGuestCustomer;
+   698→  // Whether the active tab is still an EMPTY order (no items, no pending
+   699→  // invoice, no booking services). Applies to BOTH walk-in drafts AND booking
+   700→  // tabs (e.g. a booking whose services were all removed, or a freshly-picked
+   701→  // booking the cashier wants to dismiss). Empty tabs show the X close button
+   702→  // in the info bar so the cashier can discard them. Once an item is added
+   703→  // (or an invoice is created, or the booking has services) the tab becomes a
+   704→  // real order and the X disappears. Terminal statuses never show X.
+   705→  const activeTabItems = activeTabId ? invoices[activeTabId]?.items : undefined;
+   706→  const activeBookingHasServices = (activeBooking?.services || []).length > 0;
+   707→  const isEmptyTab =
+   708→    (!activeTabItems || activeTabItems.length === 0) &&
+   709→    !activeMeta?.invoiceId &&
+   710→    !activeBookingHasServices &&
+   711→    activeBooking?.status !== "checkout" &&
+   712→    activeBooking?.status !== "cancelled" &&
+   713→    activeBooking?.status !== "no_show";
+   714→
+   715→  // Select an inline search result → link the walk-in tab to the real customer.
+   716→  //
+   717→  // AUTO-LINK existing booking: when the cashier opens a walk-in tab and picks
+   718→  // a customer who ALREADY has a non-terminal booking for the selected day, the
+   719→  // tab is auto-linked to that booking — the booking code (LHxxx) shows in the
+   720→  // info bar, the booking's existing services load into the invoice area, and
+   721→  // adding more services PUTs to the existing booking instead of creating a
+   722→  // duplicate. Without this, the walk-in tab would render the customer's name +
+   723→  // phone but NO booking code (because bookingCode stays undefined), which made
+   724→  // it look like the cashier module "lost" the Lịch hẹn entry.
+   725→  //
+   726→  // Terminal statuses (checkout / cancelled / no_show) are excluded — those
+   727→  // bookings are no longer actionable, so a new walk-in service should start a
+   728→  // new booking. If the customer has NO eligible booking for the day, the
+   729→  // original walk-in behavior is kept (a booking will be created lazily when
+   730→  // the cashier adds the first service).
+   731→  const handleSelectInlineResult = (c: {
+   732→    id: string;
+   733→    name: string;
+   734→    phone: string | null;
+   735→  }) => {
+   736→    if (!activeTabId) return;
+   737→    const prevMeta = tabMeta[activeTabId];
+   738→    updateTabMeta(activeTabId, {
+   739→      customerId: c.id,
+   740→      customerInfo: {
+   741→        name: c.name,
+   742→        phone: c.phone || "",
+   743→      },
+   744→      isGuestCustomer: false,
+   745→    });
+   746→    updateCustomerTab(activeTabId, {
+   747→      customerName: c.name,
+   748→      phone: c.phone || "",
+   749→    });
+   750→    // Re-fetch the linked customer's "Khách cũ" status so the ServiceSelector
+   751→    // filters service categories correctly (Khách cũ → "Dịch Vụ Cắt" only).
+   752→    fetchCustomerOldStatus(c.id).then((ct) =>
+   753→      updateTabMeta(activeTabId, { customerType: ct })
+   754→    );
+   755→
+   756→    // SYNC BOOKING CUSTOMER: if this walk-in tab already has a booking
+   757→    // (meta.bookingId — created when the first service was added BEFORE the
+   758→    // customer was linked), the booking's customer_id is still the synthetic
+   759→    // "Khách vãng lai" guest customer. PATCH the booking's customer_id to the
+   760→    // REAL customer's id so the booking (and its customer name/phone) shows
+   761→    // correctly in Lịch hẹn's View khách hàng and View nhân viên. Without this,
+   762→    // the booking would stay linked to the guest customer and the customer
+   763→    // info entered in the cashier would NOT propagate to the booking module.
+   764→    if (prevMeta?.bookingId) {
+   765→      fetch(`/api/supabase/bookings/${encodeURIComponent(prevMeta.bookingId)}`, {
+   766→        method: "PUT",
+   767→        headers: { "Content-Type": "application/json" },
+   768→        body: JSON.stringify({ customer_id: c.id }),
+   769→      })
+   770→        .then(() => {
+   771→          // Invalidate booking queries so both the cashier sidebar and the
+   772→          // Lịch hẹn module (all 3 views) refresh with the updated customer.
+   773→          queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+   774→          queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+   775→        })
+   776→        .catch(() => {
+   777→          // Best-effort sync — the local tab is already updated, so the
+   778→          // cashier UI is correct for this session. The booking will be
+   779→          // re-synced on the next service add / checkout if needed.
+   780→        });
+   781→    }
+   782→
+   783→    // AUTO-LINK: find the customer's existing non-terminal booking for the
+   784→    // selected day. If one exists, link this walk-in tab to it (mirrors what
+   785→    // handlePickBooking does when the user clicks the booking tab directly).
+   786→    // This makes the booking code appear in the info bar AND makes subsequent
+   787→    // service adds PUT to the existing booking (no duplicate).
+   788→    // SKIP the auto-link when this tab already has its own booking
+   789→    // (prevMeta.bookingId) — that booking was just re-linked to the real
+   790→    // customer above; auto-linking to a DIFFERENT booking would create
+   791→    // confusion (two bookings for one tab).
+   792→    if (prevMeta?.bookingId) {
+   793→      // Tab already has a booking — just toast and finish. The booking's
+   794→      // customer_id was patched above; no auto-link needed.
+   795→      toast({ title: "Đã cập nhật khách hàng", description: c.name });
+   796→      setInlineSearch("");
+   797→      setShowInlineResults(false);
+   798→      return;
+   799→    }
+   800→    const existingBooking = (dayBookings || []).find(
+   801→      (b) =>
+   802→        b.customer?.id === c.id &&
+   803→        b.status !== "checkout" &&
+   804→        b.status !== "cancelled" &&
+   805→        b.status !== "no_show"
+   806→    );
+   807→    if (existingBooking) {
+   808→      const bookingStart = existingBooking.date_time
+   809→        ? new Date(existingBooking.date_time).getTime()
+   810→        : 0;
+   811→      let maxEnd = bookingStart;
+   812→      const bookingServices = (existingBooking.services || [])
+   813→        .filter((s) => s.service)
+   814→        .map((s) => ({
+   815→          service_id: s.service!.id,
+   816→          staff_id: s.staff_id || "",
+   817→          service_category_id: s.service_category_id || null,
+   818→        }));
+   819→      for (const s of existingBooking.services || []) {
+   820→        if (!s.service) continue;
+   821→        const dur = (Number(s.service.duration) || 60) * 60 * 1000;
+   822→        const end = bookingStart + dur;
+   823→        if (end > maxEnd) maxEnd = end;
+   824→      }
+   825→      // Change the tab type from "walkin" → "booking" so:
+   826→      //   1. The booking-code badge branch renders in the info bar (the badge
+   827→      //      is only shown in the non-walkin branch — see the JSX below).
+   828→      //   2. The walk-in-specific UI (search bar, "Thêm khách mới" button) is
+   829→      //      hidden now that a real booking is linked.
+   830→      //   3. The tab sorts with the day's bookings (not as an empty walk-in
+   831→      //      draft) and is deduplicated against the booking tab via
+   832→      //      walkinBookingIds in mergedTabList.
+   833→      // All existing meta fields (customerId, customerInfo, customerType) are
+   834→      // preserved — the booking fields are layered ON TOP.
+   835→      updateTabMeta(activeTabId, {
+   836→        type: "booking",
+   837→        bookingCreated: true,
+   838→        bookingId: existingBooking.id,
+   839→        bookingCode: existingBooking.code || undefined,
+   840→        bookingServices,
+   841→        lastServiceStartMs: bookingStart,
+   842→        lastServiceEndMs: maxEnd,
+   843→      });
+   844→      // Load the booking's existing services into the invoice area (mirrors
+   845→      // handlePickBooking lines 409-425). Product items / discount / tip are
+   846→      // kept by replaceServiceItems.
+   847→      const serviceItems: InvoiceItem[] = (existingBooking.services || [])
+   848→        .filter((s) => s.service)
+   849→        .map((s) => {
+   850→          const price = Number(s.service!.price) || 0;
+   851→          return {
+   852→            id: `${s.service!.id}-${crypto.randomUUID()}`,
+   853→            itemId: s.service!.id,
+   854→            name: s.service!.name,
+   855→            type: "service" as const,
+   856→            price,
+   857→            quantity: 1,
+   858→            discount: 0,
+   859→            total: price,
+   860→            staffName: s.staff?.name || undefined,
+   861→          };
+   862→        });
+   863→      replaceServiceItems(activeTabId, serviceItems);
+   864→      toast({
+   865→        title: "Đã liên kết lịch hẹn",
+   866→        description: `${c.name} • ${existingBooking.code || ""}`,
+   867→      });
+   868→    } else {
+   869→      toast({ title: "Đã chọn khách hàng", description: c.name });
+   870→    }
+   871→
+   872→    setInlineSearch("");
+   873→    setShowInlineResults(false);
+   874→  };
+   875→
+   876→  // === Walk-in tab: add a new customer (name + phone) ===
+   877→  // POSTs to /api/supabase/customers, then links the walk-in tab to the newly
+   878→  // created customer. If the phone already exists, the API returns the existing
+   879→  // customer (409) — we link to that one instead so no duplicate is created.
+   880→  const handleAddNewCustomer = async () => {
+   881→    const name = newCustomerName.trim();
+   882→    const phone = newCustomerPhone.trim();
+   883→    if (!name) return;
+   884→    if (!selectedBranchId || selectedBranchId === "all") {
+   885→      alert("Vui lòng chọn chi nhánh");
+   886→      return;
+   887→    }
+   888→    setAddingCustomer(true);
+   889→    try {
+   890→      const res = await fetch("/api/supabase/customers", {
+   891→        method: "POST",
+   892→        headers: { "Content-Type": "application/json" },
+   893→        body: JSON.stringify({
+   894→          name,
+   895→          phone,
+   896→          branch_id: selectedBranchId || null,
+   897→        }),
+   898→      });
+   899→      const json = await res.json();
+   900→      let customer: { id: string; name: string; phone: string | null } | null = null;
+   901→      if (json.ok && json.data?.id) {
+   902→        customer = { id: json.data.id, name: json.data.name, phone: json.data.phone };
+   903→      } else if (json.existing_customer?.id) {
+   904→        // Phone already exists → use the existing customer (no duplicate).
+   905→        customer = {
+   906→          id: json.existing_customer.id,
+   907→          name: json.existing_customer.name,
+   908→          phone: json.existing_customer.phone,
+   909→        };
+   910→      } else {
+   911→        alert(json.error || "Không thể tạo khách hàng");
+   912→        return;
+   913→      }
+   914→      if (activeTabId && customer) {
+   915→        const prevMeta = tabMeta[activeTabId];
+   916→        updateTabMeta(activeTabId, {
+   917→          customerId: customer.id,
+   918→          customerInfo: { name: customer.name, phone: customer.phone || "" },
+   919→          isGuestCustomer: false,
+   920→        });
+   921→        updateCustomerTab(activeTabId, {
+   922→          customerName: customer.name,
+   923→          phone: customer.phone || "",
+   924→        });
+   925→        // New customer is never "Khách cũ".
+   926→        updateTabMeta(activeTabId, { customerType: "new" });
+   927→        // SYNC BOOKING CUSTOMER: if this walk-in tab already has a booking
+   928→        // (created when the first service was added before the customer was
+   929→        // created), PATCH the booking's customer_id from the synthetic
+   930→        // "Khách vãng lai" guest to the newly-created real customer so the
+   931→        // booking (and its customer name/phone) shows correctly in Lịch hẹn's
+   932→        // View khách hàng and View nhân viên.
+   933→        if (prevMeta?.bookingId) {
+   934→          try {
+   935→            await fetch(
+   936→              `/api/supabase/bookings/${encodeURIComponent(prevMeta.bookingId)}`,
+   937→              {
+   938→                method: "PUT",
+   939→                headers: { "Content-Type": "application/json" },
+   940→                body: JSON.stringify({ customer_id: customer.id }),
+   941→              }
+   942→            );
+   943→            queryClient.invalidateQueries({ queryKey: ["cashier-day-bookings"] });
+   944→            queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+   945→          } catch {
+   946→            // Best-effort sync — the local tab is already updated.
+   947→          }
+   948→        }
+   949→      }
+   950→      setShowAddCustomer(false);
+   951→      setNewCustomerName("");
+   952→      setNewCustomerPhone("");
+   953→      toast({ title: "Đã thêm khách mới", description: name });
+   954→    } catch {
+   955→      alert("Không thể tạo khách hàng");
+   956→    } finally {
+   957→      setAddingCustomer(false);
+   958→    }
+   959→  };
+   960→
+   961→  return (
+   962→    <div className="flex flex-col">
+   963→      {/* Tab bar — [day's booking buttons (time + name)] [Thêm khách hàng pinned at end] */}
+   964→      <div className="flex border-b bg-white">
+   965→        {/* Scrollable area: day's bookings + standalone product-only invoices */}
+   966→        <div className="flex min-w-0 flex-1 overflow-x-auto">
+   967→          {mergedTabList.map((b) => {
+   968→            const time = b.date_time ? toVietnamTime(b.date_time) : "—";
+   969→            const bs = b.status as BookingStatusType;
+   970→            // Cashier tab bar color scheme (per user request):
+   971→            // - cancelled (Hủy) → pink background + red text.
+   972→            // - everything else (new / confirmed / checkin / checkout / no_show,
+   973→            //   i.e. "chưa thanh toán" and "chưa hủy") → plain white background
+   974→            //   with neutral dark text. Only the active tab keeps its emerald
+   975→            //   highlight.
+   976→            const isCancelled = bs === "cancelled";
+   977→            const statusColors = isCancelled
+   978→              ? { bg: "bg-pink-100", text: "text-red-600" }
+   979→              : { bg: "bg-white", text: "text-gray-700" };
+   980→            const isActive = activeTabId === b.id;
+   981→            // Distinguish a standalone-invoice tab (services empty) from a
+   982→            // booking tab: the title shows "SP" (sản phẩm) for product-only
+   983→            // orders so the cashier can tell them apart at a glance.
+   984→            const isStandalone = (b.services || []).length === 0;
+   985→            // Walk-in draft tab: id starts with "walkin-".
+   986→            const isWalkinDraft = b.id.startsWith("walkin-");
+   987→            // ANY tab (walk-in OR booking) that has NO invoice items, NO pending
+   988→            // invoice, AND NO booking services can be closed via X. The user
+   989→            // wants to discard empty orders (no service/product/package) from
+   990→            // the sidebar. We check BOTH the local invoice items (loaded when
+   991→            // the tab is active) AND the booking's own services array (from
+   992→            // the day's bookings query) — this covers non-active tabs whose
+   993→            // local invoice state hasn't been loaded yet. Terminal statuses
+   994→            // (checkout/cancelled/no_show) never show X.
+   995→            const tabItems = invoices[b.id]?.items || [];
+   996→            const tabHasInvoice = !!tabMeta[b.id]?.invoiceId;
+   997→            const bookingHasServices = (b.services || []).length > 0;
+   998→            const canCloseWalkin =
+   999→              tabItems.length === 0 &&
+  1000→              !tabHasInvoice &&
+  1001→              !bookingHasServices &&
+  1002→              b.status !== "checkout" &&
+  1003→              b.status !== "cancelled" &&
+  1004→              b.status !== "no_show";
+  1005→            return (
+  1006→              <div
+  1007→                key={b.id}
+  1008→                className={`relative flex shrink-0 items-center gap-2 border-r px-3 py-1 text-sm transition ${isActive ? "bg-emerald-50 font-semibold text-emerald-700" : `${statusColors.bg} ${statusColors.text} ${isCancelled ? "hover:bg-pink-200" : "hover:bg-gray-50"}`}`}
+  1009→              >
+  1010→                <button
+  1011→                  type="button"
+  1012→                  onClick={() => {
+  1013→                    if (isWalkinDraft) {
+  1014→                      setActiveTab(b.id);
+  1015→                    } else if (isStandalone) {
+  1016→                      // Look up the standalone invoice in the CURRENT day's
+  1017→                      // list. The lookup may return undefined when the tab is
+  1018→                      // from a different day (the sidebar keeps open tabs
+  1019→                      // across day changes) or when the day query hasn't
+  1020→                      // refreshed yet. In that case, fall back to just
+  1021→                      // activating the tab — it's already open, so the
+  1022→                      // InvoiceSummary will render its saved items from the
+  1023→                      // persisted tabMeta/invoice state.
+  1024→                      const foundInv = (dayStandaloneInvoices || []).find(
+  1025→                        (inv) => inv.id === b.id
+  1026→                      );
+  1027→                      if (foundInv) {
+  1028→                        handlePickStandaloneInvoice(foundInv);
+  1029→                      } else {
+  1030→                        setActiveTab(b.id);
+  1031→                      }
+  1032→                    } else {
+  1033→                      handlePickBooking(b);
+  1034→                    }
+  1035→                  }}
+  1036→                  className="flex items-center gap-2"
+  1037→                  title={`${b.customer?.name || "Khách"} - ${time}${isStandalone ? " - Đơn sản phẩm" : ` - ${b.services.map((s) => s.service?.name).filter(Boolean).join(", ")}`}`}
+  1038→                >
+  1039→                  <span className="text-xs text-gray-400">{time}</span>
+  1040→                  <span className="font-medium">{b.customer?.name || "Khách"}</span>
+  1041→                  {isStandalone && !isWalkinDraft && (
+  1042→                    <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700">SP</span>
+  1043→                  )}
+  1044→                </button>
+  1045→                {/* X close button — only for empty walk-in draft tabs (no
+  1046→                    items, no pending invoice). Once an item is added the tab
+  1047→                    becomes a real invoice and cannot be closed this way. */}
+  1048→                {canCloseWalkin && (
+  1049→                  <button
+  1050→                    type="button"
+  1051→                    onClick={(e) => {
+  1052→                      e.stopPropagation();
+  1053→                      closeCustomerTab(b.id);
+  1054→                    }}
+  1055→                    className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-red-100 hover:text-red-600"
+  1056→                    title="Xóa đơn trống"
+  1057→                    aria-label="Xóa đơn trống"
+  1058→                  >
+  1059→                    <X className="h-3.5 w-3.5" strokeWidth={2.5} />
+  1060→                  </button>
+  1061→                )}
+  1062→              </div>
+  1063→            );
+  1064→          })}
+  1065→        </div>
+  1066→        {/* "Tạo hóa đơn" button — opens a new customer tab immediately
+  1067→            (walk-in guest). Can be clicked multiple times to create multiple
+  1068→            tabs. Booking + customer are created lazily when a service is
+  1069→            added to the tab. */}
+  1070→        <button
+  1071→          type="button"
+  1072→          onClick={handleAddCustomer}
+  1073→          className="flex shrink-0 items-center gap-1 self-stretch border-l px-4 text-sm font-medium text-emerald-600 hover:bg-emerald-50"
+  1074→        >
+  1075→          <Plus className="h-4 w-4" />
+  1076→          Tạo hóa đơn
+  1077→        </button>
+  1078→      </div>
+  1079→
+  1080→      {/* Customer info */}
+  1081→      {activeCustomer && (
+  1082→        <div className="flex items-center gap-6 border-b bg-white px-4 py-1 text-sm">
+  1083→          {isWalkinTab ? (
+  1084→            <>
+  1085→              {/* Walk-in tab: show customer name (green clickable link to
+  1086→                  history dialog when a customer is linked, plain text when
+  1087→                  no customer is linked yet) + inline search input with
+  1088→                  real-time autocomplete dropdown + "Thêm khách mới" button. */}
+  1089→              <div className="flex items-center gap-2">
+  1090→                <User className="h-4 w-4 text-gray-400" />
+  1091→                {walkinHasCustomer && activeMeta?.customerId ? (
+  1092→                  <button
+  1093→                    type="button"
+  1094→                    onClick={() =>
+  1095→                      router.push(`/customers/${activeMeta.customerId}`)
+  1096→                    }
+  1097→                    className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+  1098→                    title="Xem lịch sử khách hàng"
+  1099→                  >
+  1100→                    {activeCustomer.customerName}
+  1101→                  </button>
+  1102→                ) : (
+  1103→                  <span className="font-medium text-gray-900">
+  1104→                    {activeCustomer.customerName}
+  1105→                  </span>
+  1106→                )}
+  1107→              </div>
+  1108→              {activeCustomer.phone && (
+  1109→                <div className="flex items-center gap-2 text-gray-500">
+  1110→                  <Phone className="h-4 w-4" />
+  1111→                  <span>
+  1112→                    {canViewCustomerPhone
+  1113→                      ? activeCustomer.phone
+  1114→                      : maskPhone(activeCustomer.phone)}
+  1115→                  </span>
+  1116→                </div>
+  1117→              )}
+  1118→              {/* Inline search input + "Thêm khách mới" button — ONLY shown
+  1119→                  while the walk-in tab still has NO real customer linked.
+  1120→                  Once the cashier picks an existing customer (search result)
+  1121→                  OR creates a new one, both controls disappear and only the
+  1122→                  customer name + phone remain. */}
+  1123→              {!walkinHasCustomer && (
+  1124→              <>
+  1125→              {/* Inline search input with autocomplete dropdown */}
+  1126→              <div className="relative" ref={inlineSearchRef}>
+  1127→                <div className="relative">
+  1128→                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+  1129→                  <input
+  1130→                    type="text"
+  1131→                    value={inlineSearch}
+  1132→                    onChange={(e) => {
+  1133→                      setInlineSearch(e.target.value);
+  1134→                      setShowInlineResults(true);
+  1135→                    }}
+  1136→                    onFocus={() => setShowInlineResults(true)}
+  1137→                    placeholder="Tìm SĐT khách cũ..."
+  1138→                    className="h-7 w-44 rounded border border-gray-200 pl-7 pr-2 text-xs text-gray-700 focus:border-emerald-400 focus:outline-none"
+  1139→                  />
+  1140→                  {inlineFetching && (
+  1141→                    <Loader2 className="absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-gray-400" />
+  1142→                  )}
+  1143→                </div>
+  1144→                {/* Autocomplete dropdown */}
+  1145→                {showInlineResults && inlineSearch.trim().length >= 2 && (
+  1146→                  <div className="absolute z-50 mt-1 max-h-64 w-72 overflow-y-auto rounded-lg border bg-white shadow-lg">
+  1147→                    {(inlineResults || []).length === 0 && !inlineFetching ? (
+  1148→                      <div className="px-3 py-3 text-center text-xs text-gray-400">
+  1149→                        Không tìm thấy khách hàng
+  1150→                      </div>
+  1151→                    ) : (
+  1152→                      (inlineResults || []).map((c) => (
+  1153→                        <button
+  1154→                          key={c.id}
+  1155→                          type="button"
+  1156→                          onClick={() => handleSelectInlineResult(c)}
+  1157→                          className="flex w-full items-center justify-between border-b px-3 py-2 text-left text-xs last:border-b-0 hover:bg-emerald-50"
+  1158→                        >
+  1159→                          <div>
+  1160→                            <p className="font-medium text-gray-900">{c.name}</p>
+  1161→                            <p className="text-gray-500">
+  1162→                              {c.phone || "—"}
+  1163→                              {c.code ? ` • ${c.code}` : ""}
+  1164→                            </p>
+  1165→                          </div>
+  1166→                          <UserPlus className="h-3.5 w-3.5 text-emerald-600" />
+  1167→                        </button>
+  1168→                      ))
+  1169→                    )}
+  1170→                  </div>
+  1171→                )}
+  1172→              </div>
+  1173→              <button
+  1174→                type="button"
+  1175→                onClick={() => {
+  1176→                  setNewCustomerName("");
+  1177→                  setNewCustomerPhone("");
+  1178→                  setShowAddCustomer(true);
+  1179→                }}
+  1180→                className="flex items-center gap-1 rounded border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+  1181→              >
+  1182→                <UserPlus className="h-3.5 w-3.5" />
+  1183→                Thêm khách mới
+  1184→              </button>
+  1185→              </>
+  1186→              )}
+  1187→              {/* "Đổi khách" button — the MIRROR of the above block: shown
+  1188→                  ONLY when a customer IS linked (walkinHasCustomer=true).
+  1189→                  Lets the cashier reset the walk-in tab back to a fresh
+  1190→                  state so the search + "Thêm khách mới" button reappear.
+  1191→                  Restricted to truly fresh walk-in drafts (no items, no
+  1192→                  booking created, type still "walkin") — see
+  1193→                  handleResetWalkinCustomer for the guard logic. This
+  1194→                  directly addresses the persisted-state confusion: if a
+  1195→                  walk-in tab from an earlier session still has a
+  1196→                  customerId set in localStorage, the cashier can click
+  1197→                  "Đổi khách" to bring the search/button back instead of
+  1198→                  having to close the tab and click "Tạo hóa đơn" again. */}
+  1199→              {walkinHasCustomer &&
+  1200→                (!activeTabItems || activeTabItems.length === 0) &&
+  1201→                !activeMeta?.bookingCreated && (
+  1202→                  <button
+  1203→                    type="button"
+  1204→                    onClick={handleResetWalkinCustomer}
+  1205→                    className="flex items-center gap-1 rounded border border-amber-200 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
+  1206→                    title="Xóa liên kết khách hàng để chọn lại"
+  1207→                  >
+  1208→                    <RotateCcw className="h-3.5 w-3.5" />
+  1209→                    Đổi khách
+  1210→                  </button>
+  1211→                )}
+  1212→            </>
+  1213→          ) : (
+  1214→            <>
+  1215→              {/* Booking / standalone-invoice tab.
+  1216→                  For multi-customer bookings (number_of_customers >= 2 with a
+  1217→                  [[MULTI]] note), the per-customer name + phone are shown on
+  1218→                  each SERVICE line in the invoice summary instead — so the
+  1219→                  info bar here only shows the appointment code + date/time to
+  1220→                  avoid clutter. Single-customer bookings show name + phone;
+  1221→                  the name is a green clickable link to the history dialog
+  1222→                  (uses the booking's customer_id). */}
+  1223→              {!activeIsMultiCustomer && (
+  1224→                <>
+  1225→                  <div className="flex items-center gap-2">
+  1226→                    <User className="h-4 w-4 text-gray-400" />
+  1227→                    {activeBooking?.customer?.id ? (
+  1228→                      <button
+  1229→                        type="button"
+  1230→                        onClick={() =>
+  1231→                          router.push(`/customers/${activeBooking.customer!.id}`)
+  1232→                        }
+  1233→                        className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+  1234→                        title="Xem lịch sử khách hàng"
+  1235→                      >
+  1236→                        {activeCustomer.customerName}
+  1237→                      </button>
+  1238→                    ) : (
+  1239→                      <span className="font-medium text-gray-900">
+  1240→                        {activeCustomer.customerName}
+  1241→                      </span>
+  1242→                    )}
+  1243→                  </div>
+  1244→                  <div className="flex items-center gap-2 text-gray-500">
+  1245→                    <Phone className="h-4 w-4" />
+  1246→                    <span>
+  1247→                      {canViewCustomerPhone
+  1248→                        ? (activeCustomer.phone || "—")
+  1249→                        : maskPhone(activeCustomer.phone)}
+  1250→                    </span>
+  1251→                  </div>
+  1252→                </>
+  1253→              )}
+  1254→
+  1255→              {/* Booking/invoice code badge: shows "Xem lịch hẹn: LHxxx"
+  1256→                  (clickable → navigates to Booking > View nhân viên with flash)
+  1257→                  when unpaid, "Hóa đơn: HDxxx" (clickable → opens full invoice
+  1258→                  view) when paid. */}
+  1259→              {activeMeta?.bookingCode && (
+  1260→                <div className="flex items-center gap-2 text-emerald-700">
+  1261→                  {activeBooking?.status === "checkout" ? (
+  1262→                    <button
+  1263→                      onClick={() => {
+  1264→                        const invId = activeMeta?.invoiceId || activeBooking?.invoice?.id;
+  1265→                        if (invId) {
+  1266→                          setPaidInvoiceView({
+  1267→                            invoiceId: invId,
+  1268→                            customerName: activeCustomer?.customerName,
+  1269→                            customerPhone: activeCustomer?.phone,
+  1270→                            bookingCode: activeMeta?.bookingCode,
+  1271→                          });
+  1272→                        }
+  1273→                      }}
+  1274→                      className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+  1275→                    >
+  1276→                      Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
+  1277→                    </button>
+  1278→                  ) : (
+  1279→                    <button
+  1280→                      onClick={() => {
+  1281→                        // Navigate to Booking module → View nhân viên with the
+  1282→                        // booking highlighted (flash 3×). Set the store state
+  1283→                        // BEFORE pushing the route so the booking page renders
+  1284→                        // with the correct view + highlight from the start.
+  1285→                        setBookingViewMode("staff");
+  1286→                        setBookingDateNav("today");
+  1287→                        setHighlightBookingId(activeBooking?.id || null);
+  1288→                        router.push("/booking");
+  1289→                      }}
+  1290→                      className="text-xs font-medium hover:underline cursor-pointer"
+  1291→                    >
+  1292→                      Xem lịch hẹn: {activeMeta.bookingCode}
+  1293→                    </button>
+  1294→                  )}
+  1295→                </div>
+  1296→              )}
+  1297→
+  1298→              {/* Booking date + time — the appointment's full date_time
+  1299→                  (dd/MM/yyyy HH:MM). Shown alongside the booking code so the
+  1300→                  cashier sees EXACTLY when the appointment is for. Previously
+  1301→                  only the date was shown (no time), which left the cashier
+  1302→                  guessing the hour — especially for walk-in tabs auto-linked
+  1303→                  to a booking, where the booking's date_time is the only
+  1304→                  source of the appointment time. Now shows "dd/MM/yyyy HH:MM". */}
+  1305→              {activeBooking?.date_time && (
+  1306→                <div className="flex items-center gap-1 text-gray-500">
+  1307→                  <Calendar className="h-4 w-4" />
+  1308→                  <span className="text-xs">
+  1309→                    {(() => {
+  1310→                      try {
+  1311→                        // Timezone-safe Vietnam day + time (Supabase stores
+  1312→                        // +00:00; the ISO segments are UTC, not the VN time
+  1313→                        // the user entered). toVietnamDay/toVietnamTime convert
+  1314→                        // the epoch to the VN wall-clock values.
+  1315→                        const iso = toVietnamDay(activeBooking.date_time).split("-");
+  1316→                        const t = toVietnamTime(activeBooking.date_time);
+  1317→                        return iso.length === 3
+  1318→                          ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
+  1319→                          : "—";
+  1320→                      } catch {
+  1321→                        return "—";
+  1322→                      }
+  1323→                    })()}
+  1324→                  </span>
+  1325→                </div>
+  1326→              )}
+  1327→            </>
+  1328→          )}
+  1329→
+  1330→          {/* Right side: booking status badge (read-only) for non-walkin tabs.
+  1331→              The status is now managed automatically — clicking "Hoàn tất" in
+  1332→              the invoice summary creates the invoice and transitions the booking
+  1333→              to "checkout". Walk-in tabs have no booking, so no badge is shown. */}
+  1334→          {!isWalkinTab && activeBooking && (
+  1335→            <div className="ml-auto flex items-center gap-2">
+  1336→              <span
+  1337→                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(
+  1338→                  activeBooking.status as BookingStatusType
+  1339→                )}`}
+  1340→              >
+  1341→                {BookingStatusLabel[activeBooking.status as BookingStatusType]}
+  1342→              </span>
+  1343→            </div>
+  1344→          )}
+  1345→
+  1346→          {/* X close button — for ANY empty tab (no items, no pending invoice).
+  1347→              Lets the cashier discard a mistakenly opened tab OR an empty
+  1348→              booking tab (no service/product/package). Once an item is added
+  1349→              the tab becomes a real (pending) invoice and the X disappears. */}
+  1350→          {isEmptyTab && (
+  1351→            <button
+  1352→              type="button"
+  1353→              onClick={() => closeCustomerTab(activeCustomer.customerId)}
+  1354→              className="ml-auto flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-500"
+  1355→              title="Đóng tab"
+  1356→              aria-label="Đóng tab"
+  1357→            >
+  1358→              <X className="h-4 w-4" />
+  1359→            </button>
+  1360→          )}
+  1361→        </div>
+  1362→      )}
+  1363→
+  1364→      {/* === Walk-in tab: add new customer dialog === */}
+  1365→      <Dialog open={showAddCustomer} onOpenChange={(v) => setShowAddCustomer(v)}>
+  1366→        <DialogContent className="max-w-md">
+  1367→          <DialogHeader>
+  1368→            <DialogTitle>Thêm khách mới</DialogTitle>
+  1369→          </DialogHeader>
+  1370→          <div className="space-y-3">
+  1371→            <div className="space-y-1">
+  1372→              <Label htmlFor="new-customer-name">Tên khách hàng</Label>
+  1373→              <Input
+  1374→                id="new-customer-name"
+  1375→                value={newCustomerName}
+  1376→                onChange={(e) => setNewCustomerName(e.target.value)}
+  1377→                placeholder="Nhập tên"
+  1378→              />
+  1379→            </div>
+  1380→            <div className="space-y-1">
+  1381→              <Label htmlFor="new-customer-phone">Số điện thoại</Label>
+  1382→              <Input
+  1383→                id="new-customer-phone"
+  1384→                value={newCustomerPhone}
+  1385→                onChange={(e) => setNewCustomerPhone(e.target.value)}
+  1386→                placeholder="Nhập SĐT"
+  1387→              />
+  1388→            </div>
+  1389→          </div>
+  1390→          <DialogFooter>
+  1391→            <Button
+  1392→              type="button"
+  1393→              variant="outline"
+  1394→              onClick={() => setShowAddCustomer(false)}
+  1395→              disabled={addingCustomer}
+  1396→            >
+  1397→              Hủy
+  1398→            </Button>
+  1399→            <Button
+  1400→              type="button"
+  1401→              onClick={handleAddNewCustomer}
+  1402→              disabled={addingCustomer || !newCustomerName.trim()}
+  1403→            >
+  1404→              {addingCustomer ? (
+  1405→                <>
+  1406→                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+  1407→                  Đang lưu...
+  1408→                </>
+  1409→              ) : (
+  1410→                "Lưu"
+  1411→              )}
+  1412→            </Button>
+  1413→          </DialogFooter>
+  1414→        </DialogContent>
+  1415→      </Dialog>
+  1416→
+  1417→      {/* Paid invoice full-page view — opened when clicking "Hóa đơn: HDxxx"
+  1418→          on a paid booking's info bar. */}
+  1419→      {paidInvoiceView && (
+  1420→        <PaidInvoiceView
+  1421→          invoiceId={paidInvoiceView.invoiceId}
+  1422→          customerName={paidInvoiceView.customerName}
+  1423→          customerPhone={paidInvoiceView.customerPhone}
+  1424→          bookingCode={paidInvoiceView.bookingCode}
+  1425→          onClose={() => setPaidInvoiceView(null)}
+  1426→        />
+  1427→      )}
+  1428→
+  1429→    </div>
+  1430→  );
+  1431→}
+  1432→

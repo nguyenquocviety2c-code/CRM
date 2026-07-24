@@ -1,0 +1,872 @@
+     1→"use client";
+     2→
+     3→import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+     4→import dynamic from "next/dynamic";
+     5→// Lazy-load InvoiceDialog — only opened on demand.
+     6→const InvoiceDialog = dynamic(
+     7→  () => import("@/components/features/booking/invoice-dialog").then((m) => m.InvoiceDialog),
+     8→  { ssr: false }
+     9→);
+    10→import { format } from "date-fns";
+    11→import { vi } from "date-fns/locale";
+    12→import { ChevronLeft, ChevronRight, ArrowLeft, Camera, Loader2, ChevronDown } from "lucide-react";
+    13→import { useBranchStore } from "@/stores/branch-store";
+    14→import { BranchSelector } from "@/components/layout/branch-selector";
+    15→import { useAuthStore } from "@/stores/auth-store";
+    16→import { cn } from "@/lib/utils";
+    17→import { useState, useMemo } from "react";
+    18→import { DateRangePicker } from "@/components/shared/date-range-picker";
+    19→import { format as fnsFormat } from "date-fns";
+    20→import {
+    21→  Dialog,
+    22→  DialogContent,
+    23→  DialogHeader,
+    24→  DialogTitle,
+    25→} from "@/components/ui/dialog";
+    26→import { Button } from "@/components/ui/button";
+    27→import Link from "next/link";
+    28→import { uploadImagesToR2 } from "@/lib/upload";
+    29→import { maskPhone } from "@/lib/phone-mask";
+    30→import {
+    31→  ColumnToggle,
+    32→  ColumnDef,
+    33→  buildDefaultVisibleColumns,
+    34→  toggleColumnKey,
+    35→} from "@/components/shared/column-toggle";
+    36→const PaidInvoiceView = dynamic(
+    37→  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+    38→  { ssr: false }
+    39→);
+    40→import {
+    41→  BookingStatusType,
+    42→} from "@/lib/constants";
+    43→import type { Booking } from "@/stores/booking-store";
+    44→import {
+    45→  DropdownMenu,
+    46→  DropdownMenuContent,
+    47→  DropdownMenuItem,
+    48→  DropdownMenuTrigger,
+    49→} from "@/components/ui/dropdown-menu";
+    50→
+    51→interface InvoiceCustomer {
+    52→  id: string;
+    53→  name: string;
+    54→  phone: string | null;
+    55→  code: string | null;
+    56→  source?: { id: string; name: string } | null;
+    57→  channel?: { id: string; name: string } | null;
+    58→}
+    59→
+    60→interface InvoiceBranch {
+    61→  id: string;
+    62→  name: string;
+    63→}
+    64→
+    65→interface InvoiceStaff {
+    66→  id: string;
+    67→  name: string;
+    68→}
+    69→
+    70→interface InvoiceItem {
+    71→  name?: string;
+    72→  price?: number;
+    73→  quantity?: number;
+    74→  discount?: number;
+    75→  total?: number;
+    76→  staffName?: string;
+    77→}
+    78→
+    79→interface AppliedPromotion {
+    80→  id: string;
+    81→  code: string | null;
+    82→  name: string;
+    83→  discountValue: number;
+    84→  discountType: string;
+    85→  discountAmount: number;
+    86→}
+    87→
+    88→interface Invoice {
+    89→  id: string;
+    90→  code: string | null;
+    91→  status: string;
+    92→  final_amount: number;
+    93→  total_amount: number;
+    94→  discount: number;
+    95→  tip: number;
+    96→  promotion: AppliedPromotion | null;
+    97→  payment_method: string;
+    98→  items: InvoiceItem[];
+    99→  created_at: string;
+   100→  customer: InvoiceCustomer | null;
+   101→  branch: InvoiceBranch | null;
+   102→  staff: InvoiceStaff | null;
+   103→  booking_id: string | null;
+   104→  note: string | null;
+   105→  photos?: string[];
+   106→}
+   107→
+   108→/** Convert an Invoice (activity page shape) to a minimal Booking object so it
+   109→ *  can be passed to InvoiceDialog (which expects a Booking). The InvoiceDialog
+   110→ *  will fetch the invoice by booking_id, so we just need the id + status. */
+   111→function invoiceToBooking(inv: Invoice): Booking {
+   112→  return {
+   113→    id: inv.booking_id || inv.id, // use booking_id if available, else invoice id
+   114→    code: inv.code || "",
+   115→    date: "",
+   116→    time: "",
+   117→    date_time: inv.created_at,
+   118→    status: inv.status === "completed" ? "checkout" : "confirmed",
+   119→    note: inv.note,
+   120→    numberOfCustomers: 1,
+   121→    customerSourceId: null,
+   122→    customerChannelId: null,
+   123→    createdBy: null,
+   124→    customer: {
+   125→      id: inv.customer?.id || "",
+   126→      name: inv.customer?.name || "",
+   127→      phone: inv.customer?.phone || "",
+   128→      code: inv.customer?.code || "",
+   129→    },
+   130→    branch: inv.branch ? { id: inv.branch.id, name: inv.branch.name } : null,
+   131→    services: [],
+   132→    invoice: {
+   133→      id: inv.id,
+   134→      code: inv.code,
+   135→      status: inv.status,
+   136→      final_amount: inv.final_amount,
+   137→      payment_method: inv.payment_method,
+   138→    },
+   139→  } as Booking;
+   140→}
+   141→
+   142→export default function ActivityPage() {
+   143→  const { selectedBranchId } = useBranchStore();
+   144→  const { hasPermission } = useAuthStore();
+   145→  const canViewAllInvoices = hasPermission("view_all_invoices");
+   146→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   147→  const canConfirmOldInvoice = hasPermission("confirm_old_invoice");
+   148→  const canCreateInvoice = hasPermission("create_invoice");
+   149→  const [search, setSearch] = useState("");
+   150→  const [status, setStatus] = useState("all");
+   151→  const [page, setPage] = useState(1);
+   152→  const [detailInvoice, setDetailInvoice] = useState<Invoice | null>(null);
+   153→  // Date range filter (from-to). Defaults to today (matches the booking module
+   154→  // pattern). Quick-range buttons (Hôm nay / 7 ngày / 30 ngày) jump to common
+   155→  // windows; the DateRangePicker lets the user pick an arbitrary range. The
+   156→  // range is sent to the API as date_from/date_to (ISO strings).
+   157→  const [dateNav, setDateNav] = useState<"today" | "7days" | "30days" | "custom">("today");
+   158→  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>(() => {
+   159→    const now = new Date();
+   160→    now.setHours(23, 59, 59, 999);
+   161→    const from = new Date(now);
+   162→    from.setHours(0, 0, 0, 0);
+   163→    return { from, to: now };
+   164→  });
+   165→  // ISO bounds sent to the API: from = start-of-day, to = end-of-day.
+   166→  const dateFromISO = useMemo(() => {
+   167→    const d = new Date(dateRange.from);
+   168→    d.setHours(0, 0, 0, 0);
+   169→    return d.toISOString();
+   170→  }, [dateRange.from]);
+   171→  const dateToISO = useMemo(() => {
+   172→    const d = new Date(dateRange.to);
+   173→    d.setHours(23, 59, 59, 999);
+   174→    return d.toISOString();
+   175→  }, [dateRange.to]);
+   176→  // Invoice dialog state — when set, the InvoiceDialog opens (for confirming
+   177→  // payment on unpaid invoices via the "Xác nhận thanh toán" button).
+   178→  const [invoiceDialogInvoice, setInvoiceDialogInvoice] = useState<Invoice | null>(null);
+   179→  const [paidInvoiceViewData, setPaidInvoiceViewData] = useState<{ invoiceId: string; customerName?: string; customerPhone?: string; code?: string | null } | null>(null);
+   180→  const limit = 20;
+   181→  const queryClient = useQueryClient();
+   182→
+   183→  // Column toggle: each data column can be shown/hidden via the "Cột" button.
+   184→  const columnDefs: ColumnDef[] = [
+   185→    { key: "stt", label: "STT" },
+   186→    { key: "code", label: "Mã hóa đơn" },
+   187→    { key: "customer", label: "Khách hàng" },
+   188→    { key: "phone", label: "SĐT" },
+   189→    { key: "source", label: "Nguồn KH" },
+   190→    { key: "channel", label: "Kênh liên lạc" },
+   191→    { key: "branch", label: "Chi nhánh" },
+   192→    { key: "createdAt", label: "Ngày tạo" },
+   193→    { key: "status", label: "Trạng thái" },
+   194→    { key: "total", label: "Tổng tiền" },
+   195→  ];
+   196→  const [visibleColumns, setVisibleColumns] = useState(() =>
+   197→    buildDefaultVisibleColumns(columnDefs)
+   198→  );
+   199→  const toggleColumn = (key: string) =>
+   200→    setVisibleColumns((prev) => toggleColumnKey(prev, key));
+   201→
+   202→  // Fetch invoices (the "Lịch sử hóa đơn" = list of paid invoices).
+   203→  const { data, isLoading } = useQuery({
+   204→    queryKey: ["supabase-invoice-history", selectedBranchId, search, status, page, dateFromISO, dateToISO],
+   205→    queryFn: async () => {
+   206→      const params = new URLSearchParams();
+   207→      params.append("page", String(page));
+   208→      params.append("limit", String(limit));
+   209→      if (selectedBranchId && selectedBranchId !== "all") params.append("branch_id", selectedBranchId);
+   210→      if (search) params.append("search", search);
+   211→      if (status !== "all") params.append("status", status);
+   212→      params.append("date_from", dateFromISO);
+   213→      params.append("date_to", dateToISO);
+   214→
+   215→      const res = await fetch(`/api/supabase/invoices?${params.toString()}`);
+   216→      const json = await res.json();
+   217→      if (!json.ok) return { data: [] as Invoice[], pagination: { total: 0, totalPages: 0 } };
+   218→      return {
+   219→        data: (json.data as Invoice[]) || [],
+   220→        pagination: json.pagination || { total: 0, totalPages: 0 },
+   221→      };
+   222→    },
+   223→    placeholderData: (prev) => prev,
+   224→    staleTime: 30_000,
+   225→    gcTime: 5 * 60_000,
+   226→  });
+   227→
+   228→  const invoices = data?.data || [];
+   229→  const total = data?.pagination?.total || 0;
+   230→  const totalPages = data?.pagination?.totalPages || 0;
+   231→
+   232→  const statusOptions = [
+   233→    { value: "all", label: "Tất cả" },
+   234→    { value: "completed", label: "Đã thanh toán" },
+   235→    { value: "pending", label: "Chưa thanh toán" },
+   236→    { value: "cancelled", label: "Đã hủy" },
+   237→  ];
+   238→
+   239→  const statusLabels: Record<string, string> = {
+   240→    completed: "Đã thanh toán",
+   241→    pending: "Chưa thanh toán",
+   242→    cancelled: "Đã hủy",
+   243→  };
+   244→
+   245→  const statusColors: Record<string, string> = {
+   246→    completed: "bg-emerald-100 text-emerald-700",
+   247→    pending: "bg-amber-100 text-amber-700",
+   248→    cancelled: "bg-red-100 text-red-700",
+   249→  };
+   250→
+   251→  return (
+   252→    <div className="flex h-full flex-col">
+   253→      {/* Header */}
+   254→      <div className="mb-4 flex items-center justify-between">
+   255→        <div className="flex items-center gap-3">
+   256→          <Link
+   257→            href="/cashier/invoices"
+   258→            className="inline-flex h-8 items-center gap-1 rounded-md bg-white px-3 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+   259→          >
+   260→            <ArrowLeft className="h-4 w-4" />
+   261→            Đơn hàng
+   262→          </Link>
+   263→          <h1 className="text-2xl font-bold text-gray-900">Lịch sử hóa đơn</h1>
+   264→        </div>
+   265→        {canViewAllInvoices && <BranchSelector />}
+   266→      </div>
+   267→
+   268→      {/* Filter Bar */}
+   269→      <div className="mb-4 flex flex-col gap-3 rounded-lg bg-white p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+   270→        {/* Left: date nav (Hôm nay / 7 ngày / 30 ngày + from-to range picker) —
+   271→            mirrors the booking module's filter layout. */}
+   272→        <div className="flex items-center gap-2">
+   273→          <Button
+   274→            variant={dateNav === "today" ? "default" : "outline"}
+   275→            size="sm"
+   276→            onClick={() => {
+   277→              const now = new Date(); now.setHours(23, 59, 59, 999);
+   278→              const from = new Date(now); from.setHours(0, 0, 0, 0);
+   279→              setDateRange({ from, to: now });
+   280→              setDateNav("today");
+   281→              setPage(1);
+   282→            }}
+   283→            className={dateNav === "today" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   284→          >
+   285→            Hôm nay
+   286→          </Button>
+   287→          <Button
+   288→            variant={dateNav === "7days" ? "default" : "outline"}
+   289→            size="sm"
+   290→            onClick={() => {
+   291→              const now = new Date(); now.setHours(23, 59, 59, 999);
+   292→              const from = new Date(now); from.setDate(from.getDate() - 6); from.setHours(0, 0, 0, 0);
+   293→              setDateRange({ from, to: now });
+   294→              setDateNav("7days");
+   295→              setPage(1);
+   296→            }}
+   297→            className={dateNav === "7days" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   298→          >
+   299→            7 ngày
+   300→          </Button>
+   301→          <Button
+   302→            variant={dateNav === "30days" ? "default" : "outline"}
+   303→            size="sm"
+   304→            onClick={() => {
+   305→              const now = new Date(); now.setHours(23, 59, 59, 999);
+   306→              const from = new Date(now); from.setDate(from.getDate() - 29); from.setHours(0, 0, 0, 0);
+   307→              setDateRange({ from, to: now });
+   308→              setDateNav("30days");
+   309→              setPage(1);
+   310→            }}
+   311→            className={dateNav === "30days" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   312→          >
+   313→            30 ngày
+   314→          </Button>
+   315→          <DateRangePicker
+   316→            size="sm"
+   317→            dateFrom={fnsFormat(dateRange.from, "dd/MM/yyyy")}
+   318→            dateTo={fnsFormat(dateRange.to, "dd/MM/yyyy")}
+   319→            onChange={(from, to) => {
+   320→              const [d1, m1, y1] = from.split("/").map(Number);
+   321→              const [d2, m2, y2] = to.split("/").map(Number);
+   322→              const f = new Date(y1, m1 - 1, d1);
+   323→              const t = new Date(y2, m2 - 1, d2);
+   324→              t.setHours(23, 59, 59, 999);
+   325→              setDateRange({ from: f, to: t });
+   326→              setDateNav("custom");
+   327→              setPage(1);
+   328→            }}
+   329→          />
+   330→        </div>
+   331→        {/* Right: search box */}
+   332→        <input
+   333→          type="text"
+   334→          placeholder="Mã hóa đơn, tên KH, SĐT..."
+   335→          value={search}
+   336→          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+   337→          className="flex-1 min-w-[200px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+   338→        />
+   339→      </div>
+   340→
+   341→      {/* Status Filter Dropdown + Column Toggle */}
+   342→      <div className="mb-4 flex items-center gap-2">
+   343→        <DropdownMenu>
+   344→          <DropdownMenuTrigger asChild>
+   345→            <button
+   346→              type="button"
+   347→              className="inline-flex h-8 items-center gap-1 rounded-md bg-white px-4 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+   348→            >
+   349→              {statusOptions.find((o) => o.value === status)?.label || "Tất cả"}
+   350→              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+   351→            </button>
+   352→          </DropdownMenuTrigger>
+   353→          <DropdownMenuContent align="start">
+   354→            {statusOptions.map((option) => (
+   355→              <DropdownMenuItem
+   356→                key={option.value}
+   357→                onClick={() => { setStatus(option.value); setPage(1); }}
+   358→                className={cn("cursor-pointer text-xs", status === option.value && "font-bold")}
+   359→              >
+   360→                {option.label}
+   361→              </DropdownMenuItem>
+   362→            ))}
+   363→          </DropdownMenuContent>
+   364→        </DropdownMenu>
+   365→        <div className="ml-auto">
+   366→          <ColumnToggle
+   367→            columnDefs={columnDefs}
+   368→            visibleColumns={visibleColumns}
+   369→            onToggleColumn={toggleColumn}
+   370→          />
+   371→        </div>
+   372→      </div>
+   373→
+   374→      {/* Table */}
+   375→      <div className="cashier-table flex-1 overflow-auto rounded-lg bg-white shadow-sm">
+   376→        <table className="min-w-full divide-y divide-gray-200">
+   377→          <thead className="bg-gray-50">
+   378→            <tr>
+   379→              {visibleColumns.stt !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">STT</th>}
+   380→              {visibleColumns.code !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Mã hóa đơn</th>}
+   381→              {visibleColumns.customer !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Khách hàng</th>}
+   382→              {visibleColumns.phone !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">SĐT</th>}
+   383→              {visibleColumns.source !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Nguồn KH</th>}
+   384→              {visibleColumns.channel !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Kênh liên lạc</th>}
+   385→              {visibleColumns.branch !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Chi nhánh</th>}
+   386→              {visibleColumns.createdAt !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ngày tạo</th>}
+   387→              {visibleColumns.status !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Trạng thái</th>}
+   388→              {visibleColumns.total !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Tổng tiền</th>}
+   389→            </tr>
+   390→          </thead>
+   391→          <tbody className="divide-y divide-gray-200 bg-white">
+   392→            {isLoading ? (
+   393→              <tr>
+   394→                <td colSpan={10} className="px-4 py-8 text-center text-gray-500">Đang tải...</td>
+   395→              </tr>
+   396→            ) : invoices.length === 0 ? (
+   397→              <tr>
+   398→                <td colSpan={10} className="px-4 py-8 text-center text-gray-500">Không có hóa đơn nào</td>
+   399→              </tr>
+   400→            ) : (
+   401→              invoices.map((inv, index) => (
+   402→                <tr
+   403→                  key={inv.id}
+   404→                  className={canViewAllInvoices ? "cursor-pointer hover:bg-gray-50" : ""}
+   405→                  onClick={canViewAllInvoices ? () => setDetailInvoice(inv) : undefined}
+   406→                  title={canViewAllInvoices ? undefined : "Bạn không có quyền xem chi tiết hóa đơn"}
+   407→                >
+   408→                  {visibleColumns.stt !== false && <td className="px-4 py-3 text-sm text-gray-900">{(page - 1) * limit + index + 1}</td>}
+   409→                  {visibleColumns.code !== false && <td className={cn("px-4 py-3 text-sm font-medium", canViewAllInvoices ? "text-blue-600" : "text-gray-700")}>{inv.code || "-"}</td>}
+   410→                  {visibleColumns.customer !== false && <td className="px-4 py-3 text-sm text-gray-900">{inv.customer?.name || "-"}</td>}
+   411→                  {visibleColumns.phone !== false && <td className="px-4 py-3 text-sm text-gray-900">{canViewCustomerPhone ? (inv.customer?.phone || "-") : maskPhone(inv.customer?.phone)}</td>}
+   412→                  {visibleColumns.source !== false && <td className="px-4 py-3 text-sm text-gray-900">{inv.customer?.source?.name || "-"}</td>}
+   413→                  {visibleColumns.channel !== false && <td className="px-4 py-3 text-sm text-gray-900">{inv.customer?.channel?.name || "-"}</td>}
+   414→                  {visibleColumns.branch !== false && <td className="px-4 py-3 text-sm text-gray-900">{inv.branch?.name || "-"}</td>}
+   415→                  {visibleColumns.createdAt !== false && (
+   416→                    <td className="px-4 py-3 text-sm text-gray-900">
+   417→                      {(() => {
+   418→                        try {
+   419→                          return format(new Date(inv.created_at), "HH:mm dd/MM/yyyy", { locale: vi });
+   420→                        } catch {
+   421→                          return "-";
+   422→                        }
+   423→                      })()}
+   424→                    </td>
+   425→                  )}
+   426→                  {visibleColumns.status !== false && (
+   427→                    <td className="px-4 py-3">
+   428→                      <span
+   429→                        className={cn(
+   430→                          "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
+   431→                          statusColors[inv.status] || "bg-gray-100 text-gray-700"
+   432→                        )}
+   433→                      >
+   434→                        {statusLabels[inv.status] || inv.status}
+   435→                      </span>
+   436→                    </td>
+   437→                  )}
+   438→                  {visibleColumns.total !== false && (
+   439→                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+   440→                      {new Intl.NumberFormat("vi-VN").format(Number(inv.final_amount || 0))}đ
+   441→                    </td>
+   442→                  )}
+   443→                </tr>
+   444→              ))
+   445→            )}
+   446→          </tbody>
+   447→        </table>
+   448→      </div>
+   449→
+   450→      {/* Pagination */}
+   451→      <div className="mt-4 flex items-center justify-between">
+   452→        <div className="text-sm text-gray-700">
+   453→          Hiển thị từ {(page - 1) * limit + 1} đến {Math.min(page * limit, total)} trên tổng số {total}
+   454→        </div>
+   455→        <div className="flex items-center gap-2">
+   456→          <button
+   457→            onClick={() => setPage(Math.max(1, page - 1))}
+   458→            disabled={page <= 1}
+   459→            className="rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+   460→          >
+   461→            <ChevronLeft className="h-4 w-4" />
+   462→          </button>
+   463→          <span className="text-sm text-gray-700">Trang {page} / {totalPages || 1}</span>
+   464→          <button
+   465→            onClick={() => setPage(Math.min(totalPages || 1, page + 1))}
+   466→            disabled={page >= (totalPages || 1)}
+   467→            className="rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+   468→          >
+   469→            <ChevronRight className="h-4 w-4" />
+   470→          </button>
+   471→        </div>
+   472→      </div>
+   473→
+   474→      {/* Invoice dialog — for unpaid invoices, opens the SAME editable
+   475→          InvoiceDialog used in the booking module (promotion, tip, payment
+   476→          method, confirm button). For paid invoices, opens the full-page
+   477→          PaidInvoiceView. */}
+   478→      {detailInvoice && detailInvoice.status === "pending" ? (
+   479→        <InvoiceDialog
+   480→          booking={invoiceToBooking(detailInvoice)}
+   481→          onClose={() => setDetailInvoice(null)}
+   482→          onPaid={() => {
+   483→            setDetailInvoice(null);
+   484→            queryClient.invalidateQueries({ queryKey: ["supabase-invoice-history"] });
+   485→          }}
+   486→        />
+   487→      ) : detailInvoice ? (
+   488→        <PaidInvoiceView
+   489→          invoiceId={detailInvoice.id}
+   490→          customerName={(detailInvoice as any).customer?.name}
+   491→          customerPhone={(detailInvoice as any).customer?.phone}
+   492→          bookingCode={detailInvoice.code}
+   493→          onClose={() => setDetailInvoice(null)}
+   494→        />
+   495→      ) : null}
+   496→
+   497→      {/* Paid invoice full-page view — also opened from InvoiceDetailDialog */}
+   498→      {paidInvoiceViewData && (
+   499→        <PaidInvoiceView
+   500→          invoiceId={paidInvoiceViewData.invoiceId}
+   501→          customerName={paidInvoiceViewData.customerName}
+   502→          customerPhone={paidInvoiceViewData.customerPhone}
+   503→          bookingCode={paidInvoiceViewData.code}
+   504→          onClose={() => setPaidInvoiceViewData(null)}
+   505→        />
+   506→      )}
+   507→
+   508→      {/* Fallback: InvoiceDialog opened from InvoiceDetailDialog's button
+   509→          (for paid invoices that the user wants to re-confirm). */}
+   510→      {invoiceDialogInvoice && (
+   511→        <InvoiceDialog
+   512→          booking={invoiceToBooking(invoiceDialogInvoice)}
+   513→          onClose={() => setInvoiceDialogInvoice(null)}
+   514→          onPaid={() => {
+   515→            setInvoiceDialogInvoice(null);
+   516→            queryClient.invalidateQueries({ queryKey: ["supabase-invoice-history"] });
+   517→          }}
+   518→        />
+   519→      )}
+   520→    </div>
+   521→  );
+   522→}
+   523→
+   524→/**
+   525→ * Read-only invoice detail dialog. Shows the full invoice: customer info,
+   526→ * items, promotion, tip, total, payment method, status, creation date.
+   527→ */
+   528→function InvoiceDetailDialog({
+   529→  invoice,
+   530→  onClose,
+   531→  canConfirmPayment,
+   532→  onConfirmPayment,
+   533→}: {
+   534→  invoice: Invoice;
+   535→  onClose: () => void;
+   536→  canConfirmPayment: boolean;
+   537→  onConfirmPayment: () => void;
+   538→}) {
+   539→  const fmt = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
+   540→  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+   541→  const queryClient = useQueryClient();
+   542→  // Permissions: "upload_photo" gates the device-upload feature. A single
+   543→  // permission covers both unpaid and paid invoices.
+   544→  // "delete_past_photos" gates deleting photos on PAID invoices.
+   545→  // "view_customer_photo" gates the lightbox (click-to-zoom).
+   546→  // "view_customer_phone" gates displaying the customer's phone number.
+   547→  const { hasPermission } = useAuthStore();
+   548→  const canUpload = hasPermission("upload_photo");
+   549→  const canDeletePastPhotos = hasPermission("delete_past_photos");
+   550→  const canViewCustomerPhoto = hasPermission("view_customer_photo");
+   551→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   552→  // Local copy of photos so uploads appear immediately without a refetch.
+   553→  const [photos, setPhotos] = useState<string[]>(
+   554→    Array.isArray(invoice.photos) ? invoice.photos : []
+   555→  );
+   556→  const [uploading, setUploading] = useState(false);
+   557→  const [uploadError, setUploadError] = useState("");
+   558→
+   559→  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+   560→    const files = e.target.files;
+   561→    if (!files || files.length === 0) return;
+   562→    setUploading(true);
+   563→    setUploadError("");
+   564→    try {
+   565→      const folder = invoice.code || invoice.id || "invoices";
+   566→      const newUrls = await uploadImagesToR2(files, `invoices/${folder}`);
+   567→      if (newUrls.length === 0) {
+   568→        setUploadError("Không thể tải ảnh lên. Vui lòng thử lại.");
+   569→        e.target.value = "";
+   570→        return;
+   571→      }
+   572→      const updated = [...photos, ...newUrls];
+   573→      // Persist to the invoice's note JSON via PUT.
+   574→      const res = await fetch(`/api/supabase/invoices/${invoice.id}`, {
+   575→        method: "PUT",
+   576→        headers: { "Content-Type": "application/json" },
+   577→        body: JSON.stringify({ photos: updated }),
+   578→      });
+   579→      const json = await res.json();
+   580→      if (!json.ok) throw new Error(json.error || "Lưu ảnh thất bại");
+   581→      setPhotos(updated);
+   582→      // Refresh the invoice list so the new photos sync everywhere.
+   583→      queryClient.invalidateQueries({ queryKey: ["supabase-invoice-history"] });
+   584→    } catch (err) {
+   585→      setUploadError(err instanceof Error ? err.message : "Tải ảnh lên thất bại");
+   586→    } finally {
+   587→      setUploading(false);
+   588→      e.target.value = "";
+   589→    }
+   590→  };
+   591→
+   592→  const handleRemovePhoto = async (idx: number) => {
+   593→    const updated = photos.filter((_, i) => i !== idx);
+   594→    try {
+   595→      await fetch(`/api/supabase/invoices/${invoice.id}`, {
+   596→        method: "PUT",
+   597→        headers: { "Content-Type": "application/json" },
+   598→        body: JSON.stringify({ photos: updated }),
+   599→      });
+   600→      setPhotos(updated);
+   601→      queryClient.invalidateQueries({ queryKey: ["supabase-invoice-history"] });
+   602→    } catch {
+   603→      /* best-effort */
+   604→    }
+   605→  };
+   606→
+   607→  const items = Array.isArray(invoice.items) ? invoice.items : [];
+   608→  const subtotal = items.reduce(
+   609→    (sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 1),
+   610→    0
+   611→  );
+   612→  const discount = Number(invoice.discount) || 0;
+   613→  const tip = Number(invoice.tip) || 0;
+   614→  const promotion = invoice.promotion;
+   615→  const finalAmount = Number(invoice.final_amount) || 0;
+   616→  const paymentMethod = invoice.payment_method;
+   617→  // `photos` is now stateful (see handlePhotoUpload above) so uploads appear
+   618→  // immediately. It is initialized from invoice.photos.
+   619→
+   620→  return (
+   621→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+   622→      <DialogContent className="order-dialog-dense !max-w-[747px] p-0 overflow-hidden">
+   623→        <DialogHeader className="px-5 pt-4 pb-1.5">
+   624→          <DialogTitle className="text-lg font-semibold">
+   625→            Hóa đơn {invoice.code ? `· ${invoice.code}` : ""}
+   626→          </DialogTitle>
+   627→        </DialogHeader>
+   628→        {/* Two-column layout: left = invoice detail, right = read-only photo gallery */}
+   629→        <div className="grid grid-cols-1 md:grid-cols-2 gap-0">
+   630→        {/* LEFT: invoice detail — scrollable independently */}
+   631→        <div className="px-5 pb-4 space-y-2 md:border-r border-gray-100 max-h-[60vh] overflow-y-auto">
+   632→          {/* Customer info */}
+   633→          <div className="rounded-lg border bg-gray-50 p-2.5 space-y-0 text-sm">
+   634→            <div className="flex justify-between">
+   635→              <span className="text-gray-500">Khách hàng:</span>
+   636→              <span className="font-medium text-gray-900">{invoice.customer?.name || "—"}</span>
+   637→            </div>
+   638→            <div className="flex justify-between">
+   639→              <span className="text-gray-500">Số điện thoại:</span>
+   640→              <span className="text-gray-900">{canViewCustomerPhone ? (invoice.customer?.phone || "—") : maskPhone(invoice.customer?.phone)}</span>
+   641→            </div>
+   642→            <div className="flex justify-between">
+   643→              <span className="text-gray-500">Nguồn khách hàng:</span>
+   644→              <span className="text-gray-900">{invoice.customer?.source?.name || "—"}</span>
+   645→            </div>
+   646→            <div className="flex justify-between">
+   647→              <span className="text-gray-500">Kênh đặt lịch:</span>
+   648→              <span className="text-gray-900">{invoice.customer?.channel?.name || "—"}</span>
+   649→            </div>
+   650→            {invoice.branch && (
+   651→              <div className="flex justify-between">
+   652→                <span className="text-gray-500">Chi nhánh:</span>
+   653→                <span className="text-gray-900">{invoice.branch.name}</span>
+   654→              </div>
+   655→            )}
+   656→            {invoice.staff && (
+   657→              <div className="flex justify-between">
+   658→                <span className="text-gray-500">Nhân viên:</span>
+   659→                <span className="text-gray-900">{invoice.staff.name}</span>
+   660→              </div>
+   661→            )}
+   662→            <div className="flex justify-between">
+   663→              <span className="text-gray-500">Ngày tạo:</span>
+   664→              <span className="text-gray-900">
+   665→                {(() => {
+   666→                  try {
+   667→                    return format(new Date(invoice.created_at), "HH:mm dd/MM/yyyy", { locale: vi });
+   668→                  } catch {
+   669→                    return "—";
+   670→                  }
+   671→                })()}
+   672→              </span>
+   673→            </div>
+   674→            <div className="flex justify-between">
+   675→              <span className="text-gray-500">Trạng thái:</span>
+   676→              <span
+   677→                className={cn(
+   678→                  "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
+   679→                  invoice.status === "completed" ? "bg-emerald-100 text-emerald-700"
+   680→                    : invoice.status === "pending" ? "bg-amber-100 text-amber-700"
+   681→                    : invoice.status === "cancelled" ? "bg-red-100 text-red-700"
+   682→                    : "bg-gray-100 text-gray-700"
+   683→                )}
+   684→              >
+   685→                {invoice.status === "completed" ? "Đã thanh toán"
+   686→                  : invoice.status === "pending" ? "Chưa thanh toán"
+   687→                  : invoice.status === "cancelled" ? "Đã hủy"
+   688→                  : invoice.status}
+   689→              </span>
+   690→            </div>
+   691→          </div>
+   692→
+   693→          {/* Services + Tip + Total */}
+   694→          <div className="rounded-lg border p-2.5">
+   695→            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+   696→              Dịch vụ
+   697→            </div>
+   698→            <div className="space-y-1.5">
+   699→              {items.length === 0 ? (
+   700→                <div className="text-sm text-gray-400">Chưa có dịch vụ</div>
+   701→              ) : (
+   702→                items.map((s, idx) => (
+   703→                  <div key={idx} className="flex items-start justify-between text-sm">
+   704→                    <div>
+   705→                      <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
+   706→                      {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
+   707→                    </div>
+   708→                    <div className="font-medium text-gray-900">
+   709→                      {fmt(Number(s.total) || Number(s.price) || 0)}đ
+   710→                    </div>
+   711→                  </div>
+   712→                ))
+   713→              )}
+   714→            </div>
+   715→
+   716→            {/* Thành tiền (subtotal) */}
+   717→            <div className="mt-1.5 flex items-center justify-between text-sm">
+   718→              <span className="text-gray-600">Thành tiền</span>
+   719→              <span className="font-medium text-gray-900">{fmt(subtotal)}đ</span>
+   720→            </div>
+   721→
+   722→            {/* Chương trình khuyến mãi */}
+   723→            <div className="mt-2 flex items-center justify-between text-sm">
+   724→              <span className="text-gray-600">Chương trình khuyến mãi</span>
+   725→              <span className="font-medium text-gray-900 text-right">
+   726→                {promotion
+   727→                  ? `${promotion.name} (−${fmt(promotion.discountAmount)}đ)`
+   728→                  : discount > 0
+   729→                  ? `−${fmt(discount)}đ`
+   730→                  : "—"}
+   731→              </span>
+   732→            </div>
+   733→
+   734→            {/* Tip */}
+   735→            <div className="mt-2 flex items-center justify-between text-sm">
+   736→              <span className="text-gray-600">Thường (thưởng thợ)</span>
+   737→              <span className="font-medium text-gray-900">
+   738→                {tip > 0 ? `+${fmt(tip)}đ` : "—"}
+   739→              </span>
+   740→            </div>
+   741→
+   742→            <div className="mt-1.5 flex justify-between border-t pt-1.5 text-sm">
+   743→              <span className="font-medium text-gray-700">Tổng tiền</span>
+   744→              <span className="font-bold text-emerald-700">{fmt(finalAmount)}đ</span>
+   745→            </div>
+   746→          </div>
+   747→
+   748→          {/* Payment method */}
+   749→          <div className="space-y-1.5">
+   750→            <div className="text-sm font-medium text-gray-700">Phương thức thanh toán</div>
+   751→            <div className="rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-900">
+   752→              {paymentMethod === "transfer" ? "Chuyển khoản" : "Tiền mặt"}
+   753→            </div>
+   754→          </div>
+   755→
+   756→          {/* Note (if any) */}
+   757→          {invoice.note && (
+   758→            <div className="space-y-1.5">
+   759→              <div className="text-sm font-medium text-gray-700">Ghi chú</div>
+   760→              <div className="rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900">
+   761→                {invoice.note}
+   762→              </div>
+   763→            </div>
+   764→          )}
+   765→
+   766→          {/* Actions */}
+   767→          <div className="flex justify-end gap-2 border-t pt-2">
+   768→            {/* "Xác nhận thanh toán" button — only for unpaid invoices (status
+   769→                "pending") when the user has the appropriate permission. Opens
+   770→                the InvoiceDialog with editable UI (promotion, tip, payment). */}
+   771→            {invoice.status === "pending" && canConfirmPayment && (
+   772→              <Button
+   773→                type="button"
+   774→                onClick={onConfirmPayment}
+   775→                className="bg-emerald-600 hover:bg-emerald-700"
+   776→              >
+   777→                Xác nhận thanh toán
+   778→              </Button>
+   779→            )}
+   780→            <Button type="button" variant="outline" onClick={onClose}>
+   781→              Đóng
+   782→            </Button>
+   783→          </div>
+   784→        </div>
+   785→
+   786→        {/* RIGHT: photo gallery + upload (upload gated by upload_photo permission) */}
+   787→        <div className="px-5 pb-4 space-y-3 bg-gray-50/50 max-h-[60vh] overflow-y-auto">
+   788→          <div>
+   789→            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5 flex items-center gap-2">
+   790→              <Camera className="h-4 w-4" />
+   791→              Ảnh đính kèm
+   792→            </div>
+   793→            {canUpload && (
+   794→              <label className="mb-2 inline-flex items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 cursor-pointer w-fit">
+   795→                {uploading ? (
+   796→                  <Loader2 className="h-4 w-4 animate-spin" />
+   797→                ) : (
+   798→                  <Camera className="h-4 w-4" />
+   799→                )}
+   800→                {uploading ? "Đang tải..." : "Tải ảnh lên"}
+   801→                <input
+   802→                  type="file"
+   803→                  accept="image/*"
+   804→                  multiple
+   805→                  className="hidden"
+   806→                  disabled={uploading}
+   807→                  onChange={handlePhotoUpload}
+   808→                />
+   809→              </label>
+   810→            )}
+   811→            {uploadError && (
+   812→              <div className="mb-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+   813→                {uploadError}
+   814→              </div>
+   815→            )}
+   816→            {photos.length === 0 ? (
+   817→              <div className="text-sm text-gray-400">
+   818→                {canUpload ? "Chưa có ảnh nào được tải lên" : "Chưa có ảnh nào được tải lên"}
+   819→              </div>
+   820→            ) : (
+   821→              <div className="grid grid-cols-3 gap-1.5">
+   822→                {photos.map((src, idx) => (
+   823→                  <button
+   824→                    key={idx}
+   825→                    type="button"
+   826→                    onClick={() => canViewCustomerPhoto && setLightboxPhoto(src)}
+   827→                    disabled={!canViewCustomerPhoto}
+   828→                    title={canViewCustomerPhoto ? undefined : "Bạn không có quyền xem ảnh"}
+   829→                    className="relative aspect-square overflow-hidden rounded-lg border bg-white"
+   830→                  >
+   831→                    <img
+   832→                      src={src}
+   833→                      alt={`Ảnh ${idx + 1}`}
+   834→                      className="h-full w-full object-cover"
+   835→                    />
+   836→                    {canDeletePastPhotos && (
+   837→                      <span
+   838→                        role="button"
+   839→                        tabIndex={0}
+   840→                        onClick={(e) => { e.stopPropagation(); handleRemovePhoto(idx); }}
+   841→                        onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleRemovePhoto(idx); } }}
+   842→                        className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+   843→                        aria-label="Xóa ảnh"
+   844→                      >
+   845→                        <span className="text-xs">×</span>
+   846→                      </span>
+   847→                    )}
+   848→                  </button>
+   849→                ))}
+   850→              </div>
+   851→            )}
+   852→          </div>
+   853→        </div>
+   854→        </div>
+   855→      </DialogContent>
+   856→
+   857→      {/* Photo lightbox — clicking a thumbnail opens the full-size image. */}
+   858→      {lightboxPhoto && (
+   859→        <Dialog open onOpenChange={(v) => !v && setLightboxPhoto(null)}>
+   860→          <DialogContent className="max-w-4xl">
+   861→            <img
+   862→              src={lightboxPhoto}
+   863→              alt="Ảnh hóa đơn"
+   864→              className="w-full h-auto"
+   865→            />
+   866→          </DialogContent>
+   867→        </Dialog>
+   868→      )}
+   869→    </Dialog>
+   870→  );
+   871→}
+   872→

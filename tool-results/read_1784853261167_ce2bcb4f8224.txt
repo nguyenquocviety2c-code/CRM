@@ -1,0 +1,1092 @@
+     1→"use client";
+     2→
+     3→import Link from "next/link";
+     4→import dynamic from "next/dynamic";
+     5→// Lazy-load InvoiceDialog — only opened when the user clicks "Xác nhận thanh
+     6→// toán" on a pending past-date order. Keeps the invoice list page lighter.
+     7→const InvoiceDialog = dynamic(
+     8→  () => import("@/components/features/booking/invoice-dialog").then((m) => m.InvoiceDialog),
+     9→  { ssr: false }
+    10→);
+    11→import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+    12→import { format } from "date-fns";
+    13→import { vi } from "date-fns/locale";
+    14→import { History, ChevronLeft, ChevronRight, Camera, Loader2, ChevronDown } from "lucide-react";
+    15→import { useBranchStore } from "@/stores/branch-store";
+    16→import { useAuthStore } from "@/stores/auth-store";
+    17→import { BranchSelector } from "@/components/layout/branch-selector";
+    18→import { cn, vietnamToday, vietnamDayRangeDates, localDayStartUtc, localDayEndUtc, toVietnamDay } from "@/lib/utils";
+    19→import { parseMultiCustomerNote } from "@/lib/multi-customer";
+    20→import { useState, useMemo } from "react";
+    21→import { DateRangePicker } from "@/components/shared/date-range-picker";
+    22→import { format as fnsFormat } from "date-fns";
+    23→import {
+    24→  Dialog,
+    25→  DialogContent,
+    26→  DialogHeader,
+    27→  DialogTitle,
+    28→} from "@/components/ui/dialog";
+    29→import { Button } from "@/components/ui/button";
+    30→import { uploadImagesToR2 } from "@/lib/upload";
+    31→import { maskPhone } from "@/lib/phone-mask";
+    32→import {
+    33→  ColumnToggle,
+    34→  ColumnDef,
+    35→  buildDefaultVisibleColumns,
+    36→  toggleColumnKey,
+    37→} from "@/components/shared/column-toggle";
+    38→import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
+    39→const PaidInvoiceView = dynamic(
+    40→  () => import("@/components/features/booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
+    41→  { ssr: false }
+    42→);
+    43→import {
+    44→  BookingStatusType,
+    45→} from "@/lib/constants";
+    46→import type { Booking } from "@/stores/booking-store";
+    47→import {
+    48→  DropdownMenu,
+    49→  DropdownMenuContent,
+    50→  DropdownMenuItem,
+    51→  DropdownMenuTrigger,
+    52→} from "@/components/ui/dropdown-menu";
+    53→
+    54→interface BookingService {
+    55→  service?: { name?: string; price?: number } | null;
+    56→  staff?: { name?: string } | null;
+    57→  category?: { name?: string } | null;
+    58→}
+    59→
+    60→interface OrderItem {
+    61→  name?: string;
+    62→  price?: number;
+    63→  staffName?: string;
+    64→}
+    65→
+    66→interface BookingOrder {
+    67→  id: string;
+    68→  code: string | null;
+    69→  status: string; // booking status: new, confirmed, checkin, checkout, no_show, cancelled
+    70→  date_time: string | null;
+    71→  created_at: string;
+    72→  created_by: string | null;
+    73→  /** Enriched creator staff ({ id, name }) — attached by the bookings API's
+    74→   *  enrichBookings(). Null when created_by is null (kiosk booking) or when
+    75→   *  the staff was deleted. The "Người tạo" column reads THIS, not the raw
+    76→   *  created_by UUID. */
+    77→  createdBy?: { id: string; name: string } | null;
+    78→  number_of_customers?: number;
+    79→  note?: string | null;
+    80→  customer: { id: string; name: string; phone: string | null; code?: string | null } | null;
+    81→  branch: { id: string; name: string } | null;
+    82→  source: { id: string; name: string } | null;
+    83→  channel: { id: string; name: string } | null;
+    84→  services: BookingService[];
+    85→  // Joined invoice (if any exists for this booking)
+    86→  invoice?: {
+    87→    id: string;
+    88→    code: string | null;
+    89→    status: string; // invoice status: pending, completed, cancelled
+    90→    final_amount: number;
+    91→    tip: number;
+    92→    promotion: {
+    93→      id: string;
+    94→      code: string | null;
+    95→      name: string;
+    96→      discountValue: number;
+    97→      discountType: string;
+    98→      discountAmount: number;
+    99→    } | null;
+   100→    payment_method: string;
+   101→    items: OrderItem[];
+   102→    created_at: string;
+   103→    photos?: string[];
+   104→  } | null;
+   105→}
+   106→
+   107→/** Convert a BookingOrder (cashier invoices page shape) to a minimal Booking
+   108→ *  object so it can be passed to InvoiceDialog (which expects a Booking). */
+   109→function orderToBooking(order: BookingOrder): Booking {
+   110→  return {
+   111→    id: order.id,
+   112→    code: order.code || "",
+   113→    date: "",
+   114→    time: "",
+   115→    date_time: order.date_time || undefined,
+   116→    status: order.status as BookingStatusType,
+   117→    note: order.note ?? null,
+   118→    numberOfCustomers: order.number_of_customers || 1,
+   119→    customerSourceId: null,
+   120→    customerChannelId: null,
+   121→    // Pass the enriched creator so InvoiceDialog + its activity history can
+   122→    // show the staff name (not null). Matches the bookings API shape.
+   123→    createdBy: order.createdBy ?? null,
+   124→    customer: {
+   125→      id: order.customer?.id || "",
+   126→      name: order.customer?.name || "",
+   127→      phone: order.customer?.phone || "",
+   128→      code: order.customer?.code || "",
+   129→    },
+   130→    branch: order.branch ? { id: order.branch.id, name: order.branch.name } : null,
+   131→    // InvoiceDialog reads booking.services as BookingServiceRow[] — map the
+   132→    // cashier page's BookingService shape into the fields it actually uses.
+   133→    services: (order.services || []).map((s, i) => ({
+   134→      id: `svc-${i}`,
+   135→      booking_id: order.id,
+   136→      service_id: "",
+   137→      staff_id: null,
+   138→      service_category_id: null,
+   139→      sort_order: i,
+   140→      service: s.service ? { id: "", name: s.service.name || "", code: "", price: s.service.price || 0, duration: 60 } : null,
+   141→      category: s.category ? { id: "", name: s.category.name || "" } : null,
+   142→      staff: s.staff ? { id: "", name: s.staff.name || "" } : null,
+   143→    })),
+   144→    invoice: order.invoice
+   145→      ? {
+   146→          id: order.invoice.id,
+   147→          code: order.invoice.code,
+   148→          status: order.invoice.status,
+   149→          final_amount: order.invoice.final_amount,
+   150→          payment_method: order.invoice.payment_method,
+   151→        }
+   152→      : null,
+   153→  } as Booking;
+   154→}
+   155→
+   156→export default function InvoicesPage() {
+   157→  const { selectedBranchId } = useBranchStore();
+   158→  const { hasPermission } = useAuthStore();
+   159→  // Permission: can the staff see invoices from ALL branches?
+   160→  // If false, force-filter to the staff's selected branch only.
+   161→  const canViewAllInvoices = hasPermission("view_all_invoices");
+   162→  const canConfirmOldInvoice = hasPermission("confirm_old_invoice");
+   163→  const [search, setSearch] = useState("");
+   164→  const [status, setStatus] = useState("all");
+   165→  const [page, setPage] = useState(1);
+   166→  const [detailOrder, setDetailOrder] = useState<BookingOrder | null>(null);
+   167→  const [paidInvoiceView, setPaidInvoiceView] = useState<{ invoiceId: string; customerName?: string; customerPhone?: string; code?: string | null } | null>(null);
+   168→  // Date range filter (from-to). Defaults to today (matches the booking module
+   169→  // pattern). Quick-range buttons (Hôm nay / 7 ngày / 30 ngày) jump to common
+   170→  // windows; the DateRangePicker lets the user pick an arbitrary range. The
+   171→  // range is sent to the API as date_from/date_to (ISO strings).
+   172→  const [dateNav, setDateNav] = useState<"today" | "7days" | "30days" | "custom">("today");
+   173→  const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>(() => {
+   174→    // Timezone-safe: anchor to the Vietnam calendar day (UTC+7) so the
+   175→    // default "today" range is correct regardless of the host machine's
+   176→    // timezone. The Date objects are UTC instants marking VN-day boundaries.
+   177→    return vietnamDayRangeDates(vietnamToday());
+   178→  });
+   179→  // ISO bounds sent to the API: from = start-of-VN-day (UTC), to = end-of-VN-day (UTC).
+   180→  const dateFromISO = useMemo(() => localDayStartUtc(toVietnamDay(dateRange.from)), [dateRange.from]);
+   181→  const dateToISO = useMemo(() => localDayEndUtc(toVietnamDay(dateRange.to)), [dateRange.to]);
+   182→  // Invoice dialog state — when set, the InvoiceDialog opens (for confirming
+   183→  // payment on unpaid past-date orders via the "Xác nhận thanh toán" button).
+   184→  const [invoiceDialogOrder, setInvoiceDialogOrder] = useState<BookingOrder | null>(null);
+   185→  const limit = 20;
+   186→  const queryClient = useQueryClient();
+   187→
+   188→  // Status mutation: PATCH booking status (checkin / no_show / cancelled).
+   189→  // When a booking transitions to "checkin", a pending invoice is created (so
+   190→  // it shows up in the cashier list + invoice history). The booking page
+   191→  // already does this via createPendingInvoiceForBooking; here we replicate
+   192→  // the status PATCH + let the next refetch pick up the new invoice.
+   193→  const statusMutation = useMutation({
+   194→    mutationFn: async ({
+   195→      bookingId,
+   196→      newStatus,
+   197→    }: {
+   198→      bookingId: string;
+   199→      newStatus: BookingStatusType;
+   200→    }) => {
+   201→      const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
+   202→        method: "PATCH",
+   203→        headers: { "Content-Type": "application/json" },
+   204→        body: JSON.stringify({ status: newStatus, actor_staff_id: useAuthStore.getState().user?.id }),
+   205→      });
+   206→      return res.json();
+   207→    },
+   208→    onSuccess: () => {
+   209→      queryClient.invalidateQueries({ queryKey: ["supabase-orders"] });
+   210→      // Invalidate the invoice-activities cache so the "Lịch sử thao tác"
+   211→      // table refetches after a status change.
+   212→      queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
+   213→    },
+   214→  });
+   215→
+   216→  // Column toggle: each data column can be shown/hidden via the "Cột" button.
+   217→  const columnDefs: ColumnDef[] = [
+   218→    { key: "stt", label: "STT" },
+   219→    { key: "code", label: "Mã đơn hàng" },
+   220→    { key: "customer", label: "Tên khách hàng" },
+   221→    { key: "source", label: "Nguồn khách hàng" },
+   222→    { key: "channel", label: "Kênh đặt lịch" },
+   223→    { key: "createdAt", label: "Ngày tạo" },
+   224→    { key: "createdBy", label: "Người tạo" },
+   225→    { key: "status", label: "Trạng thái" },
+   226→    { key: "total", label: "Tổng tiền" },
+   227→  ];
+   228→  const [visibleColumns, setVisibleColumns] = useState(() =>
+   229→    buildDefaultVisibleColumns(columnDefs)
+   230→  );
+   231→  const toggleColumn = (key: string) =>
+   232→    setVisibleColumns((prev) => toggleColumnKey(prev, key));
+   233→
+   234→  // Fetch ALL bookings (an "order" = a booking; payment status is derived from
+   235→  // its linked invoice). Per the user's logic: "chỉ cần lên lịch hẹn là phải có
+   236→  // trong danh sách đơn hàng" — every booking appears here regardless of status.
+   237→  const { data, isLoading } = useQuery({
+   238→    queryKey: ["supabase-orders", selectedBranchId, search, page, canViewAllInvoices, dateFromISO, dateToISO],
+   239→    queryFn: async () => {
+   240→      const params = new URLSearchParams();
+   241→      params.append("page", String(page));
+   242→      params.append("limit", String(limit));
+   243→      // If the staff doesn't have "view_all_invoices" permission, force-filter
+   244→      // to their selected branch (ignore "all"). If they do have the permission,
+   245→      // respect the branch selector (including "all").
+   246→      if (canViewAllInvoices) {
+   247→        if (selectedBranchId && selectedBranchId !== "all") params.append("branch_id", selectedBranchId);
+   248→      } else {
+   249→        if (selectedBranchId && selectedBranchId !== "all") {
+   250→          params.append("branch_id", selectedBranchId);
+   251→        }
+   252→      }
+   253→      if (search) params.append("search", search);
+   254→      params.append("date_from", dateFromISO);
+   255→      params.append("date_to", dateToISO);
+   256→
+   257→      const res = await fetch(`/api/supabase/bookings?${params.toString()}`);
+   258→      const json = await res.json();
+   259→      if (!json.ok) return { data: [] as BookingOrder[], pagination: { total: 0, totalPages: 0 } };
+   260→      const bookings: BookingOrder[] = json.data || [];
+   261→
+   262→      // The bookings API already attaches a linked invoice summary (id, code,
+   263→      // status, final_amount, payment_method, booking_id) to each booking via
+   264→      // its enrichBookings() batch lookup. Use that directly instead of doing
+   265→      // N+1 per-booking invoice fetches here — that was the main source of the
+   266→      // slow load (20 parallel requests adding ~900ms).
+   267→      const withInvoices: BookingOrder[] = bookings.map((b) => {
+   268→        const inv = (b as { invoice?: Record<string, unknown> | null }).invoice;
+   269→        if (inv && inv.id) {
+   270→          return {
+   271→            ...b,
+   272→            invoice: {
+   273→              id: String(inv.id),
+   274→              code: (inv.code as string | null) ?? null,
+   275→              status: (inv.status as string) || "pending",
+   276→              final_amount: Number(inv.final_amount) || 0,
+   277→              tip: 0,
+   278→              promotion: null,
+   279→              payment_method: (inv.payment_method as string) || "cash",
+   280→              items: [],
+   281→              created_at: "",
+   282→              photos: [],
+   283→            },
+   284→          };
+   285→        }
+   286→        return { ...b, invoice: null };
+   287→      });
+   288→
+   289→      return {
+   290→        data: withInvoices,
+   291→        pagination: json.pagination || { total: 0, totalPages: 0 },
+   292→      };
+   293→    },
+   294→    // Cache the result so re-visiting the page (or switching tabs back) shows
+   295→    // the list INSTANTLY from cache while a background refetch updates if stale.
+   296→    staleTime: 30_000, // 30s — fresh enough for an order list, fast re-visit.
+   297→    gcTime: 5 * 60_000, // keep cached for 5min after unmount.
+   298→  });
+   299→
+   300→  // Derive payment status for an order:
+   301→  // - booking cancelled/no_show → "Đã hủy"
+   302→  // - invoice status === "completed" → "Đã thanh toán"
+   303→  // - otherwise (no invoice, or invoice pending) → "Chưa thanh toán"
+   304→  const getOrderStatus = (order: BookingOrder): string => {
+   305→    if (order.status === "cancelled" || order.status === "no_show") return "cancelled";
+   306→    if (order.invoice?.status === "completed") return "completed";
+   307→    return "pending";
+   308→  };
+   309→
+   310→  const allOrders = data?.data || [];
+   311→  // Apply the status filter client-side (since payment status is derived).
+   312→  const orders = status === "all" ? allOrders : allOrders.filter((o) => getOrderStatus(o) === status);
+   313→  const total = data?.pagination?.total || 0;
+   314→  const totalPages = data?.pagination?.totalPages || 0;
+   315→
+   316→  const statusOptions = [
+   317→    { value: "all", label: "Tất cả" },
+   318→    { value: "completed", label: "Đã thanh toán" },
+   319→    { value: "pending", label: "Chưa thanh toán" },
+   320→    { value: "cancelled", label: "Hủy" },
+   321→  ];
+   322→
+   323→  return (
+   324→    <div className="flex h-full flex-col">
+   325→      {/* Header */}
+   326→      <div className="mb-4 flex items-center justify-between">
+   327→        <h1 className="text-2xl font-bold text-gray-900">Danh sách đơn hàng</h1>
+   328→        <div className="flex items-center gap-2">
+   329→          {canViewAllInvoices && <BranchSelector />}
+   330→          <Link
+   331→            href="/cashier/activity"
+   332→            className="inline-flex h-8 items-center gap-2 rounded-md bg-white px-4 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+   333→          >
+   334→            <History className="h-4 w-4" />
+   335→            Lịch sử hóa đơn
+   336→          </Link>
+   337→        </div>
+   338→      </div>
+   339→
+   340→      {/* Filter Bar */}
+   341→      <div className="mb-4 flex flex-col gap-3 rounded-lg bg-white p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+   342→        {/* Left: date nav (Hôm nay / 7 ngày / 30 ngày + from-to range picker) —
+   343→            mirrors the booking module's filter layout. */}
+   344→        <div className="flex items-center gap-2">
+   345→          <Button
+   346→            variant={dateNav === "today" ? "default" : "outline"}
+   347→            size="sm"
+   348→            onClick={() => {
+   349→              setDateRange(vietnamDayRangeDates(vietnamToday()));
+   350→              setDateNav("today");
+   351→              setPage(1);
+   352→            }}
+   353→            className={dateNav === "today" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   354→          >
+   355→            Hôm nay
+   356→          </Button>
+   357→          <Button
+   358→            variant={dateNav === "7days" ? "default" : "outline"}
+   359→            size="sm"
+   360→            onClick={() => {
+   361→              // Timezone-safe: 7-day window ending today (Vietnam days).
+   362→              const today = vietnamToday();
+   363→              const to = new Date(`${today}T23:59:59.999+07:00`);
+   364→              const todayMs = to.getTime();
+   365→              const fromDay = toVietnamDay(todayMs - 6 * 24 * 60 * 60 * 1000);
+   366→              const from = new Date(`${fromDay}T00:00:00+07:00`);
+   367→              setDateRange({ from, to });
+   368→              setDateNav("7days");
+   369→              setPage(1);
+   370→            }}
+   371→            className={dateNav === "7days" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   372→          >
+   373→            7 ngày
+   374→          </Button>
+   375→          <Button
+   376→            variant={dateNav === "30days" ? "default" : "outline"}
+   377→            size="sm"
+   378→            onClick={() => {
+   379→              // Timezone-safe: 30-day window ending today (Vietnam days).
+   380→              const today = vietnamToday();
+   381→              const to = new Date(`${today}T23:59:59.999+07:00`);
+   382→              const todayMs = to.getTime();
+   383→              const fromDay = toVietnamDay(todayMs - 29 * 24 * 60 * 60 * 1000);
+   384→              const from = new Date(`${fromDay}T00:00:00+07:00`);
+   385→              setDateRange({ from, to });
+   386→              setDateNav("30days");
+   387→              setPage(1);
+   388→            }}
+   389→            className={dateNav === "30days" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+   390→          >
+   391→            30 ngày
+   392→          </Button>
+   393→          <DateRangePicker
+   394→            size="sm"
+   395→            dateFrom={fnsFormat(dateRange.from, "dd/MM/yyyy")}
+   396→            dateTo={fnsFormat(dateRange.to, "dd/MM/yyyy")}
+   397→            onChange={(from, to) => {
+   398→              // from/to are "DD/MM/YYYY" (Vietnam calendar days). Build UTC
+   399→              // instants at VN-day boundaries so the range is timezone-safe.
+   400→              const [d1, m1, y1] = from.split("/").map(Number);
+   401→              const [d2, m2, y2] = to.split("/").map(Number);
+   402→              const fDay = `${y1}-${String(m1).padStart(2, "0")}-${String(d1).padStart(2, "0")}`;
+   403→              const tDay = `${y2}-${String(m2).padStart(2, "0")}-${String(d2).padStart(2, "0")}`;
+   404→              const f = new Date(`${fDay}T00:00:00+07:00`);
+   405→              const t = new Date(`${tDay}T23:59:59.999+07:00`);
+   406→              setDateRange({ from: f, to: t });
+   407→              setDateNav("custom");
+   408→              setPage(1);
+   409→            }}
+   410→          />
+   411→        </div>
+   412→        {/* Right: search box */}
+   413→        <input
+   414→          type="text"
+   415→          placeholder="Mã đơn hàng, tên KH..."
+   416→          value={search}
+   417→          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+   418→          className="flex-1 min-w-[200px] rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+   419→        />
+   420→      </div>
+   421→
+   422→      {/* Status Filter Dropdown + Column Toggle */}
+   423→      <div className="mb-4 flex items-center gap-2">
+   424→        <DropdownMenu>
+   425→          <DropdownMenuTrigger asChild>
+   426→            <button
+   427→              type="button"
+   428→              className="inline-flex h-8 items-center gap-1 rounded-md bg-white px-4 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+   429→            >
+   430→              {statusOptions.find((o) => o.value === status)?.label || "Tất cả"}
+   431→              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+   432→            </button>
+   433→          </DropdownMenuTrigger>
+   434→          <DropdownMenuContent align="start">
+   435→            {statusOptions.map((option) => (
+   436→              <DropdownMenuItem
+   437→                key={option.value}
+   438→                onClick={() => { setStatus(option.value); }}
+   439→                className={cn("cursor-pointer text-xs", status === option.value && "font-bold")}
+   440→              >
+   441→                {option.label}
+   442→              </DropdownMenuItem>
+   443→            ))}
+   444→          </DropdownMenuContent>
+   445→        </DropdownMenu>
+   446→        <div className="ml-auto">
+   447→          <ColumnToggle
+   448→            columnDefs={columnDefs}
+   449→            visibleColumns={visibleColumns}
+   450→            onToggleColumn={toggleColumn}
+   451→          />
+   452→        </div>
+   453→      </div>
+   454→
+   455→      {/* Table */}
+   456→      <div className="cashier-table flex-1 overflow-auto rounded-lg bg-white shadow-sm">
+   457→        <table className="min-w-full divide-y divide-gray-200">
+   458→          <thead className="bg-gray-50">
+   459→            <tr>
+   460→              {visibleColumns.stt !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">STT</th>}
+   461→              {visibleColumns.code !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Mã đơn hàng</th>}
+   462→              {visibleColumns.customer !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Tên khách hàng</th>}
+   463→              {visibleColumns.source !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Nguồn khách hàng</th>}
+   464→              {visibleColumns.channel !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Kênh đặt lịch</th>}
+   465→              {visibleColumns.createdAt !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Ngày tạo</th>}
+   466→              {visibleColumns.createdBy !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Người tạo</th>}
+   467→              {visibleColumns.status !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Trạng thái</th>}
+   468→              {visibleColumns.total !== false && <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Tổng tiền</th>}
+   469→            </tr>
+   470→          </thead>
+   471→          <tbody className="divide-y divide-gray-200 bg-white">
+   472→            {isLoading ? (
+   473→              <tr>
+   474→                <td colSpan={9} className="px-4 py-8 text-center text-gray-500">Đang tải...</td>
+   475→              </tr>
+   476→            ) : orders.length === 0 ? (
+   477→              <tr>
+   478→                <td colSpan={9} className="px-4 py-8 text-center text-gray-500">Không có đơn hàng nào</td>
+   479→              </tr>
+   480→            ) : (
+   481→              orders.map((order, index) => {
+   482→                const servicesTotal = (order.services || []).reduce(
+   483→                  (sum, s) => sum + (Number(s.service?.price) || 0),
+   484→                  0
+   485→                );
+   486→                const totalAmount = order.invoice?.final_amount ?? servicesTotal;
+   487→                // Derive payment status for the row: invoice completed wins
+   488→                // over booking status (covers paid-but-not-checked-out orders).
+   489→                const rowOrderStatus =
+   490→                  order.status === "cancelled" || order.status === "no_show"
+   491→                    ? "cancelled"
+   492→                    : order.invoice?.status === "completed"
+   493→                      ? "completed"
+   494→                      : "pending";
+   495→                return (
+   496→                  <tr key={order.id} className="hover:bg-gray-50">
+   497→                    {visibleColumns.stt !== false && <td className="px-4 py-3 text-sm text-gray-900">{(page - 1) * limit + index + 1}</td>}
+   498→                    {visibleColumns.code !== false && (
+   499→                      <td className="px-4 py-3 text-sm font-medium">
+   500→                        {canViewAllInvoices ? (
+   501→                          <button
+   502→                            onClick={() => {
+   503→                              if (order.invoice?.status === "completed" && order.invoice?.id) {
+   504→                                setPaidInvoiceView({
+   505→                                  invoiceId: order.invoice.id,
+   506→                                  customerName: order.customer?.name,
+   507→                                  customerPhone: order.customer?.phone,
+   508→                                  code: order.code,
+   509→                                });
+   510→                              } else {
+   511→                                setDetailOrder(order);
+   512→                              }
+   513→                            }}
+   514→                            className="text-blue-600 hover:text-blue-800 hover:underline"
+   515→                          >
+   516→                            {order.code || "-"}
+   517→                          </button>
+   518→                        ) : (
+   519→                          <span className="text-gray-700" title="Bạn không có quyền xem chi tiết hóa đơn">
+   520→                            {order.code || "-"}
+   521→                          </span>
+   522→                        )}
+   523→                      </td>
+   524→                    )}
+   525→                    {visibleColumns.customer !== false && <td className="px-4 py-3 text-sm text-gray-900">{order.customer?.name || "-"}</td>}
+   526→                    {visibleColumns.source !== false && <td className="px-4 py-3 text-sm text-gray-900">{order.source?.name || "-"}</td>}
+   527→                    {visibleColumns.channel !== false && <td className="px-4 py-3 text-sm text-gray-900">{order.channel?.name || "-"}</td>}
+   528→                    {visibleColumns.createdAt !== false && (
+   529→                      <td className="px-4 py-3 text-sm text-gray-900">
+   530→                        {(() => {
+   531→                          try {
+   532→                            return format(new Date(order.created_at), "HH:mm dd/MM/yyyy", { locale: vi });
+   533→                          } catch {
+   534→                            return "-";
+   535→                          }
+   536→                        })()}
+   537→                      </td>
+   538→                    )}
+   539→                    {visibleColumns.createdBy !== false && (
+   540→                      <td className="px-4 py-3 text-sm text-gray-900">
+   541→                        {order.createdBy?.name || "Khách hàng"}
+   542→                      </td>
+   543→                    )}
+   544→                    {visibleColumns.status !== false && (
+   545→                      <td className="px-4 py-3">
+   546→                        {(() => {
+   547→                          const bs = order.status as BookingStatusType;
+   548→                          // Payment status takes PRIORITY over booking status:
+   549→                          // if the invoice is "completed", the order IS paid
+   550→                          // regardless of the booking's status (checkin /
+   551→                          // confirmed). This fixes orders that were paid before
+   552→                          // the booking→checkout auto-sync was added.
+   553→                          if (rowOrderStatus === "completed") {
+   554→                            return (
+   555→                              <span className="inline-flex w-fit rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+   556→                                Đã thanh toán
+   557→                              </span>
+   558→                            );
+   559→                          }
+   560→                          // cancelled → single badge "Đã hủy" in red
+   561→                          if (bs === "cancelled") {
+   562→                            return (
+   563→                              <span className="inline-flex w-fit rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+   564→                                Đã hủy
+   565→                              </span>
+   566→                            );
+   567→                          }
+   568→                          // no_show → single badge
+   569→                          if (bs === "no_show") {
+   570→                            return (
+   571→                              <span className="inline-flex w-fit rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+   572→                                Không đến
+   573→                              </span>
+   574→                            );
+   575→                          }
+   576→                          // checkin (invoice not completed) → "Chưa thanh toán" badge only (no action button)
+   577→                          if (bs === "checkin") {
+   578→                            return (
+   579→                              <span className="inline-flex w-fit rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+   580→                                Chưa thanh toán
+   581→                              </span>
+   582→                            );
+   583→                          }
+   584→                          // new / confirmed → "chưa Checkin" + action dropdown (Checkin, Không đến, Hủy)
+   585→                          return (
+   586→                            <div className="flex items-center gap-1">
+   587→                              <span className="inline-flex w-fit rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+   588→                                chưa Checkin
+   589→                              </span>
+   590→                              <DropdownMenu>
+   591→                                <DropdownMenuTrigger asChild>
+   592→                                  <button
+   593→                                    type="button"
+   594→                                    className="inline-flex items-center gap-0.5 rounded border border-gray-300 px-1.5 py-0.5 text-[10px] text-gray-600 hover:bg-gray-50"
+   595→                                  >
+   596→                                    Chọn <ChevronDown className="h-2.5 w-2.5" />
+   597→                                  </button>
+   598→                                </DropdownMenuTrigger>
+   599→                                <DropdownMenuContent align="start">
+   600→                                  <DropdownMenuItem
+   601→                                    onClick={() => statusMutation.mutate({ bookingId: order.id, newStatus: "checkin" })}
+   602→                                    className="cursor-pointer text-xs"
+   603→                                  >
+   604→                                    Checkin
+   605→                                  </DropdownMenuItem>
+   606→                                  <DropdownMenuItem
+   607→                                    onClick={() => statusMutation.mutate({ bookingId: order.id, newStatus: "no_show" })}
+   608→                                    className="cursor-pointer text-xs"
+   609→                                  >
+   610→                                    Không đến
+   611→                                  </DropdownMenuItem>
+   612→                                  <DropdownMenuItem
+   613→                                    onClick={() => statusMutation.mutate({ bookingId: order.id, newStatus: "cancelled" })}
+   614→                                    className="cursor-pointer text-xs text-red-600"
+   615→                                  >
+   616→                                    Hủy
+   617→                                  </DropdownMenuItem>
+   618→                                </DropdownMenuContent>
+   619→                              </DropdownMenu>
+   620→                            </div>
+   621→                          );
+   622→                        })()}
+   623→                      </td>
+   624→                    )}
+   625→                    {visibleColumns.total !== false && (
+   626→                      <td className="px-4 py-3 text-sm font-medium text-gray-900">
+   627→                        {new Intl.NumberFormat("vi-VN").format(Number(totalAmount || 0))}
+   628→                      </td>
+   629→                    )}
+   630→                  </tr>
+   631→                );
+   632→              })
+   633→            )}
+   634→          </tbody>
+   635→        </table>
+   636→      </div>
+   637→
+   638→      {/* Pagination */}
+   639→      <div className="mt-4 flex items-center justify-between">
+   640→        <div className="text-sm text-gray-700">
+   641→          Hiển thị từ {(page - 1) * limit + 1} đến {Math.min(page * limit, total)} trên tổng số {total}
+   642→        </div>
+   643→        <div className="flex items-center gap-2">
+   644→          <button
+   645→            onClick={() => setPage(Math.max(1, page - 1))}
+   646→            disabled={page <= 1}
+   647→            className="rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+   648→          >
+   649→            <ChevronLeft className="h-4 w-4" />
+   650→          </button>
+   651→          <span className="text-sm text-gray-700">Trang {page} / {totalPages || 1}</span>
+   652→          <button
+   653→            onClick={() => setPage(Math.min(totalPages || 1, page + 1))}
+   654→            disabled={page >= (totalPages || 1)}
+   655→            className="rounded-md bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50"
+   656→          >
+   657→            <ChevronRight className="h-4 w-4" />
+   658→          </button>
+   659→        </div>
+   660→      </div>
+   661→
+   662→      {/* Order detail dialog */}
+   663→      {detailOrder && (
+   664→        <OrderDetailDialog
+   665→          order={detailOrder}
+   666→          onClose={() => setDetailOrder(null)}
+   667→          canConfirmOldInvoice={canConfirmOldInvoice}
+   668→          onConfirmPayment={() => {
+   669→            setInvoiceDialogOrder(detailOrder);
+   670→            setDetailOrder(null);
+   671→          }}
+   672→        />
+   673→      )}
+   674→
+   675→      {/* Invoice dialog — opened from OrderDetailDialog's "Xác nhận thanh toán"
+   676→          button for unpaid past-date orders (requires confirm_old_invoice perm). */}
+   677→      {invoiceDialogOrder && (
+   678→        <InvoiceDialog
+   679→          booking={orderToBooking(invoiceDialogOrder)}
+   680→          onClose={() => setInvoiceDialogOrder(null)}
+   681→          onPaid={() => {
+   682→            setInvoiceDialogOrder(null);
+   683→            queryClient.invalidateQueries({ queryKey: ["supabase-orders"] });
+   684→          }}
+   685→        />
+   686→      )}
+   687→
+   688→      {/* Paid invoice full-page view — opened when clicking a completed invoice
+   689→          code in the list. Replaces the old dialog for paid invoices. */}
+   690→      {paidInvoiceView && (
+   691→        <PaidInvoiceView
+   692→          invoiceId={paidInvoiceView.invoiceId}
+   693→          customerName={paidInvoiceView.customerName}
+   694→          customerPhone={paidInvoiceView.customerPhone}
+   695→          bookingCode={paidInvoiceView.code}
+   696→          onClose={() => setPaidInvoiceView(null)}
+   697→        />
+   698→      )}
+   699→    </div>
+   700→  );
+   701→}
+   702→
+   703→/**
+   704→ * Read-only detail dialog. Shows booking + invoice content:
+   705→ * - Customer info, booking code, date/time, branch
+   706→ * - Services (from booking), tip + total (from invoice if present)
+   707→ * - Payment status (derived), payment method (from invoice if present)
+   708→ */
+   709→function OrderDetailDialog({
+   710→  order,
+   711→  onClose,
+   712→  canConfirmOldInvoice,
+   713→  onConfirmPayment,
+   714→}: {
+   715→  order: BookingOrder;
+   716→  onClose: () => void;
+   717→  canConfirmOldInvoice: boolean;
+   718→  onConfirmPayment: () => void;
+   719→}) {
+   720→  const fmt = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
+   721→  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+   722→  const queryClient = useQueryClient();
+   723→  // Permission: "upload_photo" gates the device-upload feature. A single
+   724→  // permission covers both unpaid and paid invoices. Upload is only possible
+   725→  // when a saved invoice exists (photos live on the invoice's note JSON);
+   726→  // no-invoice orders (e.g. cancelled) can't hold photos.
+   727→  // "delete_past_photos" gates deleting photos on PAID invoices.
+   728→  // "view_customer_photo" gates the lightbox (click-to-zoom).
+   729→  // "view_customer_phone" gates displaying the customer's phone number.
+   730→  const { hasPermission } = useAuthStore();
+   731→  const invoiceId = order.invoice?.id ?? null;
+   732→  const canUpload = !!invoiceId && hasPermission("upload_photo");
+   733→  const canDeletePastPhotos = hasPermission("delete_past_photos");
+   734→  const canViewCustomerPhoto = hasPermission("view_customer_photo");
+   735→  const canViewCustomerPhone = hasPermission("view_customer_phone");
+   736→  // Local copy of photos so uploads appear immediately without a refetch.
+   737→  const [photos, setPhotos] = useState<string[]>(
+   738→    Array.isArray(order.invoice?.photos) ? (order.invoice!.photos as string[]) : []
+   739→  );
+   740→  const [uploading, setUploading] = useState(false);
+   741→  const [uploadError, setUploadError] = useState("");
+   742→
+   743→  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+   744→    if (!invoiceId) return;
+   745→    const files = e.target.files;
+   746→    if (!files || files.length === 0) return;
+   747→    setUploading(true);
+   748→    setUploadError("");
+   749→    try {
+   750→      const folder = order.invoice?.code || invoiceId || "invoices";
+   751→      const newUrls = await uploadImagesToR2(files, `invoices/${folder}`);
+   752→      if (newUrls.length === 0) {
+   753→        setUploadError("Không thể tải ảnh lên. Vui lòng thử lại.");
+   754→        e.target.value = "";
+   755→        return;
+   756→      }
+   757→      const updated = [...photos, ...newUrls];
+   758→      const res = await fetch(`/api/supabase/invoices/${invoiceId}`, {
+   759→        method: "PUT",
+   760→        headers: { "Content-Type": "application/json" },
+   761→        body: JSON.stringify({ photos: updated }),
+   762→      });
+   763→      const json = await res.json();
+   764→      if (!json.ok) throw new Error(json.error || "Lưu ảnh thất bại");
+   765→      setPhotos(updated);
+   766→      queryClient.invalidateQueries({ queryKey: ["supabase-orders"] });
+   767→    } catch (err) {
+   768→      setUploadError(err instanceof Error ? err.message : "Tải ảnh lên thất bại");
+   769→    } finally {
+   770→      setUploading(false);
+   771→      e.target.value = "";
+   772→    }
+   773→  };
+   774→
+   775→  const handleRemovePhoto = async (idx: number) => {
+   776→    if (!invoiceId) return;
+   777→    const updated = photos.filter((_, i) => i !== idx);
+   778→    try {
+   779→      await fetch(`/api/supabase/invoices/${invoiceId}`, {
+   780→        method: "PUT",
+   781→        headers: { "Content-Type": "application/json" },
+   782→        body: JSON.stringify({ photos: updated }),
+   783→      });
+   784→      setPhotos(updated);
+   785→      queryClient.invalidateQueries({ queryKey: ["supabase-orders"] });
+   786→    } catch {
+   787→      /* best-effort */
+   788→    }
+   789→  };
+   790→
+   791→  // Derive payment status.
+   792→  let orderStatus = "pending";
+   793→  if (order.status === "cancelled" || order.status === "no_show") orderStatus = "cancelled";
+   794→  else if (order.invoice?.status === "completed") orderStatus = "completed";
+   795→
+   796→  // Services: prefer invoice items (saved), fall back to booking services.
+   797→  const items: OrderItem[] =
+   798→    order.invoice && Array.isArray(order.invoice.items) && order.invoice.items.length > 0
+   799→      ? order.invoice.items
+   800→      : (order.services || []).map((s) => ({
+   801→          name: s.service?.name || "Dịch vụ",
+   802→          price: Number(s.service?.price) || 0,
+   803→          staffName: s.staff?.name || undefined,
+   804→        }));
+   805→
+   806→  const servicesTotal = (order.services || []).reduce(
+   807→    (sum, s) => sum + (Number(s.service?.price) || 0),
+   808→    0
+   809→  );
+   810→  const tip = order.invoice?.tip ?? 0;
+   811→  const promotion = order.invoice?.promotion ?? null;
+   812→  const finalAmount = order.invoice?.final_amount ?? servicesTotal;
+   813→  const paymentMethod = order.invoice?.payment_method;
+   814→  // `photos` is now stateful (see handlePhotoUpload above).
+   815→
+   816→  return (
+   817→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+   818→      <DialogContent className="order-dialog-dense !max-w-[747px] p-0 overflow-hidden">
+   819→        <DialogHeader className="px-5 pt-4 pb-1.5">
+   820→          <DialogTitle className="text-lg font-semibold">
+   821→            Đơn hàng {order.code ? `· ${order.code}` : ""}
+   822→          </DialogTitle>
+   823→        </DialogHeader>
+   824→        {/* Two-column layout: left = order detail (scrolls independently),
+   825→            right = read-only photo gallery (scrolls independently). Each
+   826→            column scrolls on its own so the photo column stays in view while
+   827→            the user scrolls through the order detail on the left. */}
+   828→        <div className="grid grid-cols-1 md:grid-cols-2 gap-0">
+   829→        {/* LEFT: order detail — scrollable independently */}
+   830→        <div className="px-5 pb-4 space-y-2 md:border-r border-gray-100 max-h-[60vh] overflow-y-auto">
+   831→          {/* Customer info */}
+   832→          <div className="rounded-lg border bg-gray-50 p-2.5 space-y-0 text-sm">
+   833→            <div className="flex justify-between">
+   834→              <span className="text-gray-500">Khách hàng:</span>
+   835→              <span className="font-medium text-gray-900">{order.customer?.name || "—"}</span>
+   836→            </div>
+   837→            <div className="flex justify-between">
+   838→              <span className="text-gray-500">Số điện thoại:</span>
+   839→              <span className="text-gray-900">{canViewCustomerPhone ? (order.customer?.phone || "—") : maskPhone(order.customer?.phone)}</span>
+   840→            </div>
+   841→            <div className="flex justify-between">
+   842→              <span className="text-gray-500">Nguồn khách hàng:</span>
+   843→              <span className="text-gray-900">{order.source?.name || "—"}</span>
+   844→            </div>
+   845→            <div className="flex justify-between">
+   846→              <span className="text-gray-500">Kênh đặt lịch:</span>
+   847→              <span className="text-gray-900">{order.channel?.name || "—"}</span>
+   848→            </div>
+   849→            {order.branch && (
+   850→              <div className="flex justify-between">
+   851→                <span className="text-gray-500">Chi nhánh:</span>
+   852→                <span className="text-gray-900">{order.branch.name}</span>
+   853→              </div>
+   854→            )}
+   855→            {order.date_time && (
+   856→              <div className="flex justify-between">
+   857→                <span className="text-gray-500">Ngày giờ hẹn:</span>
+   858→                <span className="text-gray-900">
+   859→                  {(() => {
+   860→                    try {
+   861→                      return format(new Date(order.date_time), "HH:mm dd/MM/yyyy", { locale: vi });
+   862→                    } catch {
+   863→                      return "—";
+   864→                    }
+   865→                  })()}
+   866→                </span>
+   867→              </div>
+   868→            )}
+   869→            <div className="flex justify-between">
+   870→              <span className="text-gray-500">Ngày tạo:</span>
+   871→              <span className="text-gray-900">
+   872→                {(() => {
+   873→                  try {
+   874→                    return format(new Date(order.created_at), "HH:mm dd/MM/yyyy", { locale: vi });
+   875→                  } catch {
+   876→                    return "—";
+   877→                  }
+   878→                })()}
+   879→              </span>
+   880→            </div>
+   881→            <div className="flex justify-between">
+   882→              <span className="text-gray-500">Trạng thái:</span>
+   883→              <span
+   884→                className={cn(
+   885→                  "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
+   886→                  orderStatus === "completed" ? "bg-emerald-100 text-emerald-700"
+   887→                    : orderStatus === "pending" ? "bg-amber-100 text-amber-700"
+   888→                    : orderStatus === "cancelled" ? "bg-red-100 text-red-700"
+   889→                    : "bg-gray-100 text-gray-700"
+   890→                )}
+   891→              >
+   892→                {orderStatus === "completed" ? "Đã thanh toán"
+   893→                  : orderStatus === "pending" ? "Chưa thanh toán"
+   894→                  : orderStatus === "cancelled" ? "Đã hủy"
+   895→                  : orderStatus}
+   896→              </span>
+   897→            </div>
+   898→          </div>
+   899→
+   900→          {/* Services + Tip + Total */}
+   901→          <div className="rounded-lg border p-2.5">
+   902→            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+   903→              Dịch vụ
+   904→            </div>
+   905→            <div className="space-y-1.5">
+   906→              {items.length === 0 ? (
+   907→                <div className="text-sm text-gray-400">Chưa có dịch vụ</div>
+   908→              ) : (
+   909→                (() => {
+   910→                  // Multi-customer "Cùng lịch" booking (numberOfCustomers >= 2):
+   911→                  // each service slot shows 3 lines —
+   912→                  //   line 1: customer name + phone (or "Khách vãng lai" if empty)
+   913→                  //   line 2: service name
+   914→                  //   line 3: staff name
+   915→                  // This 3-line layout is CASHIER-MODULE ONLY. Regular bookings
+   916→                  // keep the existing 2-line layout (service name + staff).
+   917→                  const multi = parseMultiCustomerNote(order.note);
+   918→                  const isMulti = !!multi && (order.number_of_customers ?? 1) >= 2;
+   919→                  return items.map((s, idx) => {
+   920→                    const sc = isMulti ? multi!.slots[idx] : undefined;
+   921→                    return (
+   922→                      <div key={idx} className="flex items-start justify-between text-sm">
+   923→                        <div>
+   924→                          {isMulti && (
+   925→                            <div className="text-xs text-gray-600">
+   926→                              {sc && sc.walkin
+   927→                                ? "Khách vãng lai"
+   928→                                : sc
+   929→                                  ? `${sc.name}${sc.phone ? " " + sc.phone : ""}`
+   930→                                  : "Khách vãng lai"}
+   931→                            </div>
+   932→                          )}
+   933→                          <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
+   934→                          {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
+   935→                        </div>
+   936→                        <div className="font-medium text-gray-900">
+   937→                          {fmt(Number(s.price) || 0)}đ
+   938→                        </div>
+   939→                      </div>
+   940→                    );
+   941→                  });
+   942→                })()
+   943→              )}
+   944→            </div>
+   945→
+   946→            {/* Chương trình khuyến mãi */}
+   947→            <div className="mt-1.5 flex items-center justify-between text-sm">
+   948→              <span className="text-gray-600">Chương trình khuyến mãi</span>
+   949→              <span className="font-medium text-gray-900 text-right">
+   950→                {promotion
+   951→                  ? `${promotion.name} (−${fmt(promotion.discountAmount)}đ)`
+   952→                  : "—"}
+   953→              </span>
+   954→            </div>
+   955→
+   956→            {/* Tip */}
+   957→            <div className="mt-1.5 flex items-center justify-between text-sm">
+   958→              <span className="text-gray-600">Thường (thưởng thợ)</span>
+   959→              <span className="font-medium text-gray-900">
+   960→                {tip > 0 ? `${fmt(tip)}đ` : "—"}
+   961→              </span>
+   962→            </div>
+   963→
+   964→            <div className="mt-1.5 flex justify-between border-t pt-1.5 text-sm">
+   965→              <span className="font-medium text-gray-700">Tổng tiền</span>
+   966→              <span className="font-bold text-emerald-700">{fmt(finalAmount)}đ</span>
+   967→            </div>
+   968→          </div>
+   969→
+   970→          {/* Payment method (only if invoice exists) */}
+   971→          {order.invoice && (
+   972→            <div className="space-y-1.5">
+   973→              <div className="text-sm font-medium text-gray-700">Phương thức thanh toán</div>
+   974→              <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900">
+   975→                {paymentMethod === "transfer" ? "Chuyển khoản" : "Tiền mặt"}
+   976→              </div>
+   977→            </div>
+   978→          )}
+   979→
+   980→          {/* Activity history — Khởi tạo / Chỉnh sửa (one row per edit) /
+   981→              Checkin / Thanh toán. Only shown when a saved invoice exists
+   982→              (activities are tied to invoices). Edit rows show a hover tooltip
+   983→              with the change description. */}
+   984→          {invoiceId && <InvoiceActivityTable invoiceId={invoiceId} />}
+   985→
+   986→          {/* Actions */}
+   987→          <div className="flex justify-end gap-2 border-t pt-2">
+   988→            {/* "Xác nhận thanh toán" button — only for unpaid orders (pending).
+   989→                Shows when the user has either create_invoice (normal orders) or
+   990→                confirm_old_invoice (past-date orders) permission. Opens the
+   991→                InvoiceDialog which has promotion selection, tip input, and
+   992→                payment confirmation. */}
+   993→            {orderStatus === "pending" && (canConfirmOldInvoice || hasPermission("create_invoice")) && (
+   994→              <Button
+   995→                type="button"
+   996→                onClick={onConfirmPayment}
+   997→                className="bg-emerald-600 hover:bg-emerald-700"
+   998→              >
+   999→                Xác nhận thanh toán
+  1000→              </Button>
+  1001→            )}
+  1002→            <Button type="button" variant="outline" onClick={onClose}>
+  1003→              Đóng
+  1004→            </Button>
+  1005→          </div>
+  1006→        </div>
+  1007→
+  1008→        {/* RIGHT: photo gallery + upload (upload gated by upload_photo permission) */}
+  1009→        <div className="px-5 pb-4 space-y-3 bg-gray-50/50 max-h-[60vh] overflow-y-auto">
+  1010→          <div>
+  1011→            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5 flex items-center gap-2">
+  1012→              <Camera className="h-4 w-4" />
+  1013→              Ảnh đính kèm
+  1014→            </div>
+  1015→            {canUpload && (
+  1016→              <label className="mb-2 inline-flex items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 cursor-pointer w-fit">
+  1017→                {uploading ? (
+  1018→                  <Loader2 className="h-4 w-4 animate-spin" />
+  1019→                ) : (
+  1020→                  <Camera className="h-4 w-4" />
+  1021→                )}
+  1022→                {uploading ? "Đang tải..." : "Tải ảnh lên"}
+  1023→                <input
+  1024→                  type="file"
+  1025→                  accept="image/*"
+  1026→                  multiple
+  1027→                  className="hidden"
+  1028→                  disabled={uploading}
+  1029→                  onChange={handlePhotoUpload}
+  1030→                />
+  1031→              </label>
+  1032→            )}
+  1033→            {uploadError && (
+  1034→              <div className="mb-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+  1035→                {uploadError}
+  1036→              </div>
+  1037→            )}
+  1038→            {photos.length === 0 ? (
+  1039→              <div className="text-sm text-gray-400">Chưa có ảnh nào được tải lên</div>
+  1040→            ) : (
+  1041→              <div className="grid grid-cols-3 gap-1.5">
+  1042→                {photos.map((src, idx) => (
+  1043→                  <button
+  1044→                    key={idx}
+  1045→                    type="button"
+  1046→                    onClick={() => canViewCustomerPhoto && setLightboxPhoto(src)}
+  1047→                    disabled={!canViewCustomerPhoto}
+  1048→                    title={canViewCustomerPhoto ? undefined : "Bạn không có quyền xem ảnh"}
+  1049→                    className="relative aspect-square overflow-hidden rounded-lg border bg-white"
+  1050→                  >
+  1051→                    <img
+  1052→                      src={src}
+  1053→                      alt={`Ảnh ${idx + 1}`}
+  1054→                      className="h-full w-full object-cover"
+  1055→                    />
+  1056→                    {canDeletePastPhotos && (
+  1057→                      <span
+  1058→                        role="button"
+  1059→                        tabIndex={0}
+  1060→                        onClick={(e) => { e.stopPropagation(); handleRemovePhoto(idx); }}
+  1061→                        onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); handleRemovePhoto(idx); } }}
+  1062→                        className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+  1063→                        aria-label="Xóa ảnh"
+  1064→                      >
+  1065→                        <span className="text-xs">×</span>
+  1066→                      </span>
+  1067→                    )}
+  1068→                  </button>
+  1069→                ))}
+  1070→              </div>
+  1071→            )}
+  1072→          </div>
+  1073→        </div>
+  1074→        </div>
+  1075→      </DialogContent>
+  1076→
+  1077→      {/* Photo lightbox — clicking a thumbnail opens the full-size image. */}
+  1078→      {lightboxPhoto && (
+  1079→        <Dialog open onOpenChange={(v) => !v && setLightboxPhoto(null)}>
+  1080→          <DialogContent className="max-w-4xl">
+  1081→            <img
+  1082→              src={lightboxPhoto}
+  1083→              alt="Ảnh hóa đơn"
+  1084→              className="w-full h-auto"
+  1085→            />
+  1086→          </DialogContent>
+  1087→        </Dialog>
+  1088→      )}
+  1089→    </Dialog>
+  1090→  );
+  1091→}
+  1092→

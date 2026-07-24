@@ -1209,6 +1209,71 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                     Đổi khách
                   </button>
                 )}
+              {/* "Xem lịch hẹn" link for walk-in tabs that have a booking
+                  created. When a cashier clicks "Tạo hóa đơn" → adds a
+                  service, a booking is auto-created via
+                  createBookingForTab and the tab's type stays "walkin".
+                  Unlike booking tabs (which show the link in the
+                  Booking/Standalone Invoice Tab branch), walk-in tabs
+                  render the Walk-in Tab branch — so we must show the
+                  link HERE too. Navigates to Booking > View nhân viên
+                  with the booking highlighted (flash 3×). */}
+              {activeMeta?.bookingCode && activeBooking?.status !== "checkout" && (
+                <button
+                  onClick={() => {
+                    setBookingViewMode("staff");
+                    setBookingDateNav("today");
+                    setHighlightBookingId(activeBooking?.id || null);
+                    router.push("/booking");
+                  }}
+                  className="text-xs font-medium text-emerald-700 hover:text-emerald-800 hover:underline cursor-pointer"
+                >
+                  Xem lịch hẹn: {activeMeta.bookingCode}
+                </button>
+              )}
+              {/* "Hóa đơn" link for walk-in tabs where the booking has
+                  been paid (checkout status). Same logic as above — the
+                  booking was created from a walk-in, so the link must
+                  appear in the walk-in branch. */}
+              {activeMeta?.bookingCode && activeBooking?.status === "checkout" && (
+                <button
+                  onClick={() => {
+                    const invId = activeMeta?.invoiceId || activeBooking?.invoice?.id;
+                    if (invId) {
+                      setPaidInvoiceView({
+                        invoiceId: invId,
+                        customerName: activeCustomer?.customerName,
+                        customerPhone: activeCustomer?.phone,
+                        bookingCode: activeMeta?.bookingCode,
+                      });
+                    }
+                  }}
+                  className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                >
+                  Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
+                </button>
+              )}
+              {/* Booking date + time for walk-in tabs with a booking.
+                  Shows the appointment's date_time (dd/MM/yyyy HH:MM)
+                  so the cashier sees when the booking is scheduled. */}
+              {activeBooking?.date_time && activeMeta?.bookingCode && (
+                <div className="flex items-center gap-1 text-gray-500">
+                  <Calendar className="h-4 w-4" />
+                  <span className="text-xs">
+                    {(() => {
+                      try {
+                        const iso = toVietnamDay(activeBooking.date_time).split("-");
+                        const t = toVietnamTime(activeBooking.date_time);
+                        return iso.length === 3
+                          ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
+                          : "—";
+                      } catch {
+                        return "—";
+                      }
+                    })()}
+                  </span>
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -1327,11 +1392,14 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
             </>
           )}
 
-          {/* Right side: booking status badge (read-only) for non-walkin tabs.
-              The status is now managed automatically — clicking "Hoàn tất" in
-              the invoice summary creates the invoice and transitions the booking
-              to "checkout". Walk-in tabs have no booking, so no badge is shown. */}
-          {!isWalkinTab && activeBooking && (
+          {/* Right side: booking status badge (read-only) for tabs with a
+              booking. Non-walkin tabs always show it; walk-in tabs show it
+              only when a booking has been created (bookingCode exists).
+              The status is managed automatically — clicking "Hoàn tất" in
+              the invoice summary creates the invoice and transitions the
+              booking to "checkout". Walk-in tabs without a booking have no
+              status badge. */}
+          {((!isWalkinTab && activeBooking) || (isWalkinTab && activeMeta?.bookingCode && activeBooking)) && (
             <div className="ml-auto flex items-center gap-2">
               <span
                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(
