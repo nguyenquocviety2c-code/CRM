@@ -74,6 +74,7 @@ interface TodayBooking {
   note: string | null;
   number_of_customers: number | null;
   created_at: string | null;
+  updated_at: string | null;
   customer: { id: string; name: string; phone: string | null } | null;
   services: BookingServiceRow[];
 }
@@ -386,6 +387,33 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
       services: [],
     }));
   }, [dayStandaloneInvoices]);
+
+  // Status-based timestamp label helper:
+  // - confirmed → "Đã xác nhận lúc" + created_at VN time
+  // - checkin   → "Đã checkin lúc" + updated_at VN time
+  // - checkout  → "Đã thanh toán hoàn tất lúc" + updated_at VN time
+  // - cancelled/no_show → "Đã xác nhận lúc" + created_at VN time
+  const getStatusTimestampLabel = (booking: TodayBooking): string => {
+    try {
+      const status = booking.status as BookingStatusType;
+      // Use updated_at for checkin/checkout (reflects when the status
+      // transition happened), created_at for confirmed/cancelled.
+      const timestamp = (status === "checkin" || status === "checkout")
+        ? booking.updated_at || booking.created_at
+        : booking.created_at;
+      if (!timestamp) return "";
+      const vnDay = toVietnamDay(timestamp).split("-");
+      const vnTime = toVietnamTime(timestamp);
+      if (vnDay.length !== 3) return "";
+      const dateStr = `${vnDay[2]}/${vnDay[1]}/${vnDay[0]} ${vnTime}`;
+      const label = status === "checkin" ? "Đã checkin lúc"
+        : status === "checkout" ? "Đã thanh toán hoàn tất lúc"
+        : "Đã xác nhận lúc";
+      return ` • ${label} ${dateStr}`;
+    } catch {
+      return "";
+    }
+  };
 
   // Badge color helper (same as the Booking module's getStatusBadgeClass).
   const getStatusBadgeClass = (status: BookingStatusType) => {
@@ -1296,9 +1324,10 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
               {/* Booking date + time for walk-in tabs with a booking.
                   Shows the appointment's date_time (dd/MM/yyyy HH:MM)
                   so the cashier sees when the booking is scheduled.
-                  Also shows "Tạo vào lúc" with the exact creation
-                  timestamp so the cashier knows when the booking was
-                  first created in the system. */}
+                  Also shows a status-based timestamp label:
+                  - confirmed → "Đã xác nhận lúc" + creation time
+                  - checkin → "Đã checkin lúc" + checkin time
+                  - checkout → "Đã thanh toán hoàn tất lúc" + payment time */}
               {activeBooking?.date_time && activeMeta?.bookingCode && (
                 <div className="flex items-center gap-1 text-gray-500">
                   <Calendar className="h-4 w-4" />
@@ -1310,19 +1339,7 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
                         const appointStr = iso.length === 3
                           ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
                           : "—";
-                        // "Tạo vào lúc" — the exact creation timestamp.
-                        // Supabase stores created_at as UTC; convert to VN
-                        // wall-clock for display.
-                        const createStr = activeBooking.created_at
-                          ? (() => {
-                              const cIso = toVietnamDay(activeBooking.created_at).split("-");
-                              const cTime = toVietnamTime(activeBooking.created_at);
-                              return cIso.length === 3
-                                ? ` • Tạo vào lúc ${cIso[2]}/${cIso[1]}/${cIso[0]} ${cTime}`
-                                : "";
-                            })()
-                          : "";
-                        return appointStr + createStr;
+                        return appointStr + getStatusTimestampLabel(activeBooking);
                       } catch {
                         return "—";
                       }
@@ -1419,10 +1436,10 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
               {/* Booking date + time — the appointment's full date_time
                   (dd/MM/yyyy HH:MM). Shown alongside the booking link so the
                   cashier sees EXACTLY when the appointment is for. Also shows
-                  "Tạo vào lúc" with the exact creation timestamp so the cashier
-                  knows when the booking was first created in the system.
-                  Previously only the date was shown (no time), which left the
-                  cashier guessing the hour. */}
+                  a status-based timestamp label:
+                  - confirmed → "Đã xác nhận lúc" + creation time
+                  - checkin → "Đã checkin lúc" + checkin time
+                  - checkout → "Đã thanh toán hoàn tất lúc" + payment time */}
               {activeBooking?.date_time && (
                 <div className="flex items-center gap-1 text-gray-500">
                   <Calendar className="h-4 w-4" />
@@ -1438,17 +1455,7 @@ export function CustomerTabs({ dateRange }: CustomerTabsProps) {
                         const appointStr = iso.length === 3
                           ? `${iso[2]}/${iso[1]}/${iso[0]} ${t}`
                           : "—";
-                        // "Tạo vào lúc" — the exact creation timestamp.
-                        const createStr = activeBooking.created_at
-                          ? (() => {
-                              const cIso = toVietnamDay(activeBooking.created_at).split("-");
-                              const cTime = toVietnamTime(activeBooking.created_at);
-                              return cIso.length === 3
-                                ? ` • Tạo vào lúc ${cIso[2]}/${cIso[1]}/${cIso[0]} ${cTime}`
-                                : "";
-                            })()
-                          : "";
-                        return appointStr + createStr;
+                        return appointStr + getStatusTimestampLabel(activeBooking);
                       } catch {
                         return "—";
                       }
