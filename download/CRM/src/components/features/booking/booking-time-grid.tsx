@@ -1527,9 +1527,9 @@ function CustomerGridChip({
   onDelete?: (bookingId: string) => void;
 }) {
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
-  // Draggable popup: click-hold drag handle → reposition, double-click → reset
+  // Draggable popup: click-hold anywhere (except buttons) → reposition, double-click → reset
   const [hoverOpen, setHoverOpen] = useState(false);
-  const { isDragging, isDraggingRef, style: dragStyle, onDragStart, resetPosition, hasStoredPosition } = useDraggablePopup();
+  const { isDragging, isDraggingRef, style: dragStyle, onContentMouseDown, resetPosition } = useDraggablePopup();
 
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1628,28 +1628,31 @@ function CustomerGridChip({
         className="w-[255px] max-w-[255px] p-0 text-xs shadow-xl"
         style={dragStyle}
       >
-        {/* Drag handle — click-hold to reposition popup, double-click to reset */}
+        {/* Draggable wrapper — click-hold on any non-button area to reposition */}
         <div
-          className="flex items-center justify-center h-5 cursor-grab active:cursor-grabbing bg-gray-50 border-b border-gray-200 select-none shrink-0"
-          onMouseDown={onDragStart}
+          onMouseDown={onContentMouseDown}
           onDoubleClick={resetPosition}
+          className={`relative ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
           title="Kéo để thay đổi vị trí · Nhấp đúp để trở về mặc định"
         >
-          <GripVertical className="h-3.5 w-3.5 text-gray-400" />
+          {/* Visual drag indicator at the top */}
+          <div className="flex items-center justify-center py-1 bg-gray-50/60 border-b border-gray-100 select-none">
+            <GripVertical className="h-3.5 w-3.5 text-gray-300" />
+          </div>
+          <BookingHoverDetails
+            booking={booking}
+            canViewCustomerPhone={canViewCustomerPhone}
+            statusOptions={[]}
+            onStatusChange={() => {}}
+            selectOpen={false}
+            setSelectOpen={() => {}}
+            onEdit={() => onEdit?.(booking)}
+            onDelete={() => onDelete?.(booking.id)}
+            canCancelPayment={canCancelPayment}
+            onOpenInvoice={onClick}
+            onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
+          />
         </div>
-        <BookingHoverDetails
-          booking={booking}
-          canViewCustomerPhone={canViewCustomerPhone}
-          statusOptions={[]}
-          onStatusChange={() => {}}
-          selectOpen={false}
-          setSelectOpen={() => {}}
-          onEdit={() => onEdit?.(booking)}
-          onDelete={() => onDelete?.(booking.id)}
-          canCancelPayment={canCancelPayment}
-          onOpenInvoice={onClick}
-          onAssignStaff={() => onAssignStaff?.(booking) || onEdit?.(booking)}
-        />
       </HoverCardContent>
     </HoverCard>
   );

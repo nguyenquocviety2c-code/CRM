@@ -5,6 +5,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const STORAGE_KEY = "booking-popup-offset";
 const DRAG_THRESHOLD = 3; // px before considering it a real drag vs click
 
+// Interactive elements that should NOT trigger a drag
+const INTERACTIVE_SELECTOR = 'button, a, select, input, [role="button"], [data-slot="select-trigger"], [data-slot="select-value"]';
+
 interface PopupOffset {
   dx: number;
   dy: number;
@@ -37,11 +40,11 @@ function clearStoredOffset() {
 }
 
 /**
- * Hook that makes a HoverCard popup draggable.
- * - Click-hold on the drag handle → drag to reposition
- * - Double-click drag handle → reset to default position
+ * Hook that makes a HoverCard popup draggable from ANY non-interactive area.
+ * - Click-hold on any non-button/non-link area → drag to reposition
+ * - Double-click on non-interactive area → reset to default position
  * - Position offset is persisted in localStorage so all future
- *   popup appearances use the same relative offset
+ *   popup appearances (on any slot) use the same relative offset
  */
 export function useDraggablePopup() {
   const [storedOffset, setStoredOffset] = useState<PopupOffset | null>(loadStoredOffset);
@@ -67,10 +70,26 @@ export function useDraggablePopup() {
       }
     : storedOffset || { dx: 0, dy: 0 };
 
-  const onDragStart = useCallback(
+  /**
+   * MouseDown handler for the popup content wrapper.
+   * Checks if the click target is an interactive element (button, link, etc.)
+   * — if so, lets the normal click happen (no drag).
+   * — if NOT interactive, starts a drag operation.
+   *
+   * IMPORTANT: We do NOT call e.stopPropagation() because Radix HoverCard
+   * needs to receive pointer events to keep the popup open. We DO call
+   * e.preventDefault() to prevent text selection during drag.
+   */
+  const onContentMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
+      // Skip if clicking on interactive elements (buttons, links, selects, etc.)
+      const target = e.target as HTMLElement;
+      if (target.closest(INTERACTIVE_SELECTOR)) {
+        return; // Let the normal click happen — no drag
+      }
+
+      e.preventDefault(); // Prevent text selection during drag
+
       const baseDx = storedOffset?.dx || 0;
       const baseDy = storedOffset?.dy || 0;
       dragStartRef.current = {
@@ -93,6 +112,7 @@ export function useDraggablePopup() {
 
     const onMouseMove = (e: MouseEvent) => {
       if (!dragStartRef.current) return;
+      e.preventDefault(); // Prevent text selection during drag
       const dx = e.clientX - dragStartRef.current.mouseX;
       const dy = e.clientY - dragStartRef.current.mouseY;
       if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
@@ -115,7 +135,7 @@ export function useDraggablePopup() {
         setStoredOffset(newOffset);
         saveStoredOffset(newOffset);
       }
-      // If it wasn't a real drag (just a click on the handle), don't change offset
+      // If it wasn't a real drag (just a click), don't change offset
 
       setIsDragging(false);
       isDraggingRef.current = false;
@@ -149,7 +169,7 @@ export function useDraggablePopup() {
     isDragging,
     isDraggingRef,
     style,
-    onDragStart,
+    onContentMouseDown,
     resetPosition,
     hasStoredPosition: !!storedOffset,
     totalOffset,

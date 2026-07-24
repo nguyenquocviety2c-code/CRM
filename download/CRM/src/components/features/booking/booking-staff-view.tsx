@@ -1563,9 +1563,9 @@ function BookingChip({
       calls this; falls back to onEdit when not provided. */
   onAssignStaff?: () => void;
 }) {
-  // Draggable popup: click-hold drag handle → reposition, double-click → reset
+  // Draggable popup: click-hold anywhere (except buttons) → reposition, double-click → reset
   const [hoverOpen, setHoverOpen] = useState(false);
-  const { isDragging, isDraggingRef, style: dragStyle, onDragStart, resetPosition } = useDraggablePopup();
+  const { isDragging, isDraggingRef, style: dragStyle, onContentMouseDown, resetPosition } = useDraggablePopup();
 
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1717,28 +1717,31 @@ function BookingChip({
         className="w-[340px] max-w-[340px] p-0 text-xs shadow-xl"
         style={dragStyle}
       >
-        {/* Drag handle — click-hold to reposition popup, double-click to reset */}
+        {/* Draggable wrapper — click-hold on any non-button area to reposition */}
         <div
-          className="flex items-center justify-center h-5 cursor-grab active:cursor-grabbing bg-gray-50 border-b border-gray-200 select-none shrink-0"
-          onMouseDown={onDragStart}
+          onMouseDown={onContentMouseDown}
           onDoubleClick={resetPosition}
+          className={`relative ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
           title="Kéo để thay đổi vị trí · Nhấp đúp để trở về mặc định"
         >
-          <GripVertical className="h-3.5 w-3.5 text-gray-400" />
+          {/* Visual drag indicator at the top */}
+          <div className="flex items-center justify-center py-1 bg-gray-50/60 border-b border-gray-100 select-none">
+            <GripVertical className="h-3.5 w-3.5 text-gray-300" />
+          </div>
+          <BookingHoverDetails
+            booking={booking}
+            canViewCustomerPhone={canViewCustomerPhone}
+            statusOptions={[]}
+            onStatusChange={() => {}}
+            selectOpen={false}
+            setSelectOpen={() => {}}
+            onEdit={onEdit || onClick}
+            onDelete={() => {}}
+            canCancelPayment={false}
+            onOpenInvoice={onClick}
+            onAssignStaff={onAssignStaff || onEdit || onClick}
+          />
         </div>
-        <BookingHoverDetails
-          booking={booking}
-          canViewCustomerPhone={canViewCustomerPhone}
-          statusOptions={[]}
-          onStatusChange={() => {}}
-          selectOpen={false}
-          setSelectOpen={() => {}}
-          onEdit={onEdit || onClick}
-          onDelete={() => {}}
-          canCancelPayment={false}
-          onOpenInvoice={onClick}
-          onAssignStaff={onAssignStaff || onEdit || onClick}
-        />
       </HoverCardContent>
     </HoverCard>
   );
@@ -1958,7 +1961,7 @@ export function BookingHoverDetails({
               setSelectOpen(false);
             }}
           >
-            <SelectTrigger className="h-6 w-auto min-w-0 max-w-[110px] text-[11px] gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
+            <SelectTrigger className="cursor-pointer h-6 w-auto min-w-0 max-w-[110px] text-[11px] gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
               <SelectValue placeholder="Đổi trạng thái" />
             </SelectTrigger>
             <SelectContent>
@@ -1997,7 +2000,7 @@ export function BookingHoverDetails({
                     e.stopPropagation();
                     onAssignStaff();
                   }}
-                  className="inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+                  className="cursor-pointer inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
                   title="Xếp nhân viên cho dịch vụ này"
                 >
                   Xếp nhân viên
@@ -2029,7 +2032,7 @@ export function BookingHoverDetails({
               e.stopPropagation();
               onOpenInvoice();
             }}
-            className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+            className="cursor-pointer text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
           >
             {showInvoiceLabel ? "Xem hóa đơn" : "Đơn hàng"}
           </button>
@@ -2050,7 +2053,7 @@ export function BookingHoverDetails({
                 e.stopPropagation();
                 onStatusChange("checkin");
               }}
-              className="flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+              className="cursor-pointer flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
               title="Chuyển đơn sang trạng thái Đã checkin"
             >
               <LogIn className="h-3 w-3" />
@@ -2068,7 +2071,7 @@ export function BookingHoverDetails({
             e.stopPropagation();
             onEdit();
           }}
-          className="flex h-8 w-8 items-center justify-center border text-gray-600 hover:bg-gray-100"
+          className="cursor-pointer flex h-8 w-8 items-center justify-center border text-gray-600 hover:bg-gray-100"
           aria-label="Chỉnh sửa"
           title="Chỉnh sửa"
         >
@@ -2082,7 +2085,7 @@ export function BookingHoverDetails({
           }}
           disabled={!canCancelPayment}
           title={canCancelPayment ? "Xóa" : "Bạn không có quyền hủy"}
-          className="flex h-8 w-8 items-center justify-center border text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          className="cursor-pointer flex h-8 w-8 items-center justify-center border text-red-500 hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           aria-label="Xóa"
         >
           <Trash2 className="h-4 w-4" />
