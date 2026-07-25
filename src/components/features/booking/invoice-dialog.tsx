@@ -13,16 +13,12 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Camera, X, PlusCircle, Search, Package } from "lucide-react";
+import { X, PlusCircle, Package, ChevronLeft, Minus, Plus } from "lucide-react";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { Booking } from "@/stores/booking-store";
 import { useAuthStore } from "@/stores/auth-store";
@@ -30,18 +26,6 @@ import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-s
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { parseMultiCustomerNote } from "@/lib/multi-customer";
-
-/**
- * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
- */
-const fileToDataUrl = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-};
 
 export interface InvoiceDialogProps {
   booking: Booking;
@@ -109,9 +93,6 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   // show the normal editable invoice UI.
   const effectivelyReadOnly = isCheckout || (isPastDateUnpaid && !canConfirmOldInvoice);
 
-  const canUpload = hasPermission("upload_photo");
-  const canDeletePastPhotos = hasPermission("delete_past_photos");
-  const canViewCustomerPhoto = hasPermission("view_customer_photo");
   const canCreateInvoice = hasPermission("create_invoice");
   const canViewCustomerPhone = hasPermission("view_customer_phone");
   // Promotion selector is enabled when the user has invoice_discount OR
@@ -154,21 +135,35 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   // - Existing invoice (pending or completed): source of truth = the invoice on
   //   Supabase. Add/remove go through PUT /api/supabase/invoices/:id and the
   //   local state mirrors what's on the server.
+  // NOTE: The "Ảnh đính kèm" UI section was removed per request — photos can
+  // no longer be uploaded from this dialog. The draft/photos state + PUT
+  // helpers remain so EXISTING invoice photos (already on the server) still
+  // render in the read-only review summary and are re-sent on confirm.
   const [draftPhotos, setDraftPhotos] = useState<string[]>([]);
-  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
 
   // Products added to the invoice (multi-select). Each entry is a product the
   // customer is purchasing in addition to the booking's services. Held locally
   // in editable mode; POSTed as invoice items (type="product") on confirm.
   // For read-only (paid) invoices, products are read from existingInvoice.items.
+  // Each entry carries a `quantity` so the cashier can buy >1 of the same SKU
+  // in one go (the redesigned "Thêm sản phẩm" picker lets them set quantity
+  // per product before adding to the invoice).
   const [selectedProducts, setSelectedProducts] = useState<Array<{
     id: string;
     name: string;
     price: number;
     code: string | null;
+    quantity: number;
   }>>([]);
   const [productPickerOpen, setProductPickerOpen] = useState(false);
-  const [productSearch, setProductSearch] = useState("");
+  // Two-step picker: "groups" = list of product categories; "products" = the
+  // products inside the selected category, each with its own quantity stepper.
+  // Selecting a group drills into its products; the back arrow returns to the
+  // groups list. Quantity state is reset whenever the dialog closes or the
+  // group changes so old selections don't leak between sessions.
+  const [productPickerStep, setProductPickerStep] = useState<"groups" | "products">("groups");
+  const [selectedProductGroup, setSelectedProductGroup] = useState<string | null>(null);
+  const [productQuantities, setProductQuantities] = useState<Record<string, number>>({});
   const [productsList, setProductsList] = useState<Array<{
     id: string;
     name: string;
@@ -208,12 +203,21 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   // For multi-customer "Cùng lịch" bookings, attach each service's own
   // customer (parsed from the booking note's [[MULTI]] block) so the services
   // box can show it between the service name and the staff line.
+  // Also FILTER services by per-customer slotStatuses: only services whose
+  // customer is "checkin" or "checkout" are included. Services of customers
+  // who are still "confirmed", "cancelled", or "no_show" are excluded.
   const multiCustomer = parseMultiCustomerNote(booking.note);
-  const serviceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
+  const slotStatuses = multiCustomer?.slotStatuses;
+  const serviceSlotsMap = multiCustomer?.serviceSlots;
+  const allServiceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
     const svc = s.service as { name?: string; price?: number; duration?: number } | null;
     const stf = s.staff as { name?: string } | null;
     const cat = s.category as { name?: string } | null;
-    const sc = multiCustomer?.slots[idx];
+    // Use serviceSlots to find the correct customer slot for this service.
+    const slotIdx = serviceSlotsMap && idx < serviceSlotsMap.length
+      ? serviceSlotsMap[idx]
+      : idx;
+    const sc = multiCustomer?.slots[slotIdx];
     return {
       name: svc?.name || "Dịch vụ",
       price: Number(svc?.price) || 0,
@@ -224,19 +228,65 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
           ? "Khách vãng lai"
           : `${sc.name}${sc.phone ? " " + sc.phone : ""}`
         : null,
+      _slotIdx: slotIdx,
     };
   });
+  // Filter: only show services whose customer is checked in (or checkout/paid).
+  // When no slotStatuses (non-multi or legacy), show all services.
+  const serviceRows = slotStatuses && slotStatuses.length > 0
+    ? allServiceRows.filter((s) => {
+        const st = slotStatuses[s._slotIdx] || "confirmed";
+        return st === "checkin" || st === "checkout";
+      })
+    : allServiceRows;
+  // Per-customer service count for numbering (1a, 1b, 2, etc.).
+  const checkedInSlotCount: Record<number, number> = {};
+  serviceRows.forEach((s) => {
+    checkedInSlotCount[s._slotIdx] = (checkedInSlotCount[s._slotIdx] || 0) + 1;
+  });
+  const slotLetterIdx: Record<number, number> = {};
   const servicesTotal = serviceRows.reduce((sum, s) => sum + s.price, 0);
-  // Products total: editable mode uses selectedProducts; read-only uses the
-  // saved invoice's items of type "product".
+  // Products total: editable mode uses selectedProducts (price × quantity);
+  // read-only uses the saved invoice's items of type "product".
   const savedProducts = effectivelyReadOnly
     ? (existingInvoice?.items ?? []).filter(
         (it) => (it as { type?: string }).type === "product"
       )
     : [];
   const productsTotal = effectivelyReadOnly
-    ? savedProducts.reduce((sum, p) => sum + (Number(p.price) || 0), 0)
-    : selectedProducts.reduce((sum, p) => sum + p.price, 0);
+    ? savedProducts.reduce((sum, p) => sum + (Number(p.price) || 0) * (Number((p as { quantity?: number }).quantity) || 1), 0)
+    : selectedProducts.reduce((sum, p) => sum + p.price * p.quantity, 0);
+
+  // Product groups (categories) derived from the products list. Each group is
+  // shown as a card in the picker's first step; clicking it drills into the
+  // group's products. Products with no category fall under "Khác" so they're
+  // still reachable. Only priced products (>0đ) are grouped — 0đ items are
+  // accessories/consumables not for sale (same rule as the old popover).
+  const productGroups = (() => {
+    const priced = productsList.filter((p) => p.price > 0);
+    const map = new Map<string, number>();
+    for (const p of priced) {
+      const name = p.category?.name?.trim() || "Khác";
+      map.set(name, (map.get(name) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, "vi"));
+  })();
+  const productsInGroup = (() => {
+    if (!selectedProductGroup) return [];
+    return productsList.filter((p) => {
+      if (p.price <= 0) return false;
+      const name = p.category?.name?.trim() || "Khác";
+      return name === selectedProductGroup;
+    });
+  })();
+  // Count of products in the current group with quantity > 0 — drives the
+  // "Thêm N sản phẩm vào đơn" button label + enabled state.
+  const productsToAddCount = productsInGroup.reduce(
+    (n, p) => n + ((productQuantities[p.id] || 0) > 0 ? 1 : 0),
+    0
+  );
 
   // Fetch the existing invoice for this booking (works for both pending and completed).
   // In editable mode this lets us UPDATE the pending invoice instead of creating a new one.
@@ -375,63 +425,10 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
     }
   };
 
-  // Convert selected FileList -> upload to R2 -> get URLs -> append.
-  // If an invoice exists, PUT immediately; otherwise keep in local draft state.
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    // Upload to R2 via /api/upload (multipart).
-    const folder = existingInvoice?.code || booking.code || "drafts";
-    const formData = new FormData();
-    formData.append("folder", `invoices/${folder}`);
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      if (f) formData.append("files", f);
-    }
-    let newPhotos: string[] = [];
-    try {
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const json = await res.json();
-      if (json.ok && json.data?.urls) {
-        newPhotos = json.data.urls;
-      }
-    } catch {
-      // Fallback: base64 data URLs if R2 fails.
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        if (!f) continue;
-        try {
-          newPhotos.push(await fileToDataUrl(f));
-        } catch { /* skip */ }
-      }
-    }
-
-    if (newPhotos.length === 0) {
-      e.target.value = "";
-      return;
-    }
-    if (existingInvoice) {
-      const updated = [...displayPhotos, ...newPhotos];
-      await savePhotos(updated);
-    } else {
-      setDraftPhotos((prev) => [...prev, ...newPhotos]);
-    }
-    e.target.value = "";
-  };
-
-  // Remove a photo. Existing invoice -> PUT; draft -> local state.
-  const handleRemovePhoto = async (idx: number) => {
-    if (existingInvoice) {
-      const updated = displayPhotos.filter((_, i) => i !== idx);
-      await savePhotos(updated);
-    } else {
-      setDraftPhotos((prev) => prev.filter((_, i) => i !== idx));
-    }
-  };
+  // (handlePhotoUpload / handleRemovePhoto were removed along with the
+  //  "Ảnh đính kèm" UI section — photos can no longer be added or removed
+  //  from this dialog. Existing invoice photos remain on the server and are
+  //  still re-sent on confirm via `displayPhotos` / `draftPhotos`.)
 
   const handleConfirm = async () => {
     setError("");
@@ -466,10 +463,10 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
           name: p.name,
           itemId: p.id,
           type: "product",
-          quantity: 1,
+          quantity: p.quantity,
           price: p.price,
           discount: 0,
-          total: p.price,
+          total: p.price * p.quantity,
           staffName: undefined,
         })),
       ];
@@ -557,13 +554,11 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
             )}
           </DialogTitle>
         </DialogHeader>
-        {/* Two-column layout: left = invoice info (scrollable independently),
-            right = photo upload + gallery. Each column scrolls on its own so the
-            customer info + services + products + payment method can all be
-            reached by scrolling the left column without affecting the right. */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-0">
-        {/* LEFT: invoice info — scrollable */}
-        <div className="px-5 pb-4 space-y-2 md:border-r border-gray-100 max-h-[60vh] overflow-y-auto">
+        {/* Single-column layout: the photo attachment section that used to
+            live on the right was removed per request — the dialog is now one
+            scrollable column with customer info → services → products →
+            payment method → actions. */}
+        <div className="px-5 pb-4 space-y-2 max-h-[60vh] overflow-y-auto">
 
           {/* Customer info */}
           <div className="rounded-lg border bg-gray-50 p-2.5 space-y-0 text-sm">
@@ -771,25 +766,34 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 savedProducts.length === 0 ? (
                   <div className="text-sm text-gray-400">Không có sản phẩm</div>
                 ) : (
-                  savedProducts.map((p, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-sm">
-                      <div className="font-medium text-gray-900">{p.name || "Sản phẩm"}</div>
-                      <div className="font-medium text-gray-900">
-                        {fmt(Number(p.price) || 0)}đ
+                  savedProducts.map((p, idx) => {
+                    const qty = Number((p as { quantity?: number }).quantity) || 1;
+                    return (
+                      <div key={idx} className="flex items-center justify-between text-sm">
+                        <div className="font-medium text-gray-900">
+                          {p.name || "Sản phẩm"}
+                          {qty > 1 && <span className="ml-1 text-xs text-gray-500">×{qty}</span>}
+                        </div>
+                        <div className="font-medium text-gray-900">
+                          {fmt((Number(p.price) || 0) * qty)}đ
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )
               ) : (
                 <>
                   {selectedProducts.map((p, idx) => (
                     <div key={`${p.id}-${idx}`} className="flex items-center justify-between text-sm rounded-md border bg-gray-50 px-3 py-2">
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-gray-900 truncate">{p.name}</div>
+                        <div className="font-medium text-gray-900 truncate">
+                          {p.name}
+                          {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
+                        </div>
                         {p.code && <div className="text-xs text-gray-500">{p.code}</div>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-2">
-                        <span className="font-medium text-gray-900">{fmt(p.price)}đ</span>
+                        <span className="font-medium text-gray-900">{fmt(p.price * p.quantity)}đ</span>
                         <button
                           type="button"
                           onClick={() => setSelectedProducts((prev) => prev.filter((_, i) => i !== idx))}
@@ -801,89 +805,25 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                       </div>
                     </div>
                   ))}
-                  {/* "Thêm sản phẩm" button — opens the product picker popover.
-                      Always visible in editable mode so the customer can add
-                      multiple products (re-appears after each selection). */}
-                  <Popover open={productPickerOpen} onOpenChange={setProductPickerOpen}>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm font-medium text-emerald-600 hover:bg-emerald-50 hover:border-emerald-300 transition-colors"
-                      >
-                        <PlusCircle className="h-4 w-4" />
-                        Thêm sản phẩm
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-80 p-0" align="start">
-                      <div className="border-b p-2">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                          <Input
-                            placeholder="Tìm sản phẩm..."
-                            value={productSearch}
-                            onChange={(e) => setProductSearch(e.target.value)}
-                            className="h-8 pl-8 text-sm"
-                            autoFocus
-                          />
-                        </div>
-                      </div>
-                      <div className="max-h-60 overflow-y-auto">
-                        {productsLoading ? (
-                          <div className="px-3 py-4 text-center text-sm text-gray-400">Đang tải...</div>
-                        ) : (
-                          (() => {
-                            const term = productSearch.toLowerCase().trim();
-                            // Only show products that have a price > 0 (hide
-                            // 0đ products per the business rule — they are
-                            // typically accessories/consumables not for sale).
-                            const priced = productsList.filter((p) => p.price > 0);
-                            const filtered = term
-                              ? priced.filter(
-                                  (p) =>
-                                    p.name.toLowerCase().includes(term) ||
-                                    (p.code || "").toLowerCase().includes(term)
-                                )
-                              : priced;
-                            if (filtered.length === 0) {
-                              return (
-                                <div className="px-3 py-4 text-center text-sm text-gray-400">
-                                  Không tìm thấy sản phẩm
-                                </div>
-                              );
-                            }
-                            return filtered.map((p) => (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedProducts((prev) => [...prev, { id: p.id, name: p.name, price: p.price, code: p.code }]);
-                                  setProductSearch("");
-                                  // Keep the popover open so the user can add more
-                                  // products (per the requirement: "sau khi chọn 1
-                                  // sản phẩm sẽ lại hiện thêm nút Thêm sản phẩm").
-                                  // The popover stays open; the product is appended
-                                  // to the list below.
-                                }}
-                                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-emerald-50 transition-colors border-b last:border-b-0"
-                              >
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium text-gray-900 truncate">{p.name}</div>
-                                  <div className="text-xs text-gray-500">
-                                    {p.code || "—"}
-                                    {p.category?.name ? ` · ${p.category.name}` : ""}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0 ml-2">
-                                  <span className="font-semibold text-emerald-600">{fmt(p.price)}đ</span>
-                                  <PlusCircle className="h-4 w-4 text-gray-400" />
-                                </div>
-                              </button>
-                            ));
-                          })()
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
+                  {/* "Thêm sản phẩm" button — opens a separate Dialog showing
+                      product GROUPS first, then the chosen group's products
+                      with per-product quantity steppers. The button's height
+                      matches the "Thanh toán" button (h-9) so the action row
+                      stays visually aligned. Always visible in editable mode
+                      so the cashier can add multiple products across groups. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProductPickerStep("groups");
+                      setSelectedProductGroup(null);
+                      setProductQuantities({});
+                      setProductPickerOpen(true);
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 h-9 px-3 text-sm font-medium text-emerald-600 hover:bg-emerald-50 hover:border-emerald-300 transition-colors"
+                  >
+                    <PlusCircle className="h-4 w-4" />
+                    Thêm sản phẩm
+                  </button>
                 </>
               )}
             </div>
@@ -901,7 +841,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("cash")}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  className={`rounded-lg border h-9 px-3 text-sm font-medium transition-colors ${
                     paymentMethod === "cash"
                       ? "border-emerald-500 bg-emerald-50 text-emerald-700"
                       : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
@@ -912,7 +852,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 <button
                   type="button"
                   onClick={() => setPaymentMethod("transfer")}
-                  className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  className={`rounded-lg border h-9 px-3 text-sm font-medium transition-colors ${
                     paymentMethod === "transfer"
                       ? "border-emerald-500 bg-emerald-50 text-emerald-700"
                       : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
@@ -951,65 +891,6 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
           </div>
         </div>
 
-        {/* RIGHT: photo upload + gallery — scrollable independently */}
-        <div className="px-5 pb-4 space-y-3 bg-gray-50/50 max-h-[60vh] overflow-y-auto">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-              Ảnh đính kèm
-            </div>
-            {canUpload && (
-              <label className="flex items-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 cursor-pointer w-fit bg-white">
-                <Camera className="h-4 w-4" />
-                Tải ảnh lên
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={handlePhotoUpload}
-                />
-              </label>
-            )}
-          </div>
-          {displayPhotos.length === 0 ? (
-            <div className="text-sm text-gray-400">Chưa có ảnh nào được tải lên</div>
-          ) : (
-            <div className="grid grid-cols-3 gap-1.5">
-              {displayPhotos.map((src, idx) => (
-                <div
-                  key={idx}
-                  className="relative aspect-square overflow-hidden rounded-lg border bg-white"
-                >
-                  <button
-                    type="button"
-                    onClick={() => canViewCustomerPhoto && setLightboxPhoto(src)}
-                    className="h-full w-full"
-                    disabled={!canViewCustomerPhoto}
-                    title={canViewCustomerPhoto ? undefined : "Bạn không có quyền xem ảnh"}
-                  >
-                    <img
-                      src={src}
-                      alt={`Ảnh ${idx + 1}`}
-                      className="h-full w-full object-cover"
-                    />
-                  </button>
-                  {(!effectivelyReadOnly || canDeletePastPhotos) && (
-                    <button
-                      type="button"
-                      onClick={() => handleRemovePhoto(idx)}
-                      className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-                      aria-label="Xóa ảnh"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        </div>
-
         {/* Lịch sử thao tác — always shown when the invoice exists so the staff
             can see every action (create / edit / checkin / payment) and who did
             it at what time. Hidden when no invoice exists yet (new booking). */}
@@ -1041,20 +922,38 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 {serviceRows.length === 0 && selectedProducts.length === 0 && (
                   <div className="px-3 py-3 text-sm text-gray-400">Chưa có mặt hàng</div>
                 )}
-                {serviceRows.map((s, idx) => (
+                {serviceRows.map((s, idx) => {
+                  // Numbering: customer #N with 1 service → "N." ;
+                  // with 2+ services → "Na.", "Nb.", ...
+                  let prefix = "";
+                  if (slotStatuses && slotStatuses.length > 0) {
+                    const total = checkedInSlotCount[s._slotIdx] || 1;
+                    if (total <= 1) {
+                      prefix = `${s._slotIdx + 1}. `;
+                    } else {
+                      slotLetterIdx[s._slotIdx] = (slotLetterIdx[s._slotIdx] || 0) + 1;
+                      const letter = String.fromCharCode(96 + slotLetterIdx[s._slotIdx]);
+                      prefix = `${s._slotIdx + 1}${letter}. `;
+                    }
+                  }
+                  return (
                   <div key={`svc-${idx}`} className="flex items-center justify-between px-3 py-2 text-sm">
                     <div>
-                      <div className="font-medium text-gray-900">{s.name}</div>
+                      <div className="font-medium text-gray-900">{prefix}{s.name}</div>
                       {s.customer && <div className="text-xs text-gray-600">{s.customer}</div>}
                       {s.staff && <div className="text-xs text-gray-500">NV: {s.staff}</div>}
                     </div>
                     <div className="text-gray-700">{fmt(s.price)}đ</div>
                   </div>
-                ))}
+                  );
+                })}
                 {selectedProducts.map((p, idx) => (
                   <div key={`prod-${idx}`} className="flex items-center justify-between px-3 py-2 text-sm">
-                    <div className="font-medium text-gray-900">{p.name}</div>
-                    <div className="text-gray-700">{fmt(p.price)}đ</div>
+                    <div className="font-medium text-gray-900">
+                      {p.name}
+                      {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
+                    </div>
+                    <div className="text-gray-700">{fmt(p.price * p.quantity)}đ</div>
                   </div>
                 ))}
               </div>
@@ -1111,18 +1010,182 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
         </DialogContent>
       </Dialog>
 
-      {/* Photo lightbox — clicking a thumbnail opens the full-size image. */}
-      {lightboxPhoto && (
-        <Dialog open onOpenChange={(v) => !v && setLightboxPhoto(null)}>
-          <DialogContent className="max-w-4xl">
-            <img
-              src={lightboxPhoto}
-              alt="Ảnh hóa đơn"
-              className="w-full h-auto"
-            />
-          </DialogContent>
-        </Dialog>
-      )}
+      {/* Product picker dialog — opened by the "Thêm sản phẩm" button. Two
+          steps: (1) GROUPS list — each card shows the category name + product
+          count; clicking a card drills into its products. (2) PRODUCTS list —
+          each product row has a quantity stepper (− / qty / +) so the cashier
+          can pick how many of that SKU to add. The footer's "Thêm N sản phẩm
+          vào đơn" button is enabled only when at least one product has qty > 0;
+          clicking it appends every selected product (with its qty) to the
+          invoice and closes the dialog. "Đóng" cancels without adding. The
+          back arrow (←) on the title returns to the GROUPS step without
+          losing the quantities already typed (they reset only on dialog
+          close or group change). */}
+      <Dialog
+        open={productPickerOpen}
+        onOpenChange={(v) => {
+          setProductPickerOpen(v);
+          if (!v) {
+            setProductPickerStep("groups");
+            setSelectedProductGroup(null);
+            setProductQuantities({});
+          }
+        }}
+      >
+        <DialogContent className="max-w-md sm:max-w-md p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+              {productPickerStep === "products" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProductPickerStep("groups");
+                    setSelectedProductGroup(null);
+                    setProductQuantities({});
+                  }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                  aria-label="Quay lại danh sách nhóm"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              )}
+              {productPickerStep === "groups"
+                ? "Chọn nhóm sản phẩm"
+                : selectedProductGroup || "Chọn sản phẩm"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {productPickerStep === "groups" ? (
+            <div className="grid grid-cols-2 gap-2 max-h-[60vh] overflow-y-auto pr-0.5">
+              {productsLoading ? (
+                <div className="col-span-2 px-3 py-6 text-center text-sm text-gray-400">Đang tải...</div>
+              ) : productGroups.length === 0 ? (
+                <div className="col-span-2 px-3 py-6 text-center text-sm text-gray-400">Chưa có sản phẩm nào</div>
+              ) : (
+                productGroups.map((g) => (
+                  <button
+                    key={g.name}
+                    type="button"
+                    onClick={() => {
+                      setSelectedProductGroup(g.name);
+                      setProductQuantities({});
+                      setProductPickerStep("products");
+                    }}
+                    className="rounded-lg border p-3 text-left hover:bg-emerald-50 hover:border-emerald-300 transition-colors"
+                  >
+                    <Package className="h-5 w-5 text-emerald-600 mb-1" />
+                    <div className="font-medium text-sm text-gray-900 truncate">{g.name}</div>
+                    <div className="text-xs text-gray-500">{g.count} sản phẩm</div>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-0.5">
+              {productsInGroup.length === 0 ? (
+                <div className="px-3 py-6 text-center text-sm text-gray-400">
+                  Không có sản phẩm trong nhóm này
+                </div>
+              ) : (
+                productsInGroup.map((p) => {
+                  const qty = productQuantities[p.id] || 0;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`flex items-center justify-between border rounded-md p-2 transition-colors ${
+                        qty > 0 ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0 mr-2">
+                        <div className="font-medium text-sm text-gray-900 truncate">{p.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {fmt(p.price)}đ{p.code ? ` · ${p.code}` : ""}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProductQuantities((prev) => ({
+                              ...prev,
+                              [p.id]: Math.max(0, (prev[p.id] || 0) - 1),
+                            }))
+                          }
+                          disabled={qty === 0}
+                          className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                          aria-label="Giảm số lượng"
+                        >
+                          <Minus className="h-3.5 w-3.5" />
+                        </button>
+                        <span className="w-8 text-center text-sm font-medium">{qty}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setProductQuantities((prev) => ({
+                              ...prev,
+                              [p.id]: Math.min(99, (prev[p.id] || 0) + 1),
+                            }))
+                          }
+                          className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                          aria-label="Tăng số lượng"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setProductPickerOpen(false);
+                setProductPickerStep("groups");
+                setSelectedProductGroup(null);
+                setProductQuantities({});
+              }}
+            >
+              Đóng
+            </Button>
+            {productPickerStep === "products" && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={productsToAddCount === 0}
+                onClick={() => {
+                  const newProducts = productsInGroup
+                    .filter((p) => (productQuantities[p.id] || 0) > 0)
+                    .map((p) => ({
+                      id: p.id,
+                      name: p.name,
+                      price: p.price,
+                      code: p.code,
+                      quantity: productQuantities[p.id] || 0,
+                    }));
+                  if (newProducts.length > 0) {
+                    setSelectedProducts((prev) => [...prev, ...newProducts]);
+                  }
+                  setProductQuantities({});
+                  setProductPickerStep("groups");
+                  setSelectedProductGroup(null);
+                  setProductPickerOpen(false);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                {productsToAddCount > 0
+                  ? `Thêm ${productsToAddCount} sản phẩm vào đơn`
+                  : "Thêm vào đơn"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

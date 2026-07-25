@@ -34,6 +34,7 @@ const PaidInvoiceView = dynamic(
   { ssr: false }
 );
 import { BookingStatusType } from "@/lib/constants";
+import { transitionBookingToCheckout } from "@/lib/booking-checkout";
 import { BranchSelector } from "@/components/layout/branch-selector";
 import { useBranchStore } from "@/stores/branch-store";
 import { StaffReorderDialog } from "@/components/features/booking/staff-reorder-dialog";
@@ -285,13 +286,19 @@ function BookingPageContent() {
       bookingId: string;
       newStatus: BookingStatusType;
     }) => {
+      // For multi-customer "Cùng lịch" bookings, changing status from View
+      // khách hàng > Danh sách sets ALL slots to the same status. We send
+      // `clearSlotStatuses: true` so the PATCH route wipes the per-customer
+      // slotStatuses from the [[MULTI]] note — all slots revert to sharing
+      // the booking-level status.
       const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        // Send the logged-in staff's id as actor_staff_id so the server can
-        // attribute the activity to them even when the auth cookie isn't sent
-        // (Preview Panel iframe third-party cookie blocking).
-        body: JSON.stringify({ status: newStatus, actor_staff_id: useAuthStore.getState().user?.id }),
+        body: JSON.stringify({
+          status: newStatus,
+          actor_staff_id: useAuthStore.getState().user?.id,
+          clear_slot_statuses: true,
+        }),
       });
       return res.json();
     },
@@ -654,8 +661,31 @@ function BookingPageContent() {
             onAssignStaff={setAssignStaffBooking}
             onDelete={handleDelete}
             onInvoicePaid={(bookingId) => {
-              // After invoice payment, auto-transition booking to checkout.
-              statusMutation.mutate({ bookingId, newStatus: "checkout" as BookingStatusType });
+              // After invoice payment, transition the booking to checkout.
+              // For multi-customer "Cùng lịch" bookings with per-customer
+              // slotStatuses, this updates ONLY the checked-in slots to
+              // "checkout" (preserving the other slots' statuses) so the
+              // View khách hàng list shows mixed colors when only some
+              // customers have paid. The slot-status API auto-updates the
+              // booking-level status to "checkout" only when ALL slots
+              // become "checkout".
+              const booking = bookings.find((b) => b.id === bookingId);
+              if (booking) {
+                transitionBookingToCheckout(
+                  booking,
+                  useAuthStore.getState().user?.id
+                ).then(() => {
+                  queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+                  queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+                  queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+                  queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+                  queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
+                });
+              } else {
+                // Booking not in the local list — fall back to the regular
+                // statusMutation (which sends clear_slot_statuses: true).
+                statusMutation.mutate({ bookingId, newStatus: "checkout" as BookingStatusType });
+              }
             }}
             listViewMode={listViewMode}
             visibleColumns={visibleColumns}
@@ -767,9 +797,19 @@ function BookingPageContent() {
             booking={invoiceBooking}
             onClose={() => setInvoiceBooking(null)}
             onPaid={() => {
-              statusMutation.mutate({
-                bookingId: invoiceBooking.id,
-                newStatus: "checkout" as BookingStatusType,
+              // Transition to checkout using the shared helper so multi-customer
+              // bookings preserve per-customer slotStatuses (only paid slots
+              // turn yellow; others keep their status color). Falls back to a
+              // direct booking.status PATCH for single-customer bookings.
+              transitionBookingToCheckout(
+                invoiceBooking,
+                useAuthStore.getState().user?.id
+              ).then(() => {
+                queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+                queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+                queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayStandaloneInvoices });
+                queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+                queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
               });
               setInvoiceBooking(null);
             }}

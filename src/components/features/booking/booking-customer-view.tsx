@@ -786,8 +786,18 @@ export function BookingCustomerView({
                       // changing status here sets ALL slots to the same status
                       // (via the normal booking PATCH). For per-customer status
                       // changes, the user goes to View nhân viên.
+                      // Options logic: if all slots share the same status →
+                      // exclude it (no-op). If slots differ → show ALL 4.
                       const ALL_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
-                      const nextStatuses = ALL_OPTIONS.filter((st) => st !== booking.status);
+                      const parsedForStatus = parseMultiCustomerNote(booking.note);
+                      const ss = parsedForStatus?.slotStatuses;
+                      const allSame = ss && ss.length > 0
+                        ? ss.every((s) => s === ss[0])
+                        : true;
+                      const toExclude = allSame ? booking.status : null;
+                      const nextStatuses = toExclude
+                        ? ALL_OPTIONS.filter((st) => st !== toExclude)
+                        : ALL_OPTIONS;
                       return (
                         <Select value="" onValueChange={(value) => onStatusChange(booking.id, value as BookingStatusType)}>
                           <SelectTrigger className="h-6 w-full min-w-0 text-[11px] border-gray-300 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">

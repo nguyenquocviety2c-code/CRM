@@ -496,14 +496,16 @@ export async function PATCH(
     let bookingInvoiceId: string | null = null;
     let bookingInvoiceCode: string | null = null;
     let bookingBranchId: string | null = null;
+    let bookingNote: string | null = null;
     try {
       const { data: before } = await supabaseAdmin
         .from("bookings")
-        .select("status, branch_id")
+        .select("status, branch_id, note")
         .eq("id", id)
         .maybeSingle();
       oldStatus = (before as { status?: string | null } | null)?.status ?? null;
       bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
+      bookingNote = (before as { note?: string | null } | null)?.note ?? null;
       // Manual invoice lookup (more reliable than a PostgREST join — the
       // invoices→bookings FK may not be registered, so the join can silently
       // return null). Mirrors the GET endpoint's enrichBookings approach.
@@ -545,6 +547,24 @@ export async function PATCH(
       } else {
         updateData[field] = rest[field] === null ? null : rest[field];
       }
+    }
+
+    // If `clear_slot_statuses` is requested (from View khách hàng Danh sách
+    // status change), rebuild the note WITHOUT slotStatuses so all slots
+    // revert to sharing the booking-level status.
+    if (body.clear_slot_statuses && bookingNote) {
+      try {
+        const marker = "[[MULTI]]";
+        if (bookingNote.startsWith(marker)) {
+          const parsed = JSON.parse(bookingNote.slice(marker.length));
+          delete parsed.slotStatuses;
+          const { error: noteErr } = await supabaseAdmin
+            .from("bookings")
+            .update({ note: marker + JSON.stringify(parsed) })
+            .eq("id", id);
+          if (noteErr) { /* best-effort */ }
+        }
+      } catch { /* best-effort */ }
     }
 
     if (Object.keys(updateData).length > 0) {

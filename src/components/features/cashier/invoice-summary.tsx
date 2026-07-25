@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { parseMultiCustomerNote, type SlotCustomer } from "@/lib/multi-customer";
+import { transitionBookingToCheckout } from "@/lib/booking-checkout";
 
 /**
  * Read a File as a base64 data URL (for storing photos in the invoice note JSON).
@@ -1337,17 +1338,23 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       // thái" column to "Đã Checkout". Product-only invoices do NOT touch the
       // booking — the customer simply bought retail products with no service
       // appointment to check out.
+      //
+      // For multi-customer "Cùng lịch" bookings with per-customer
+      // slotStatuses, the shared helper updates ONLY the checked-in slots to
+      // "checkout" (preserving the other slots' statuses) so the View khách
+      // hàng list shows mixed colors when only some customers have paid, and
+      // the Status column shows a composite "Đã checkout: Khách N" badge
+      // instead of a single "Đã checkout" badge.
       if (shouldSyncBooking) {
-        try {
-          await fetch(`/api/supabase/bookings/${bookingId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "checkout" }),
-          });
-        } catch {
-          // Best-effort — the invoice was created; the booking status sync
-          // will happen on next data refresh.
-        }
+        await transitionBookingToCheckout(
+          {
+            id: bookingId,
+            note: activeBooking?.note ?? null,
+            status: activeBooking?.status ?? null,
+            number_of_customers: activeBooking?.number_of_customers ?? null,
+          },
+          useAuthStore.getState().user?.id
+        );
       }
 
       return {
@@ -1699,17 +1706,35 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // (status = "checkin" or "checkout"). Services of customers who are still
   // "confirmed", "cancelled", or "no_show" are excluded from the invoice
   // display (and thus from the total). Products/packages are always included.
+  // IMPORTANT: the filtered items' indices change, so we also need to filter
+  // itemSlotIndices to match (otherwise customer names are wrong).
   const slotStatusesFilter = activeMultiNote?.slotStatuses;
-  const filteredDisplayItems = isMultiCustomerBooking && slotStatusesFilter && !showSaved
-    ? displayItems.filter((it, idx) => {
-        // Non-service items (products/packages) are always included.
-        if ((it as { type?: string }).type !== "service") return true;
-        const slotIdx = itemSlotIndices[idx];
-        if (slotIdx < 0) return true; // no slot mapping → include
-        const st = slotStatusesFilter[slotIdx] || "confirmed";
-        return st === "checkin" || st === "checkout";
-      })
-    : displayItems;
+  const { filteredItems, filteredSlotIndices } = (() => {
+    if (!isMultiCustomerBooking || !slotStatusesFilter || showSaved) {
+      return { filteredItems: displayItems, filteredSlotIndices: itemSlotIndices };
+    }
+    const fi: typeof displayItems = [];
+    const fsi: number[] = [];
+    displayItems.forEach((it, idx) => {
+      if ((it as { type?: string }).type !== "service") {
+        fi.push(it);
+        fsi.push(itemSlotIndices[idx]);
+        return;
+      }
+      const slotIdx = itemSlotIndices[idx];
+      if (slotIdx < 0) {
+        fi.push(it);
+        fsi.push(slotIdx);
+        return;
+      }
+      const st = slotStatusesFilter[slotIdx] || "confirmed";
+      if (st === "checkin" || st === "checkout") {
+        fi.push(it);
+        fsi.push(slotIdx);
+      }
+    });
+    return { filteredItems: fi, filteredSlotIndices: fsi };
+  })();
   // Resolve the invoice id for the activity-history table:
   //  - Paid/cancelled tabs → the saved invoice's id.
   //  - Editable tabs that already have a server invoice (walk-in pending, or a
@@ -1763,13 +1788,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
 
       {/* Invoice items */}
       <div className="flex-1 overflow-y-auto">
-        {filteredDisplayItems.length === 0 ? (
+        {filteredItems.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-gray-400">
             <p className="text-sm">Chưa có mặt hàng nào</p>
           </div>
         ) : (
           <div className="divide-y">
-            {filteredDisplayItems.map((item, idx) => (
+            {filteredItems.map((item, idx) => (
               <div
                 key={item.id || idx}
                 className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-1 px-4 py-2 text-sm"
@@ -1785,10 +1810,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                       The per-slot customer is looked up from the booking's
                       [[MULTI]] note by a service-only index (products/packages
                       are skipped — they have no slot). */}
-                  {isMultiCustomerBooking && itemSlotIndices[idx] >= 0 &&
+                  {isMultiCustomerBooking && filteredSlotIndices[idx] >= 0 &&
                     (() => {
                       const sc: SlotCustomer | undefined =
-                        activeMultiNote?.slots[itemSlotIndices[idx]];
+                        activeMultiNote?.slots[filteredSlotIndices[idx]];
                       const isWalkin = !sc || sc.walkin;
                       const label = isWalkin
                         ? "Khách vãng lai"

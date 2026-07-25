@@ -981,12 +981,21 @@ export function BookingStaffView({
                         }
                       }}
                       onStatusChange={(status) => {
-                        // Changing status from the popover always changes the
-                        // WHOLE booking (all slots) via the normal booking PATCH
-                        // — NOT per-customer. Per-customer status changes are
-                        // done elsewhere (not from this popover). This ensures
-                        // all slots in a multi-customer booking sync together.
-                        onStatusChange?.(seg.booking.id, status);
+                        // For multi-customer "Cùng lịch" bookings, changing
+                        // status from the View nhân viên popover changes ONLY
+                        // this customer's slots (per-customer via slot-status
+                        // API). The slotIndex is derived from the segment's
+                        // service position via serviceSlots in the note.
+                        const parsed = parseMultiCustomerNote(seg.booking.note);
+                        if (parsed && parsed.slots.length > 0 && onSlotStatusChange) {
+                          const svcSlots = parsed.serviceSlots;
+                          const slotIdx = svcSlots && seg.segmentIndex < svcSlots.length
+                            ? svcSlots[seg.segmentIndex]
+                            : seg.segmentIndex;
+                          onSlotStatusChange(seg.booking.id, slotIdx, status);
+                        } else {
+                          onStatusChange?.(seg.booking.id, status);
+                        }
                       }}
                       onEdit={() => onEdit?.(seg.booking)}
                       onDelete={() => onDelete?.(seg.booking.id)}
@@ -1215,17 +1224,22 @@ function SegmentBlock({
   }
 
   // Status change options — ALL 4 manual options (Xác nhận, Checkin, Không đến,
-  // Hủy) are ALWAYS available regardless of the booking's current status. This
-  // lets the user recover from mistakes (e.g. accidentally checkin/checkout/
-  // cancel) by reverting to any status. checkout is NOT a manual option (it
-  // auto-happens via payment). The current status is excluded so the Select
-  // doesn't offer a no-op. NOTE: reverting to confirmed/cancelled auto-deletes
-  // the linked invoice (handled in the bookings PATCH route).
-  // For multi-customer bookings with per-customer slotStatuses, use the
-  // EFFECTIVE status (the per-customer slot status) as the "current" to
-  // exclude from the options — so the user sees what THIS customer's status is.
+  // Hủy) are ALWAYS available regardless of the booking's current status.
+  // checkout is NOT a manual option (it auto-happens via payment).
+  //
+  // For multi-customer bookings with per-customer slotStatuses:
+  // - If ALL slots share the SAME status → exclude that one status (no-op).
+  // - If slots have DIFFERENT statuses → show ALL 4 options (the booking has
+  //   mixed states, so any status change is meaningful).
+  // For non-multi bookings → exclude booking.status.
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
-  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== effectiveStatus);
+  const allSlotsSameStatus = slotStatuses && slotStatuses.length > 0
+    ? slotStatuses.every((s) => s === slotStatuses[0])
+    : true;
+  const statusToExclude = allSlotsSameStatus ? effectiveStatus : null;
+  let statusOptions: BookingStatusType[] = statusToExclude
+    ? ALL_STATUS_OPTIONS.filter((st) => st !== statusToExclude)
+    : ALL_STATUS_OPTIONS;
 
   // z-index by booking-status priority so UNPAID bookings always stack ON TOP
   // of cancelled/no_show ones when their segments overlap (mirrors the segment
@@ -1873,13 +1887,22 @@ function BookingChip({
     return () => animation.cancel();
   }, [isFlashing, booking.status]);
 
-  // Status-change Select state (hover popover). All 4 manual options are
-  // always available (minus the current status) so the user can revert from
-  // any status. Mirrors the SegmentBlock's statusOptions logic.
+  // Status-change Select state (hover popover). Mirrors the SegmentBlock's
+  // statusOptions logic:
+  // - All slots same status → exclude that status (no-op).
+  // - Slots have different statuses → show ALL 4 options.
   const [selectOpen, setSelectOpen] = useState(false);
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+  const chipParsedMulti = parseMultiCustomerNote(booking.note);
+  const chipSlotStatuses = chipParsedMulti?.slotStatuses;
+  const chipAllSame = chipSlotStatuses && chipSlotStatuses.length > 0
+    ? chipSlotStatuses.every((s) => s === chipSlotStatuses[0])
+    : true;
+  const chipStatusToExclude = chipAllSame ? booking.status : null;
   const chipStatusOptions = onStatusChange
-    ? ALL_STATUS_OPTIONS.filter((st) => st !== booking.status)
+    ? (chipStatusToExclude
+        ? ALL_STATUS_OPTIONS.filter((st) => st !== chipStatusToExclude)
+        : ALL_STATUS_OPTIONS)
     : [];
   // SAME scheme as SegmentBlock above (user's color spec):
   // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
