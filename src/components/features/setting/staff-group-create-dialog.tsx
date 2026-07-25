@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 // consolidated into one flat list per the user's request.)
 const GROUP_PERMISSIONS = [
   { key: "assign_staff", label: "Xếp nhân viên" },
+  { key: "reorder_staff", label: "Sắp xếp thứ tự nhân viên" },
   { key: "view_all_invoices", label: "Hiển thị hóa đơn toàn hệ thống" },
   { key: "upload_photo", label: "Tải ảnh từ thiết bị" },
   { key: "delete_past_photos", label: "Xóa ảnh tải lên trong quá khứ ở hóa đơn đã thanh toán" },

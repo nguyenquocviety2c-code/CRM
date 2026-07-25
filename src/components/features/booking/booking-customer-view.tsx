@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 // Lazy-load InvoiceDialog + PaidInvoiceView — only opened on demand (user
@@ -71,6 +71,13 @@ interface BookingCustomerViewProps {
    * the pencil icon for checkin/checkout bookings).
    */
   onShowInvoice?: (booking: Booking) => void;
+  /**
+   * When set, the booking row with this id blinks in its status-badge bg
+   * color (the "Xem lịch hẹn" deep-link from the Cashier module). The view
+   * also scrolls the row into view. Auto-cleared by the parent after the
+   * animation finishes.
+   */
+  flashBookingId?: string | null;
 }
 
 export function BookingCustomerView({
@@ -90,6 +97,7 @@ export function BookingCustomerView({
   columnDefs: columnDefsProp,
   onToggleColumn,
   onShowInvoice,
+  flashBookingId,
 }: BookingCustomerViewProps) {
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
@@ -101,6 +109,50 @@ export function BookingCustomerView({
   // Tracks which booking's reminder is currently being PATCHed (set → reset)
   // so we can disable the control and prevent double-clicks while in flight.
   const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
+
+  // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") -------------
+  // Map a booking's status → its status-badge bg color as a CSS color string.
+  // These mirror BookingStatusBadgeColors (Tailwind bg-*-100 classes) so the
+  // flash uses the SAME hue as the booking's current status badge background.
+  const flashColorForStatus = (status: BookingStatusType | string | undefined): string => {
+    switch (status) {
+      case "new": return "#dbeafe"; // bg-blue-100
+      case "confirmed": return "#dbeafe"; // bg-blue-100
+      case "checkin": return "#dcfce7"; // bg-green-100
+      case "checkout": return "#d1fae5"; // bg-emerald-100
+      case "no_show": return "#fee2e2"; // bg-red-100
+      case "cancelled": return "#f3f4f6"; // bg-gray-100
+      default: return "#dbeafe";
+    }
+  };
+
+  // When flashBookingId is set, the matching row blinks in its status-badge bg
+  // color and scrolls into view. We use the Web Animations API (element.animate)
+  // instead of a CSS keyframe so the dynamic per-status color works reliably
+  // (Lightning CSS can drop keyframes that reference CSS variables).
+  const flashRowRef = useRef<HTMLTableRowElement | null>(null);
+  useEffect(() => {
+    if (!flashBookingId || !flashRowRef.current) return;
+    const el = flashRowRef.current;
+    // Scroll the row into view so the user sees it immediately.
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Blink the row's background between transparent and the status badge bg
+    // color, 6 cycles (~3.6s). The color mirrors the booking's status badge
+    // background (e.g. sky-100 for confirmed) per the requirement "nháy sáng
+    // màu giống với màu nền hiện tại của lịch hẹn".
+    const color = flashColorForStatus(
+      bookings.find((b) => b.id === flashBookingId)?.status
+    );
+    const animation = el.animate(
+      [
+        { backgroundColor: "transparent" },
+        { backgroundColor: color },
+        { backgroundColor: "transparent" },
+      ],
+      { duration: 600, iterations: 6, easing: "ease-in-out" }
+    );
+    return () => animation.cancel();
+  }, [flashBookingId, bookings]);
 
   /**
    * Optimistically update the React Query cache for a booking's reminder_at.
@@ -238,8 +290,13 @@ export function BookingCustomerView({
           <tbody>
             {bookings.map((booking) => {
               const serviceDisplay = getServiceDisplay(booking);
+              const isFlashing = !!flashBookingId && flashBookingId === booking.id;
               return (
-              <tr key={booking.id} className="border-b border-gray-300 hover:bg-gray-50">
+              <tr
+                key={booking.id}
+                ref={isFlashing ? flashRowRef : undefined}
+                className="border-b border-gray-300 hover:bg-gray-50"
+              >
                 {visibleColumns.date && (
                 <td className="border-r border-gray-300 px-3 py-1 text-gray-600">
                   {getBookingDate(booking)}
@@ -585,19 +642,17 @@ export function BookingCustomerView({
                       </span>
                     </div>
                     {(() => {
-                      // "checkout" is intentionally NOT a manual option: a booking
-                      // auto-transitions to "checkout" once payment is completed in
-                      // the Cashier/Invoice dialog. Manual options are:
-                      // - confirmed / new → checkin, no_show, cancelled
-                      // - checkin → cancelled (customer showed up but changed mind
-                      //   before paying; the slot is freed for a new booking)
-                      let nextStatuses: BookingStatusType[] = [];
-                      if (booking.status === "confirmed" || booking.status === "new") {
-                        nextStatuses = ["checkin", "no_show", "cancelled"];
-                      } else if (booking.status === "checkin") {
-                        nextStatuses = ["cancelled"];
-                      }
-                      if (nextStatuses.length === 0) return null;
+                      // Status change Select — ALWAYS visible with ALL 4 manual
+                      // options (Xác nhận, Checkin, Không đến, Hủy), regardless of
+                      // the booking's current status. This lets the user recover
+                      // from mistakes (e.g. accidentally checkin/checkout/cancel)
+                      // by reverting to any status. checkout is NOT a manual
+                      // option (it auto-happens via payment). The current status
+                      // is excluded so the Select doesn't offer a no-op.
+                      // NOTE: reverting to confirmed/cancelled auto-deletes the
+                      // linked invoice (handled in the bookings PATCH route).
+                      const ALL_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+                      const nextStatuses = ALL_OPTIONS.filter((st) => st !== booking.status);
                       return (
                         <Select value="" onValueChange={(value) => onStatusChange(booking.id, value as BookingStatusType)}>
                           <SelectTrigger className="h-6 w-full min-w-0 text-[11px] border-gray-300 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">

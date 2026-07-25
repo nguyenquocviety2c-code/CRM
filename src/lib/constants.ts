@@ -104,7 +104,7 @@ export const BookingStatusLabel: Record<BookingStatusType, string> = {
 
 export const BookingStatusBadgeColors: Record<BookingStatusType, { bg: string; text: string }> = {
   new: { bg: "bg-blue-100", text: "text-blue-700" },
-  confirmed: { bg: "bg-sky-100", text: "text-sky-700" },
+  confirmed: { bg: "bg-blue-100", text: "text-blue-700" },
   checkin: { bg: "bg-green-100", text: "text-green-700" },
   checkout: { bg: "bg-emerald-100", text: "text-emerald-700" },
   no_show: { bg: "bg-red-100", text: "text-red-700" },

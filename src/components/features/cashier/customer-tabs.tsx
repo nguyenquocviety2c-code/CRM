@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { queryKeys } from "@/lib/query-keys";
 import { parseMultiCustomerNote } from "@/lib/multi-customer";
+import { sortByPhoneRelevance } from "@/lib/phone-search";
 
 // Fetch a customer's "Khách cũ" status from the API. A customer counts as
 // "old" (Khách cũ) when they have at least one completed invoice OR belong
@@ -74,6 +75,15 @@ interface TodayBooking {
   number_of_customers: number | null;
   customer: { id: string; name: string; phone: string | null } | null;
   services: BookingServiceRow[];
+  /** Booking creation timestamp (raw Supabase column). Used for the "Giờ xác
+   *  nhận: (thời gian tạo đơn)" activity line in the cashier info bar. */
+  created_at?: string | null;
+  /** Creator staff profile (enriched by the bookings API). Used for the
+   *  "Thực hiện bởi (người tạo đơn)" part of the confirmed-activity line. */
+  createdBy?: { id?: string; name?: string; email?: string } | null;
+  /** Linked invoice (enriched by the bookings API). Used to fetch
+   *  invoice_activities for the checkin/checkout/cancel/no_show activity lines. */
+  invoice?: { id: string; code?: string | null; status?: string; final_amount?: number | string; payment_method?: string } | null;
 }
 
 // A standalone invoice (no linked booking) — created when a customer buys
@@ -158,6 +168,16 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
     staleTime: 10_000,
   });
 
+  // Rank inline search results by phone relevance so the customers whose
+  // phone contains the typed query the most (incl. suffix / middle matches)
+  // are suggested first. The API already ranks phone-like queries, but this
+  // is a safety net that also handles edge cases (e.g. mixed name+phone
+  // results). No-op for non-phone queries (all scores 0 → stable order).
+  const rankedInlineResults = useMemo(
+    () => sortByPhoneRelevance(inlineResults || [], inlineSearch),
+    [inlineResults, inlineSearch]
+  );
+
   // Close the results dropdown on outside click.
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -240,6 +260,76 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
         (b) => b.id === activeTabId || b.id === activeMetaForBooking?.bookingId
       ) || null
     : null;
+
+  // Fetch the active booking's invoice-activity history so the cashier info bar
+  // can show "Giờ X: (time) Thực hiện bởi (actor)" for the booking's current
+  // status. invoice_activities is keyed on invoice_id, so we resolve the booking's
+  // linked invoice first (booking.invoice.id, or activeMeta.invoiceId for
+  // walk-in tabs auto-linked to a booking). Activities are returned newest-first
+  // and enriched with created_by_staff { name, username }.
+  const activeInvoiceId = activeBooking?.invoice?.id || activeMetaForBooking?.invoiceId || null;
+  const { data: bookingActivities } = useQuery<Array<{
+    action: string;
+    created_at: string;
+    created_by: string | null;
+    created_by_staff?: { name: string; username?: string | null } | null;
+  }>>({
+    queryKey: ["cashier-booking-activities", activeInvoiceId],
+    queryFn: async () => {
+      if (!activeInvoiceId) return [];
+      const res = await fetch(`/api/supabase/invoice-activities?invoice_id=${encodeURIComponent(activeInvoiceId)}&limit=50`);
+      const json = await res.json();
+      if (!json.ok) return [];
+      return (json.data as Array<{ action: string; created_at: string; created_by: string | null; created_by_staff?: { name: string; username?: string | null } | null }>) || [];
+    },
+    enabled: !!activeInvoiceId,
+    staleTime: 15_000,
+  });
+
+  /**
+   * Derive the "Giờ X: (time) Thực hiện bởi (actor)" line for the active
+   * booking's current status:
+   *  - confirmed → booking.created_at + booking.createdBy ("thời gian tạo đơn")
+   *  - checkin   → first CHECKIN activity (time + actor)
+   *  - checkout  → first CHECKOUT activity (time + actor) — "đã hoàn tất thanh toán"
+   *  - cancelled → first CANCEL activity (time + actor)
+   *  - no_show   → first NO_SHOW activity (time + actor)
+   * Returns null when no data is available for the current status.
+   */
+  const activityLine = useMemo(() => {
+    if (!activeBooking) return null;
+    const status = activeBooking.status;
+    const actorName = (a: { created_by_staff?: { name?: string } | null }) =>
+      a.created_by_staff?.name || "Hệ thống";
+    const fmtTime = (iso: string) => {
+      try {
+        const d = toVietnamDay(iso).split("-");
+        const t = toVietnamTime(iso);
+        return d.length === 3 ? `${d[2]}/${d[1]}/${d[0]} ${t}` : "—";
+      } catch {
+        return "—";
+      }
+    };
+    if (status === "confirmed" || status === "new") {
+      const ts = activeBooking.created_at;
+      if (!ts) return null;
+      return {
+        label: "Giờ xác nhận",
+        time: fmtTime(ts),
+        actor: activeBooking.createdBy?.name || "Hệ thống",
+      };
+    }
+    const acts = bookingActivities || [];
+    const find = (action: string) => acts.find((a) => a.action === action);
+    let entry: { action: string; created_at: string; created_by_staff?: { name?: string } | null } | undefined;
+    let label = "";
+    if (status === "checkin") { entry = find("CHECKIN"); label = "Giờ checkin"; }
+    else if (status === "checkout") { entry = find("CHECKOUT") || find("PAYMENT"); label = "Đã hoàn tất thanh toán"; }
+    else if (status === "cancelled") { entry = find("CANCEL"); label = "Giờ hủy"; }
+    else if (status === "no_show") { entry = find("NO_SHOW"); label = "Giờ không đến"; }
+    if (!entry) return null;
+    return { label, time: fmtTime(entry.created_at), actor: actorName(entry) };
+  }, [activeBooking, bookingActivities]);
 
   // Multi-customer "Cùng lịch" booking detection (Cashier module only).
   // When a booking has number_of_customers >= 2 AND a [[MULTI]] note, the
@@ -1142,12 +1232,12 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                 {/* Autocomplete dropdown */}
                 {showInlineResults && inlineSearch.trim().length >= 2 && (
                   <div className="absolute z-50 mt-1 max-h-64 w-72 overflow-y-auto rounded-lg border bg-white shadow-lg">
-                    {(inlineResults || []).length === 0 && !inlineFetching ? (
+                    {rankedInlineResults.length === 0 && !inlineFetching ? (
                       <div className="px-3 py-3 text-center text-xs text-gray-400">
                         Không tìm thấy khách hàng
                       </div>
                     ) : (
-                      (inlineResults || []).map((c) => (
+                      rankedInlineResults.map((c) => (
                         <button
                           key={c.id}
                           type="button"
@@ -1228,13 +1318,13 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                         onClick={() =>
                           router.push(`/customers/${activeBooking.customer!.id}`)
                         }
-                        className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
+                        className="font-medium text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
                         title="Xem lịch sử khách hàng"
                       >
                         {activeCustomer.customerName}
                       </button>
                     ) : (
-                      <span className="font-medium text-gray-900">
+                      <span className="font-medium text-blue-600">
                         {activeCustomer.customerName}
                       </span>
                     )}
@@ -1250,14 +1340,26 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                 </>
               )}
 
-              {/* Booking/invoice code badge: shows "Lịch hẹn: LHxxx" when unpaid,
-                  "Hóa đơn: HDxxx" (clickable → opens full invoice view) when paid. */}
-              {activeMeta?.bookingCode && (
-                <div className="flex items-center gap-2 text-emerald-700">
-                  {activeBooking?.status === "checkout" ? (
+              {/* Booking/invoice code badge:
+                  - Has invoice (status checkin/checkout OR an invoiceId exists)
+                    → show "Xem hóa đơn" (blue, clickable) → opens the full
+                    paid-invoice view.
+                  - Only has an appointment (confirmed/new/etc., no invoice yet)
+                    → show "Xem lịch hẹn" (green, clickable) → jumps to the
+                    Lịch hẹn module > View nhân viên, where the target booking
+                    block flashes in its status-badge bg color so the cashier
+                    can spot it instantly. */}
+              {activeMeta?.bookingCode && (() => {
+                const invId = activeMeta?.invoiceId || activeBooking?.invoice?.id;
+                const hasInvoice =
+                  !!invId ||
+                  activeBooking?.status === "checkout" ||
+                  activeBooking?.status === "checkin";
+                if (hasInvoice) {
+                  return (
                     <button
+                      type="button"
                       onClick={() => {
-                        const invId = activeMeta?.invoiceId || activeBooking?.invoice?.id;
                         if (invId) {
                           setPaidInvoiceView({
                             invoiceId: invId,
@@ -1267,17 +1369,46 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                           });
                         }
                       }}
-                      className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                      className="text-xs font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                      title="Xem hóa đơn"
                     >
-                      Hóa đơn: {activeMeta?.invoiceId ? `HD${activeMeta.bookingCode?.replace(/\D/g, "").slice(-6) || ""}` : activeMeta?.bookingCode}
+                      Xem hóa đơn
                     </button>
-                  ) : (
-                    <span className="text-xs font-medium">
-                      Lịch hẹn: {activeMeta.bookingCode}
-                    </span>
-                  )}
-                </div>
-              )}
+                  );
+                }
+                // Appointment-only → jump to Lịch hẹn > View nhân viên with a
+                // flash highlight on this booking. Pass the booking id (for the
+                // flash) + code (so the search filters straight to it) + the
+                // booking's Vietnam day (so the booking page opens ONLY that
+                // single day, not a wide multi-day range).
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const bookingId = activeBooking?.id;
+                      const code = activeMeta?.bookingCode || "";
+                      const params = new URLSearchParams();
+                      params.set("view", "staff");
+                      if (bookingId) params.set("flash", bookingId);
+                      if (code) params.set("search", code);
+                      // Booking's Vietnam calendar day (YYYY-MM-DD) so the
+                      // booking page defaults to showing ONLY this day.
+                      if (activeBooking?.date_time) {
+                        try {
+                          params.set("date", toVietnamDay(activeBooking.date_time));
+                        } catch {
+                          // ignore malformed date_time
+                        }
+                      }
+                      router.push(`/booking?${params.toString()}`);
+                    }}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                    title="Xem lịch hẹn"
+                  >
+                    Xem lịch hẹn
+                  </button>
+                );
+              })()}
 
               {/* Booking date + time — the appointment's full date_time
                   (dd/MM/yyyy HH:MM). Shown alongside the booking code so the
@@ -1308,6 +1439,34 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
                   </span>
                 </div>
               )}
+
+              {/* Status activity line — shows "Giờ X: (time) Thực hiện bởi:
+                  (actor)" for the booking's CURRENT status. The text color
+                  SYNCS with the booking status color (blue for confirmed,
+                  green for checkin, emerald for checkout, red for no_show,
+                  gray for cancelled) so the cashier can tell the status at a
+                  glance. Per status:
+                    confirmed  → "Giờ xác nhận: (thời gian tạo đơn) Thực hiện bởi: (người tạo đơn)"
+                    checkin    → "Giờ checkin: (thời gian checkin) Thực hiện bởi: (người checkin)"
+                    checkout   → "Đã hoàn tất thanh toán: (giờ bấm Hoàn tất) Thực hiện bởi: (người đăng nhập)"
+                    cancelled  → "Giờ hủy: (thời gian hủy) Thực hiện bởi: (người hủy)"
+                    no_show    → "Giờ không đến: (thời gian đánh dấu) Thực hiện bởi: (người đánh dấu)"
+                  Derived from booking.created_at (confirmed) or invoice_activities
+                  (other statuses). Hidden when no data is available. */}
+              {activityLine && activeBooking && (() => {
+                // Sync the activity-line text color with the booking's status
+                // badge text color (from BookingStatusBadgeColors).
+                const st = activeBooking.status as BookingStatusType;
+                const statusText =
+                  BookingStatusBadgeColors[st]?.text || "text-blue-600";
+                return (
+                  <div className={`flex items-center gap-1 ${statusText}`}>
+                    <span className="text-xs font-medium">
+                      {activityLine.label}: {activityLine.time} Thực hiện bởi: {activityLine.actor}
+                    </span>
+                  </div>
+                );
+              })()}
             </>
           )}
 

@@ -226,6 +226,7 @@ export function BookingTimeGrid({
           onSlotClick={onSlotClick}
           slotLocked={slotLocked}
           canViewCustomerPhone={canViewCustomerPhone}
+          onStatusChange={onStatusChange}
         />
       ) : (
         /* Single-day continuous timeline. The body scrolls both vertically and
@@ -595,18 +596,16 @@ function SegmentCard({
     timeText = "text-blue-800";
   }
 
-  // Determine which next-statuses are allowed — SAME logic as the list view
-  // (booking-customer-view.tsx). Terminal statuses (checkout/no_show/cancelled)
-  // cannot be changed (app-wide rule: đã checkout/Xác nhận thanh toán then no
-  // status change allowed). The select is hidden for terminal statuses.
-  let statusOptions: BookingStatusType[] = [];
-  if (booking.status === "confirmed" || booking.status === "new") {
-    statusOptions = ["checkin", "no_show", "cancelled"];
-  } else if (booking.status === "checkin") {
-    // checkin → can cancel (customer showed up but changed mind before paying;
-    // the slot is freed for a new booking).
-    statusOptions = ["cancelled"];
-  }
+  // Status change options — ALL 4 manual options (Xác nhận, Checkin, Không đến,
+  // Hủy) are ALWAYS available regardless of the booking's current status, so
+  // the user can recover from mistakes (e.g. accidentally checkin/checkout/
+  // cancel). checkout is NOT a manual option (it auto-happens via payment). The
+  // current status is excluded so the Select doesn't offer a no-op. Mirrors the
+  // list view (View khách hàng) + View nhân viên logic. NOTE: reverting to
+  // confirmed/cancelled auto-deletes the linked invoice (handled in the
+  // bookings PATCH route).
+  const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== booking.status);
 
   return (
     <div
@@ -1223,6 +1222,9 @@ interface CustomerDayRangeGridProps {
   onSlotClick?: (slot: { date: string; time: string }) => void;
   slotLocked: boolean;
   canViewCustomerPhone: boolean;
+  /** Called when the user changes a booking's status from the chip's hover
+   *  popover. Mirrors the single-day SegmentCard's onStatusChange. */
+  onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
 }
 
 function CustomerDayRangeGrid({
@@ -1235,6 +1237,7 @@ function CustomerDayRangeGrid({
   onSlotClick,
   slotLocked,
   canViewCustomerPhone,
+  onStatusChange,
 }: CustomerDayRangeGridProps) {
   const days = useMemo(() => cdgBuildDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
   const hours = HOURS;
@@ -1465,6 +1468,7 @@ function CustomerDayRangeGrid({
                               onEdit={onEdit}
                               onAssignStaff={onAssignStaff}
                               onDelete={onDelete}
+                              onStatusChange={onStatusChange ? (st) => onStatusChange(b.id, st) : undefined}
                             />
                           </div>
                         ))}
@@ -1514,6 +1518,7 @@ function CustomerGridChip({
   onEdit,
   onAssignStaff,
   onDelete,
+  onStatusChange,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
@@ -1523,6 +1528,9 @@ function CustomerGridChip({
       assign-staff button in the popover). */
   onAssignStaff?: (booking: Booking) => void;
   onDelete?: (bookingId: string) => void;
+  /** Called when the user changes the booking's status from the chip's hover
+   *  popover. When omitted, the status Select is hidden (read-only popover). */
+  onStatusChange?: (status: BookingStatusType) => void;
 }) {
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
   const serviceRows = getAllServices(booking);
@@ -1568,6 +1576,15 @@ function CustomerGridChip({
   const phone = booking.customer?.phone || "";
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 
+  // Status-change Select state (hover popover). All 4 manual options are
+  // always available (minus the current status) so the user can revert from
+  // any status. Mirrors the single-day SegmentCard + View nhân viên logic.
+  const [selectOpen, setSelectOpen] = useState(false);
+  const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+  const chipStatusOptions = onStatusChange
+    ? ALL_STATUS_OPTIONS.filter((st) => st !== booking.status)
+    : [];
+
   return (
     <HoverCard openDelay={200} closeDelay={150}>
       <HoverCardTrigger asChild>
@@ -1610,10 +1627,10 @@ function CustomerGridChip({
         <BookingHoverDetails
           booking={booking}
           canViewCustomerPhone={canViewCustomerPhone}
-          statusOptions={[]}
-          onStatusChange={() => {}}
-          selectOpen={false}
-          setSelectOpen={() => {}}
+          statusOptions={chipStatusOptions}
+          onStatusChange={onStatusChange || (() => {})}
+          selectOpen={selectOpen}
+          setSelectOpen={setSelectOpen}
           onEdit={() => onEdit?.(booking)}
           onDelete={() => onDelete?.(booking.id)}
           canCancelPayment={canCancelPayment}

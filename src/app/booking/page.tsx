@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -37,9 +38,35 @@ import { BranchSelector } from "@/components/layout/branch-selector";
 import { useBranchStore } from "@/stores/branch-store";
 
 export default function BookingPage() {
+  // useSearchParams must be inside a <Suspense> boundary in Next.js 16, so the
+  // real page body lives in BookingPageContent and we wrap it here.
+  return (
+    <Suspense fallback={<div className="flex h-64 items-center justify-center text-gray-500">Đang tải...</div>}>
+      <BookingPageContent />
+    </Suspense>
+  );
+}
+
+function BookingPageContent() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [listViewMode, setListViewMode] = useState<"list" | "calendar">("list");
+  // When the cashier clicks "Xem lịch hẹn" on a confirmed booking, it
+  // navigates here with ?flash=BOOKING_ID&search=CODE&view=customer. We read
+  // those params once on mount, switch to the customer view, pre-fill the
+  // search so the target booking is filtered into view, and widen the date
+  // range to 7 days (the booking may not be today). The flashBookingId is
+  // passed down to BookingCustomerView which blinks that row in its status
+  // badge bg color. Cleared after the animation finishes.
+  const searchParams = useSearchParams();
+  // Initialize flashBookingId lazily from the URL (?flash=BOOKING_ID) so no
+  // synchronous setState-in-effect is needed for the initial value. The store
+  // side-effects (view mode + search + date range) are applied in a separate
+  // guarded effect below (zustand = external system, allowed in effects).
+  const [flashBookingId, setFlashBookingId] = useState<string | null>(
+    () => searchParams.get("flash")
+  );
+  const flashAppliedRef = useRef(false);
   // Shared invoice-dialog state — owned by the page so that the staff-view
   // and the time-grid (which don't render the InvoiceDialog inline) can open
   // it via the onShowInvoice callback. The list view still owns its own copy
@@ -101,6 +128,58 @@ export default function BookingPage() {
   // are blocked.
   const { hasPermission } = useAuthStore();
   const canBookPastDate = hasPermission("book_past_date");
+
+  // Apply the "Xem lịch hẹn" deep-link from the Cashier module ONCE on mount.
+  // ?view=staff/customer → switch view mode. ?search=CODE → pre-fill the search
+  // so the target booking is filtered into view. ?flash=BOOKING_ID → blink that
+  // booking row. ?date=YYYY-MM-DD → open ONLY that single day (the booking's
+  // Vietnam day) instead of a wide multi-day range, so the user sees just the
+  // booking's day. Falls back to a 30-back/7-forward range when flash/code is
+  // present but no date is given.
+  // Guarded by a ref so React StrictMode / re-renders don't re-apply it.
+  // NOTE: only zustand (external) setters are called here — no React setState —
+  // so this complies with the set-state-in-effect rule.
+  useEffect(() => {
+    if (flashAppliedRef.current) return;
+    flashAppliedRef.current = true;
+    const view = searchParams.get("view");
+    const flash = searchParams.get("flash");
+    const code = searchParams.get("search");
+    const dateParam = searchParams.get("date");
+    if (view === "customer") setViewMode("customer");
+    if (view === "staff") setViewMode("staff");
+    if (code) setSearchQuery(code);
+    if (dateParam) {
+      // Open ONLY the booking's single day. Parse YYYY-MM-DD into a local
+      // midnight → same-day 23:59:59 range so the API returns just that day's
+      // bookings.
+      const m = dateParam.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const from = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+        const to = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+        setDateRange({ from, to });
+      }
+    } else if (flash || code) {
+      // Fallback (no date param): wide range so the booking is still found.
+      const now = new Date();
+      const from = new Date(now);
+      from.setDate(from.getDate() - 30);
+      from.setHours(0, 0, 0, 0);
+      const to = new Date(now);
+      to.setDate(to.getDate() + 7);
+      to.setHours(23, 59, 59, 999);
+      setDateRange({ from, to });
+    }
+  }, [searchParams, setViewMode, setSearchQuery, setDateRange]);
+
+  // Clear the flash state after the animation finishes (5 cycles × 0.9s ≈ 4.5s)
+  // so a later normal visit doesn't re-flash. setState is inside a setTimeout
+  // callback (not synchronous), so this complies with the set-state-in-effect rule.
+  useEffect(() => {
+    if (!flashBookingId) return;
+    const t = setTimeout(() => setFlashBookingId(null), 6000);
+    return () => clearTimeout(t);
+  }, [flashBookingId]);
 
   // Whether the currently-viewed date is in the past.
   const isViewingPastDate = (() => {
@@ -438,6 +517,7 @@ export default function BookingPage() {
             visibleColumns={visibleColumns}
             columnDefs={columnDefs}
             onToggleColumn={toggleColumn}
+            flashBookingId={flashBookingId}
             onSwitchToCalendar={() => (
               <BookingTimeGrid
                 bookings={bookings}
@@ -475,6 +555,18 @@ export default function BookingPage() {
           // Fetch ALL staff for this branch so every hairdresser has a column,
           // not just those with bookings today.
           branchId={selectedBranchId}
+          flashBookingId={flashBookingId}
+          // Multi-day grid: clicking a day column header switches to showing
+          // ONLY that single day (00:00 → 23:59:59). Lets the user drill from
+          // a week view into one day's schedule without re-opening the date
+          // picker.
+          onSelectDay={(day) => {
+            const from = new Date(day);
+            from.setHours(0, 0, 0, 0);
+            const to = new Date(day);
+            to.setHours(23, 59, 59, 999);
+            setDateRange({ from, to });
+          }}
         />
       )}
 

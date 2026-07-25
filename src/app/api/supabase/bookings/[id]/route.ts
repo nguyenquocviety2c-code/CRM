@@ -499,16 +499,23 @@ export async function PATCH(
     try {
       const { data: before } = await supabaseAdmin
         .from("bookings")
-        .select("status, branch_id, invoice:invoices(id, code)")
+        .select("status, branch_id")
         .eq("id", id)
         .maybeSingle();
       oldStatus = (before as { status?: string | null } | null)?.status ?? null;
       bookingBranchId = (before as { branch_id?: string | null } | null)?.branch_id ?? null;
-      // The invoice join returns an ARRAY (PostgREST to-many), so extract [0].
-      const invRaw2 = (before as { invoice?: unknown })?.invoice;
-      const inv = Array.isArray(invRaw2) ? invRaw2[0] as { id?: string; code?: string } | null : invRaw2 as { id?: string; code?: string } | null;
-      bookingInvoiceId = inv?.id ?? null;
-      bookingInvoiceCode = inv?.code ?? null;
+      // Manual invoice lookup (more reliable than a PostgREST join — the
+      // invoices→bookings FK may not be registered, so the join can silently
+      // return null). Mirrors the GET endpoint's enrichBookings approach.
+      const { data: invRow } = await supabaseAdmin
+        .from("invoices")
+        .select("id, code")
+        .eq("booking_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      bookingInvoiceId = (invRow as { id?: string } | null)?.id ?? null;
+      bookingInvoiceCode = (invRow as { code?: string } | null)?.code ?? null;
     } catch {
       // best-effort — proceed without activity logging
     }
@@ -564,13 +571,48 @@ export async function PATCH(
     }
 
 
+    // === Auto-delete linked invoice when reverting to pre-invoice statuses ===
+    // When the user changes a booking back to "confirmed" or "cancelled" (the
+    // statuses that should NOT have an invoice), any existing invoice (pending
+    // or paid) + its activities are deleted from Supabase. This lets the user
+    // recover from mistakes: e.g. accidentally checked in (created a pending
+    // invoice) → revert to confirmed → the stale invoice is cleaned up.
+    // NOTE: only confirmed and cancelled trigger deletion (per the requirement).
+    // no_show keeps the invoice for records; checkin/checkout obviously keep it.
+    let invoiceDeleted = false;
+    if (
+      newStatus &&
+      (newStatus === "confirmed" || newStatus === "cancelled") &&
+      bookingInvoiceId
+    ) {
+      try {
+        // Delete activities first (keyed on invoice_id), then the invoice row.
+        await supabaseAdmin
+          .from("invoice_activities")
+          .delete()
+          .eq("invoice_id", bookingInvoiceId);
+        const { error: invDelErr } = await supabaseAdmin
+          .from("invoices")
+          .delete()
+          .eq("id", bookingInvoiceId);
+        if (!invDelErr) {
+          invoiceDeleted = true;
+        }
+      } catch {
+        // best-effort — proceed (the booking status still changed)
+      }
+    }
+
     // === Log invoice activity for status transitions ===
     // When the booking's status changes, log the appropriate activity so the
     // "Lịch sử thao tác" table reflects it. The actor is the currently
     // logged-in staff (from the auth cookie). For kiosk-placed bookings
     // (created_by is null), the actor remains null — enriched with the
     // customer name on read.
-    if (newStatus && newStatus !== oldStatus && bookingInvoiceId) {
+    // SKIP activity logging when the invoice was just deleted (reverting to
+    // confirmed/cancelled) — there's no invoice to attach the activity to,
+    // and the deletion itself is the audit event.
+    if (newStatus && newStatus !== oldStatus && bookingInvoiceId && !invoiceDeleted) {
       // Cookie is the primary source (httpOnly, tamper-proof). The body's
       // actor_staff_id is a FALLBACK for when the cookie isn't sent (Preview
       // Panel iframe third-party cookie blocking) — the client sends the

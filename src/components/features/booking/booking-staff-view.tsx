@@ -64,6 +64,17 @@ interface BookingStaffViewProps {
   onSlotClick?: (slot: { date: string; time: string; staffId: string | null }) => void;
   /** Branch id (used to fetch the full staff list so ALL staff columns show). */
   branchId?: string | null;
+  /**
+   * When set, the segment block(s) of the booking with this id blink in the
+   * booking's status-badge bg color and scroll into view. Used by the
+   * "Xem lịch hẹn" deep-link from the Cashier module.
+   */
+  flashBookingId?: string | null;
+  /**
+   * Called when the user clicks a day column header in the multi-day grid.
+   * The parent switches the date range to show ONLY that single day.
+   */
+  onSelectDay?: (day: Date) => void;
 }
 
 interface StaffColumn {
@@ -118,6 +129,22 @@ const RESIZER_WIDTH = 8;
 // are shown as staff columns (mirrors BookingDialog's staff fetch).
 const HAIRDRESSER_GROUPS = ["Artist", "Creative Director", "Master", "Junior"];
 
+/** Map a booking's status → its status-badge bg color as a CSS color string.
+ *  These mirror BookingStatusBadgeColors (Tailwind bg-*-100 classes) so the
+ *  flash uses the SAME hue as the booking's current status badge background.
+ *  Used by the "Xem lịch hẹn" deep-link flash highlight. */
+function flashColorForStatus(status: BookingStatusType | string | undefined): string {
+  switch (status) {
+    case "new": return "#dbeafe"; // bg-blue-100
+    case "confirmed": return "#dbeafe"; // bg-blue-100
+    case "checkin": return "#dcfce7"; // bg-green-100
+    case "checkout": return "#d1fae5"; // bg-emerald-100
+    case "no_show": return "#fee2e2"; // bg-red-100
+    case "cancelled": return "#f3f4f6"; // bg-gray-100
+    default: return "#dbeafe";
+  }
+}
+
 export function BookingStaffView({
   bookings,
   currentDate,
@@ -130,6 +157,8 @@ export function BookingStaffView({
   onShowInvoice,
   onSlotClick,
   branchId,
+  flashBookingId,
+  onSelectDay,
 }: BookingStaffViewProps) {
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
@@ -556,6 +585,9 @@ export function BookingStaffView({
           slotLocked={slotLocked}
           onEdit={onEdit}
           onAssignStaff={onAssignStaff}
+          flashBookingId={flashBookingId}
+          onSelectDay={onSelectDay}
+          onStatusChange={onStatusChange}
         />
       )}
 
@@ -767,6 +799,7 @@ export function BookingStaffView({
                       key={`${seg.booking.id}-${seg.segmentIndex}`}
                       segment={seg}
                       pxPerHour={pxPerHour}
+                      flashBookingId={flashBookingId}
                       // Click logic:
                       // - checkout (paid) → open the full paid invoice view (giao diện hóa
                       //   đơn hoàn tất) so the cashier can review/print the receipt.
@@ -841,6 +874,7 @@ function SegmentBlock({
   onDelete,
   onAssignStaff,
   pxPerHour = PX_PER_HOUR,
+  flashBookingId,
 }: {
   segment: ServiceSegment;
   onClick: () => void;
@@ -855,6 +889,10 @@ function SegmentBlock({
   onAssignStaff?: () => void;
   /** Hour-band height (single-day resizable timeline). Defaults to PX_PER_HOUR. */
   pxPerHour?: number;
+  /** When set and matches this segment's booking id, the block blinks in the
+      booking's status-badge bg color and scrolls into view (deep-link from
+      Cashier "Xem lịch hẹn"). */
+  flashBookingId?: string | null;
 }) {
   const booking = segment.booking;
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
@@ -865,6 +903,37 @@ function SegmentBlock({
   const isReviewing = useIsReviewing(booking.id);
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
+
+  // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") ------------
+  // When flashBookingId matches this booking, blink the block's background in
+  // the booking's status-badge bg color and scroll it into view. Only the
+  // FIRST segment of the booking triggers the scroll (others just blink) to
+  // avoid janky double-scrolls on multi-service bookings.
+  const flashRef = useRef<HTMLDivElement | null>(null);
+  const isFlashing = !!flashBookingId && flashBookingId === booking.id;
+  useEffect(() => {
+    if (!isFlashing || !flashRef.current) return;
+    const el = flashRef.current;
+    // Scroll only the first segment (segmentIndex 0) to avoid multiple
+    // competing scrollIntoView calls on multi-segment bookings.
+    if (segment.segmentIndex === 0) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    // Blink the block's border + background between transparent and the
+    // status-badge bg color. The color mirrors BookingStatusBadgeColors so the
+    // flash matches the booking's current status (per the requirement
+    // "nháy sáng màu giống với màu nền hiện tại của lịch hẹn").
+    const color = flashColorForStatus(booking.status);
+    const animation = el.animate(
+      [
+        { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
+        { boxShadow: `0 0 0 4px ${color}`, backgroundColor: color },
+        { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
+      ],
+      { duration: 700, iterations: 6, easing: "ease-in-out" }
+    );
+    return () => animation.cancel();
+  }, [isFlashing, booking.status, segment.segmentIndex]);
 
   // Clamp the segment into the visible [08:00, 21:00] window.
   const trackMinutes = (END_HOUR - START_HOUR) * 60;
@@ -952,20 +1021,15 @@ function SegmentBlock({
     timeText = "text-blue-800";
   }
 
-  // Status options — the user wants the status Select to only offer the
-  // "dead-end" transitions (Không đến / Hủy), NOT "checkin". Checkin is now a
-  // dedicated button next to "Đơn hàng" (see Line 4 below). Both "Không đến"
-  // (no_show) and "Hủy" (cancelled) make the order unpayable.
-  // - confirmed / new → ["no_show", "cancelled"] (checkin moved to the button)
-  // - checkin → ["cancelled"] only (no "Không đến" — the customer already
-  //   showed up, so "no_show" doesn't make sense; only "Hủy" to cancel)
-  // - checkout / cancelled / no_show → [] (terminal, no manual transitions)
-  let statusOptions: BookingStatusType[] = [];
-  if (booking.status === "confirmed" || booking.status === "new") {
-    statusOptions = ["no_show", "cancelled"];
-  } else if (booking.status === "checkin") {
-    statusOptions = ["cancelled"];
-  }
+  // Status change options — ALL 4 manual options (Xác nhận, Checkin, Không đến,
+  // Hủy) are ALWAYS available regardless of the booking's current status. This
+  // lets the user recover from mistakes (e.g. accidentally checkin/checkout/
+  // cancel) by reverting to any status. checkout is NOT a manual option (it
+  // auto-happens via payment). The current status is excluded so the Select
+  // doesn't offer a no-op. NOTE: reverting to confirmed/cancelled auto-deletes
+  // the linked invoice (handled in the bookings PATCH route).
+  const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== booking.status);
 
   // z-index by booking-status priority so UNPAID bookings always stack ON TOP
   // of cancelled/no_show ones when their segments overlap (mirrors the segment
@@ -1001,6 +1065,7 @@ function SegmentBlock({
           (nested <button> is invalid HTML). Keyboard accessibility is
           preserved via role + tabIndex + onKeyDown. */}
       <div
+        ref={isFlashing ? flashRef : undefined}
         role="button"
         tabIndex={0}
         onClick={onClick}
@@ -1211,6 +1276,15 @@ interface DayRangeGridProps {
   onEdit?: (b: Booking) => void;
   /** Open the dedicated "Xếp nhân viên" dialog (passed down to BookingChip). */
   onAssignStaff?: (b: Booking) => void;
+  /** When set, the chip whose booking.id matches blinks + scrolls into view. */
+  flashBookingId?: string | null;
+  /** Called when the user clicks a day column's header in the multi-day grid.
+   *  The parent switches the date range to show ONLY that single day. */
+  onSelectDay?: (day: Date) => void;
+  /** Called when the user changes a booking's status from the chip's hover
+   *  popover (multi-day view). Mirrors the single-day SegmentBlock's
+   *  onStatusChange so both views can change status. */
+  onStatusChange?: (bookingId: string, newStatus: BookingStatusType) => void;
 }
 
 /** Build the list of calendar days (inclusive) between `from` and `to`.
@@ -1276,6 +1350,9 @@ function DayRangeGrid({
   slotLocked,
   onEdit,
   onAssignStaff,
+  flashBookingId,
+  onSelectDay,
+  onStatusChange,
 }: DayRangeGridProps) {
   const days = useMemo(() => buildDaysInRange(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
   const hours = useMemo(() => {
@@ -1445,7 +1522,9 @@ function DayRangeGrid({
               return (
                 <div
                   key={idx}
-                  className={`border-r p-2 text-center ${isToday ? "bg-emerald-50" : ""}`}
+                  onClick={onSelectDay ? () => onSelectDay(day) : undefined}
+                  className={`border-r p-2 text-center ${isToday ? "bg-emerald-50" : ""} ${onSelectDay ? "cursor-pointer hover:bg-blue-50" : ""}`}
+                  title={onSelectDay ? `Xem lịch hẹn ngày ${dayLabel(day)}` : undefined}
                 >
                   <div className="text-[11px] font-medium text-gray-500">
                     {weekdayLabel(day)}
@@ -1509,6 +1588,8 @@ function DayRangeGrid({
                               onClick={() => onBookingClick(b)}
                               onEdit={onEdit ? () => onEdit(b) : undefined}
                               onAssignStaff={onAssignStaff ? () => onAssignStaff(b) : undefined}
+                              flashBookingId={flashBookingId}
+                              onStatusChange={onStatusChange ? (st) => onStatusChange(b.id, st) : undefined}
                             />
                           </div>
                         ))}
@@ -1536,6 +1617,8 @@ function BookingChip({
   onClick,
   onEdit,
   onAssignStaff,
+  flashBookingId,
+  onStatusChange,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
@@ -1548,6 +1631,12 @@ function BookingChip({
       assign-staff button). When provided, the popover's "Xếp nhân viên" button
       calls this; falls back to onEdit when not provided. */
   onAssignStaff?: () => void;
+  /** When set and matches this chip's booking.id, the chip blinks in the
+      booking's status-badge bg color and scrolls into view. */
+  flashBookingId?: string | null;
+  /** Called when the user changes the booking's status from the chip's hover
+      *  popover. When omitted, the status Select is hidden (read-only popover). */
+  onStatusChange?: (status: BookingStatusType) => void;
 }) {
   const serviceRows = getAllServices(booking);
   const svc = serviceRows[0] || null;
@@ -1559,6 +1648,34 @@ function BookingChip({
   const isNoShow = booking.status === "no_show";
   const isCheckin = booking.status === "checkin";
   const isReviewing = useIsReviewing(booking.id);
+
+  // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") ------------
+  const flashRef = useRef<HTMLButtonElement | null>(null);
+  const isFlashing = !!flashBookingId && flashBookingId === booking.id;
+  useEffect(() => {
+    if (!isFlashing || !flashRef.current) return;
+    const el = flashRef.current;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const color = flashColorForStatus(booking.status);
+    const animation = el.animate(
+      [
+        { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
+        { boxShadow: `0 0 0 4px ${color}`, backgroundColor: color },
+        { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
+      ],
+      { duration: 700, iterations: 6, easing: "ease-in-out" }
+    );
+    return () => animation.cancel();
+  }, [isFlashing, booking.status]);
+
+  // Status-change Select state (hover popover). All 4 manual options are
+  // always available (minus the current status) so the user can revert from
+  // any status. Mirrors the SegmentBlock's statusOptions logic.
+  const [selectOpen, setSelectOpen] = useState(false);
+  const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
+  const chipStatusOptions = onStatusChange
+    ? ALL_STATUS_OPTIONS.filter((st) => st !== booking.status)
+    : [];
   // SAME scheme as SegmentBlock above (user's color spec):
   // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
   let chipBg: string;
@@ -1597,6 +1714,7 @@ function BookingChip({
     <HoverCard openDelay={200} closeDelay={150}>
       <HoverCardTrigger asChild>
         <button
+          ref={isFlashing ? flashRef : undefined}
           type="button"
           onClick={onClick}
           title={`${timeStr} · ${booking.customer?.name || "Khách"} · ${phone || ""} · ${serviceName} · ${staffName}`}
@@ -1683,10 +1801,10 @@ function BookingChip({
         <BookingHoverDetails
           booking={booking}
           canViewCustomerPhone={canViewCustomerPhone}
-          statusOptions={[]}
-          onStatusChange={() => {}}
-          selectOpen={false}
-          setSelectOpen={() => {}}
+          statusOptions={chipStatusOptions}
+          onStatusChange={onStatusChange || (() => {})}
+          selectOpen={selectOpen}
+          setSelectOpen={setSelectOpen}
           onEdit={onEdit || onClick}
           onDelete={() => {}}
           canCancelPayment={false}
@@ -1897,12 +2015,17 @@ export function BookingHoverDetails({
         );
       })()}
 
-      {/* Line 2: status badge + status Select (Checkin / Không đến / Hủy) */}
+      {/* Line 2: status badge + status Select (always visible when options exist
+          — all 4 options: Xác nhận, Checkin, Không đến, Hủy — minus the current
+          status). Lets the user recover from accidental checkin/checkout/cancel
+          by reverting to any status. Reverting to confirmed/cancelled auto-
+          deletes the linked invoice. Hidden only when statusOptions is empty
+          (e.g. multi-day BookingChip without an onStatusChange handler). */}
       <div className="flex items-center gap-2">
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColors.bg} ${statusColors.text}`}>
           {statusLabel}
         </span>
-        {statusOptions.length > 0 ? (
+        {statusOptions.length > 0 && (
           <Select
             value=""
             open={selectOpen}
@@ -1923,7 +2046,7 @@ export function BookingHoverDetails({
               ))}
             </SelectContent>
           </Select>
-        ) : null}
+        )}
       </div>
 
       {/* Line 3: services — name (duration), staff name below in blue.

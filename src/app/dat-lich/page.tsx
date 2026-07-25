@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { LogIn, Calendar as CalendarIcon, Clock, Scissors, User, Phone, CheckCircle2, Building2, Plus, Trash2, AlertCircle } from "lucide-react";
+import { LogIn, Calendar as CalendarIcon, Scissors, User, Phone, CheckCircle2, Building2, Plus, Trash2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,11 +15,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DatePicker } from "@/components/ui/date-picker";
-import { TimePicker } from "@/components/ui/time-picker";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 import { useToast } from "@/hooks/use-toast";
 import { cn, localDayToUtcRange } from "@/lib/utils";
+import { phoneContains, scorePhoneMatch } from "@/lib/phone-search";
 
 // ---------------------------------------------------------------------------
 // Types for the reference data fetched from Supabase.
@@ -40,6 +40,9 @@ interface Staff {
   id: string;
   name: string;
   groupName?: string;
+  /** Custom display order (from the staff's permissions.sort_order JSONB).
+   *  Unset → Number.MAX_SAFE_INTEGER so unordered staff sink to the bottom. */
+  sortOrder: number;
 }
 interface ExistingBooking {
   id: string;
@@ -167,11 +170,22 @@ export default function DatLichPage() {
           const groupName = (s.group as { name?: string } | null)?.name;
           return groupName && HAIRDRESSER_GROUPS.includes(groupName);
         })
-        .map((s) => ({
-          id: s.id as string,
-          name: s.name as string,
-          groupName: (s.group as { name?: string } | null)?.name,
-        }));
+        .map((s) => {
+          const perms = (s.permissions as Record<string, unknown> | null) ?? {};
+          const sortOrder =
+            typeof perms.sort_order === "number"
+              ? perms.sort_order
+              : Number.MAX_SAFE_INTEGER;
+          return {
+            id: s.id as string,
+            name: s.name as string,
+            groupName: (s.group as { name?: string } | null)?.name,
+            sortOrder,
+          };
+        })
+        .sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)
+        );
     },
     enabled: !!selectedBranchId,
   });
@@ -230,16 +244,24 @@ export default function DatLichPage() {
         const json = await res.json();
         if (cancelled) return;
         if (json.ok && Array.isArray(json.data)) {
-          // Filter to prefix matches on name OR phone (the API's `search`
-          // does an ilike contains; we refine to prefix for relevance).
+          // Match phone by SUBSTRING (anywhere: prefix / middle / suffix),
+          // not just prefix — so typing a tail or middle chunk of a phone
+          // still finds the customer. Name keeps prefix matching (natural
+          // for names). Results are then ranked by phone relevance so the
+          // customers whose phone matches the query the most are suggested
+          // first.
           const lower = term.toLowerCase();
           const matches = (json.data as Array<{ id: string; name: string; phone?: string | null; code?: string | null }>)
             .filter((c) => {
               const nameMatch = (c.name || "").toLowerCase().startsWith(lower);
-              const phoneMatch = (c.phone || "").startsWith(term);
+              const phoneMatch = phoneContains(c.phone, term);
               return nameMatch || phoneMatch;
             })
-            .map((c) => ({ id: c.id, name: c.name, phone: c.phone ?? null, code: c.code ?? null }));
+            .map((c) => ({ id: c.id, name: c.name, phone: c.phone ?? null, code: c.code ?? null }))
+            .sort(
+              (a, b) =>
+                scorePhoneMatch(b.phone, term) - scorePhoneMatch(a.phone, term)
+            );
           if (!cancelled) {
             setSuggestions(matches);
             setShowSuggestions(matches.length > 0);
@@ -378,10 +400,36 @@ export default function DatLichPage() {
     enabled: !!isoDay && hasActiveRow,
   });
 
-  // Compute hiddenHours + hiddenMinutes for the TimePicker across ALL active
-  // rows. A minute is hidden if it conflicts for ANY active row's staff.
-  const { hiddenHours, hiddenMinutes } = useMemo(() => {
-    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>> };
+  // Fetch the salon's operating hours (open_time / close_time) for the
+  // selected branch so the time-slot button grid covers the real business
+  // window. Defaults to 09:30 → 20:15 when no salon_info record exists.
+  const { data: salonInfo } = useQuery<{
+    open_time: string | null;
+    close_time: string | null;
+  } | null>({
+    queryKey: ["dat-lich-salon-info", selectedBranchId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (selectedBranchId) params.set("branch_id", selectedBranchId);
+      const res = await fetch(`/api/supabase/salon-info?${params.toString()}`);
+      const json = await res.json();
+      if (!json.ok || !json.data) return null;
+      return {
+        open_time: (json.data as { open_time?: string | null }).open_time ?? null,
+        close_time: (json.data as { close_time?: string | null }).close_time ?? null,
+      };
+    },
+    staleTime: 60_000,
+  });
+
+  // Compute the set of feasible 30-min slot starts across ALL active rows.
+  // A slot start is feasible if NO active row's staff is busy during
+  // [start, start + that row's service duration). Used by the button grid to
+  // disable busy slots. (hiddenHours/hiddenMinutes were used by the old
+  // TimePicker popover — kept in the return for backward compat but no longer
+  // consumed by the UI.)
+  const { feasibleSlots } = useMemo(() => {
+    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>>, feasibleSlots: new Set<string>() };
     if (!isoDay || activeRows.length === 0) return empty;
     const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!m) return empty;
@@ -418,6 +466,7 @@ export default function DatLichPage() {
 
     const hh = new Set<string>();
     const hm: Record<string, Set<string>> = {};
+    const feasible = new Set<string>();
     const hourHasFeasible: Record<string, boolean> = {};
     for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
     for (let min = 0; min < 60 * 24; min++) {
@@ -434,14 +483,45 @@ export default function DatLichPage() {
         hm[hStr].add(mStr);
       } else {
         hourHasFeasible[hStr] = true;
+        // Record feasible 30-min-aligned slot starts (used by the button grid).
+        if (min % 30 === 0) feasible.add(`${hStr}:${mStr}`);
       }
     }
     for (let h = 0; h < 24; h++) {
       const hStr = String(h).padStart(2, "0");
       if (!hourHasFeasible[hStr]) hh.add(hStr);
     }
-    return { hiddenHours: hh, hiddenMinutes: hm };
+    return { hiddenHours: hh, hiddenMinutes: hm, feasibleSlots: feasible };
   }, [activeRows, isoDay, dayBookings, bookingDate, allServices]);
+
+  // Build the list of 30-min time-slot buttons from the salon's operating
+  // hours (open_time → close_time, default 09:30 → 20:15). Each slot is a
+  // "HH:MM" label. The grid renders these as clickable pill buttons (matches
+  // the user's reference design). A slot is ENABLED only when it doesn't
+  // conflict with any active row's staff busy intervals (feasibleSlots).
+  const timeSlots = useMemo<string[]>(() => {
+    const parseHHMM = (s: string): number => {
+      const mm = s.match(/^(\d{1,2}):(\d{2})$/);
+      if (!mm) return -1;
+      return Number(mm[1]) * 60 + Number(mm[2]);
+    };
+    const openStr = salonInfo?.open_time || "09:30";
+    const closeStr = salonInfo?.close_time || "20:15";
+    let openMin = parseHHMM(openStr);
+    let closeMin = parseHHMM(closeStr);
+    if (openMin < 0) openMin = 9 * 60 + 30;
+    if (closeMin < 0 || closeMin <= openMin) closeMin = 20 * 60 + 15;
+    // Align the first slot DOWN to the nearest 30-min boundary (e.g. 09:30
+    // stays 09:30; 09:40 → 09:30) so the grid starts on a clean half-hour.
+    openMin = Math.floor(openMin / 30) * 30;
+    const slots: string[] = [];
+    for (let min = openMin; min <= closeMin; min += 30) {
+      const h = Math.floor(min / 60);
+      const mm = min % 60;
+      slots.push(`${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`);
+    }
+    return slots;
+  }, [salonInfo]);
 
   // --- Row mutation helpers -----------------------------------------------
   const updateRow = (id: string, patch: Partial<ServiceRow>) => {
@@ -489,7 +569,7 @@ export default function DatLichPage() {
     () => serviceRows.filter((r) => r.categoryId && r.serviceId && r.staffId),
     [serviceRows]
   );
-  // Khung giờ requires at least 1 complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên).
+  // Khung giờ requires at least 1 complete row (Nhóm DV + Dịch vụ + Nhân viên).
   const timePickerReady = part1Complete && completeRows.length >= 1;
 
   // Within-form staff conflict: two complete rows sharing the same staff would
@@ -717,7 +797,7 @@ export default function DatLichPage() {
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-bold text-gray-900">Đặt lịch dịch vụ</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Điền thông tin và chọn dịch vụ, kỹ thuật viên, khung giờ phù hợp.
+            Điền thông tin và chọn dịch vụ, nhân viên, khung giờ phù hợp.
           </p>
         </div>
 
@@ -739,9 +819,9 @@ export default function DatLichPage() {
                   value={selectedBranchId || ""}
                   onValueChange={onBranchChange}
                 >
-                  <SelectTrigger className="h-10">
-                    <span className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-gray-400" />
+                  <SelectTrigger className="h-10 w-full min-w-0">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Building2 className="h-4 w-4 text-gray-400 shrink-0" />
                       <SelectValue placeholder="Chọn cửa hàng" />
                     </span>
                   </SelectTrigger>
@@ -916,7 +996,7 @@ export default function DatLichPage() {
                           onValueChange={(v) => onRowCategoryChange(row.id, v)}
                           disabled={!part1Complete}
                         >
-                          <SelectTrigger className="h-10">
+                          <SelectTrigger className="h-10 w-full min-w-0">
                             <SelectValue
                               placeholder={
                                 part1Complete ? "Chọn nhóm dịch vụ" : "Nhập thông tin KH trước"
@@ -947,7 +1027,7 @@ export default function DatLichPage() {
                           onValueChange={(v) => onRowServiceChange(row.id, v)}
                           disabled={!part1Complete || !row.categoryId}
                         >
-                          <SelectTrigger className="h-10">
+                          <SelectTrigger className="h-10 w-full min-w-0">
                             <SelectValue
                               placeholder={
                                 !part1Complete
@@ -975,21 +1055,21 @@ export default function DatLichPage() {
                         </Select>
                       </div>
 
-                      {/* Kỹ thuật viên */}
+                      {/* Nhân viên */}
                       <div className="space-y-1.5">
-                        <Label className="text-sm text-gray-700">Kỹ thuật viên</Label>
+                        <Label className="text-sm text-gray-700">Nhân viên</Label>
                         <Select
                           value={row.staffId}
                           onValueChange={(v) => onRowStaffChange(row.id, v)}
                           disabled={!part1Complete || !row.serviceId}
                         >
-                          <SelectTrigger className="h-10">
+                          <SelectTrigger className="h-10 w-full min-w-0">
                             <SelectValue
                               placeholder={
                                 !part1Complete
                                   ? "Nhập thông tin KH trước"
                                   : row.serviceId
-                                    ? "Chọn kỹ thuật viên"
+                                    ? "Chọn nhân viên"
                                     : "Chọn dịch vụ trước"
                               }
                             />
@@ -997,7 +1077,7 @@ export default function DatLichPage() {
                           <SelectContent>
                             {rowStaff.length === 0 ? (
                               <SelectItem value="_none" disabled>
-                                Không có kỹ thuật viên
+                                Không có nhân viên
                               </SelectItem>
                             ) : (
                               rowStaff.map((s) => (
@@ -1043,28 +1123,56 @@ export default function DatLichPage() {
             )}
 
             {/* Khung giờ — shared across all services (parallel model: all
-                services start at the same time). Locked until at least one
-                complete row (Nhóm DV + Dịch vụ + Kỹ thuật viên) exists. */}
-            <div className="mt-4 max-w-xs space-y-1.5">
-              <Label className="text-sm text-gray-700">Khung giờ</Label>
+                services start at the same time). Rendered as a GRID of
+                clickable 30-min pill buttons (matches the reference design).
+                Locked until at least one complete row (Nhóm DV + Dịch vụ +
+                Nhân viên) exists. Busy slots are disabled + dimmed so the
+                customer can only pick a free slot. */}
+            <div className="mt-4 space-y-2">
+              <Label className="text-sm text-gray-700">
+                Chọn khung giờ dịch vụ <span className="text-red-500">*</span>
+              </Label>
               <div
                 className={cn(
-                  "relative transition-opacity",
+                  "transition-opacity",
                   !timePickerReady && "pointer-events-none opacity-40"
                 )}
               >
-                <Clock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <div className="pl-9">
-                  <TimePicker
-                    value={bookingTime}
-                    onChange={setBookingTime}
-                    placeholder={
-                      timePickerReady ? "HH:MM" : "Chọn dịch vụ + NV trước"
-                    }
-                    hiddenHours={hiddenHours}
-                    hiddenMinutes={hiddenMinutes}
-                  />
-                </div>
+                {!timePickerReady ? (
+                  <p className="text-xs text-gray-400">
+                    Chọn dịch vụ + NV trước
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+                    {timeSlots.map((slot) => {
+                      const selected = bookingTime === slot;
+                      // feasibleSlots is empty when there are no active rows
+                      // / no day bookings yet → treat all slots as available.
+                      const hasConflictData = feasibleSlots.size > 0;
+                      const available = !hasConflictData || feasibleSlots.has(slot);
+                      const disabled = !available;
+                      return (
+                        <button
+                          key={slot}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => setBookingTime(slot)}
+                          className={cn(
+                            "rounded-md border px-2 py-1.5 text-center text-xs font-medium transition",
+                            selected
+                              ? "border-emerald-600 bg-emerald-600 text-white"
+                              : disabled
+                                ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-300"
+                                : "border-gray-300 bg-white text-gray-700 hover:border-emerald-500 hover:bg-emerald-50 hover:text-emerald-700"
+                          )}
+                          title={disabled ? "Khung giờ bận" : `Chọn ${slot}`}
+                        >
+                          {slot}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               {completeRows.length >= 1 && bookingDate && (dayBookings?.length ?? 0) > 0 && (
                 <p className="text-xs text-gray-400">

@@ -32,6 +32,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { localDayToUtcRange, localDayStartUtc, toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { bookingSchema } from "@/lib/validations";
 import { buildMultiCustomerNote, parseMultiCustomerNote } from "@/lib/multi-customer";
+import { phoneContains, scorePhoneMatch } from "@/lib/phone-search";
+import { StaffReorderDialog } from "@/components/features/booking/staff-reorder-dialog";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -128,12 +130,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // are booked without a specific staff assignment (staffId left empty).
   const { hasPermission, user } = useAuthStore();
   const canAssignStaff = hasPermission("assign_staff");
+  const canReorderStaff = hasPermission("reorder_staff");
   const canBookPastDate = hasPermission("book_past_date");
 
   // Fetch customers from Supabase (server-side search)
   const [phoneSearch, setPhoneSearch] = useState("");
   const [nameSearch, setNameSearch] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  // Staff reorder dialog (drag-to-reorder) — opened via the "Sắp xếp" button
+  // next to the staff Select. Only the owner of the `reorder_staff` perm sees
+  // the button.
+  const [reorderOpen, setReorderOpen] = useState(false);
 
   // Quick-add customer dialog state
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -328,11 +335,22 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           const groupName = (s.group as { name?: string } | null)?.name;
           return groupName && hairdresserGroups.includes(groupName);
         })
-        .map((s) => ({
-          id: s.id as string,
-          name: s.name as string,
-          groupName: (s.group as { name?: string } | null)?.name,
-        }));
+        .map((s) => {
+          const perms = (s.permissions as Record<string, unknown> | null) ?? {};
+          const sortOrder =
+            typeof perms.sort_order === "number"
+              ? perms.sort_order
+              : Number.MAX_SAFE_INTEGER;
+          return {
+            id: s.id as string,
+            name: s.name as string,
+            groupName: (s.group as { name?: string } | null)?.name,
+            sortOrder,
+          };
+        })
+        .sort(
+          (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)
+        );
     },
     enabled: open,
     staleTime: 60_000,
@@ -569,18 +587,23 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   });
 
   const slotCustomers: Customer[] = slotCustomersData || [];
-  // Filter slot customers by phone-prefix when only phone is typed (mirrors
-  // the top-level filteredCustomers logic).
+  // Filter slot customers by phone-substring (ranked by relevance) when only
+  // phone is typed (mirrors the top-level filteredCustomers logic).
   const filteredSlotCustomers = useMemo(() => {
     if (!activeSlotSearchTerm) return slotCustomers;
-    // When the user is typing in the phone field, filter results by
-    // phone-prefix (mirrors the top-level filteredCustomers logic). When
-    // typing in the name field, show all API results (the API already
-    // searched by name).
+    // When the user is typing in the phone field, filter results by phone
+    // SUBSTRING (anywhere: prefix/middle/suffix) and rank by relevance so
+    // the customers whose phone matches the query the most are suggested
+    // first. When typing in the name field, show all API results (the API
+    // already searched by name).
     if (activeSlotField === "phone") {
-      return slotCustomers.filter((c) =>
-        (c.phone || "").startsWith(activeSlotPhone)
-      );
+      return slotCustomers
+        .filter((c) => phoneContains(c.phone, activeSlotPhone))
+        .sort(
+          (a, b) =>
+            scorePhoneMatch(b.phone, activeSlotPhone) -
+            scorePhoneMatch(a.phone, activeSlotPhone)
+        );
     }
     return slotCustomers;
   }, [slotCustomers, activeSlotSearchTerm, activeSlotField, activeSlotPhone]);
@@ -592,15 +615,20 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   const isWalkIn = watchedCustomerSourceId === WALKIN_SOURCE_ID;
 
   // Customer autocomplete.
-  // Phone field shows customers whose phone STARTS WITH the typed prefix
-  // (for old-customer lookups). Name field shows all matches.
+  // Phone field shows customers whose phone CONTAINS the typed query
+  // (anywhere: prefix / middle / suffix), ranked by relevance so the best
+  // matches are suggested first. Name field shows all matches.
   const filteredCustomers = useMemo(() => {
     if (!phoneSearch && !nameSearch) return customers;
-    // When only phone is being typed, filter to phone-prefix matches.
+    // When only phone is being typed, filter to phone-substring matches and
+    // rank by relevance (occurrence count + prefix/suffix/exact bonuses).
     if (phoneSearch && !nameSearch) {
-      return customers.filter((c) =>
-        (c.phone || "").startsWith(phoneSearch.trim())
-      );
+      const q = phoneSearch.trim();
+      return customers
+        .filter((c) => phoneContains(c.phone, q))
+        .sort(
+          (a, b) => scorePhoneMatch(b.phone, q) - scorePhoneMatch(a.phone, q)
+        );
     }
     return customers;
   }, [customers, phoneSearch, nameSearch]);
@@ -2916,9 +2944,25 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
 
                       {canAssignStaff && (
                         <div className="space-y-2">
-                          <Label htmlFor={`services.${index}.staffId`}>
-                            Chọn nhân viên
-                          </Label>
+                          <div className="flex items-center justify-between">
+                            <Label htmlFor={`services.${index}.staffId`}>
+                              Chọn nhân viên
+                            </Label>
+                            {/* "Sắp xếp" — opens the drag-to-reorder dialog. Only
+                                the first service row shows the button to avoid
+                                duplicates (the reorder dialog reorders the FULL
+                                branch staff list, shared across all rows). */}
+                            {canReorderStaff && index === 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setReorderOpen(true)}
+                                className="text-[11px] font-medium text-emerald-600 hover:text-emerald-700 hover:underline"
+                                title="Sắp xếp thứ tự nhân viên"
+                              >
+                                Sắp xếp
+                              </button>
+                            )}
+                          </div>
                           <Select
                             value={watch(`services.${index}.staffId`) || ""}
                             onValueChange={(value) =>
@@ -3116,6 +3160,16 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         </>
         )}
       </DialogContent>
+
+      {/* Staff reorder dialog (drag-to-reorder) — opened via "Sắp xếp" next to
+          the staff Select. Renders once here (shared across all service rows). */}
+      {canReorderStaff && (
+        <StaffReorderDialog
+          open={reorderOpen}
+          onClose={() => setReorderOpen(false)}
+          branchId={selectedBranchId}
+        />
+      )}
 
       {/* Quick-add customer dialog */}
       <Dialog open={quickAddOpen} onOpenChange={(v) => { setQuickAddOpen(v); if (!v) setQuickAddError(""); }}>

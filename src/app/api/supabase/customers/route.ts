@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { decodeCustomerNote } from "@/lib/customer-meta";
+import {
+  isPhoneLikeQuery,
+  scorePhoneMatch,
+} from "@/lib/phone-search";
 
 const CUSTOMER_SELECT =
   "*, source:customer_sources(id, name), group:customer_groups(id, name), branch:branches(id, name)";
@@ -98,8 +102,14 @@ export async function GET(request: NextRequest) {
     // silently drop them. So when customer_type is set, we fetch everything
     // and paginate in JS after enrichment. When customer_type is NOT set,
     // we paginate at the DB level as usual (more efficient).
+    //
+    // Likewise, when the search term is phone-like (digits only), we fetch
+    // ALL matches and rank them by phone relevance in JS (so customers whose
+    // phone contains the query the most — incl. suffix / middle matches —
+    // are suggested first). DB-level ordering can't express that ranking.
     const customerTypeFilter = searchParams.get("customer_type");
-    const needsFullFetch = !!customerTypeFilter;
+    const phoneRanking = isPhoneLikeQuery(search);
+    const needsFullFetch = !!customerTypeFilter || phoneRanking;
 
     query = query.order("created_at", { ascending: false });
     if (!needsFullFetch) {
@@ -267,17 +277,36 @@ export async function GET(request: NextRequest) {
     // AFTER the rows are fetched and enriched. When the filter is set we fetched
     // ALL matching customers (no DB pagination — see needsFullFetch above), so
     // we paginate in JS here after filtering.
+    //
+    // Phone-relevance ranking (when `search` is phone-like) also runs here in
+    // JS: sort all enriched matches by how well their phone matches the query
+    // (occurrence count + prefix/suffix/exact bonuses) so the best matches are
+    // suggested first. Non-phone matches (name/code) sink to the bottom with a
+    // score of 0 while keeping their relative order.
     let finalData = enriched;
     let finalTotal = total;
     let finalTotalPages = totalPages;
+    if (phoneRanking) {
+      const q = (search ?? "").trim();
+      finalData = [...enriched].sort(
+        (a, b) =>
+          scorePhoneMatch((b as { phone?: string | null }).phone, q) -
+          scorePhoneMatch((a as { phone?: string | null }).phone, q)
+      );
+      finalTotal = finalData.length;
+      finalTotalPages = Math.max(1, Math.ceil(finalTotal / limit));
+    }
     if (customerTypeFilter === "old") {
-      const filtered = enriched.filter(
+      const filtered = (phoneRanking ? finalData : enriched).filter(
         (c) => (c.customer_type as string) === "old"
       );
       finalTotal = filtered.length;
       finalTotalPages = Math.max(1, Math.ceil(finalTotal / limit));
       // JS-level pagination: slice the filtered list to the requested page.
       finalData = filtered.slice(from, from + limit);
+    } else if (phoneRanking) {
+      // Already sorted by phone relevance above; paginate in JS.
+      finalData = finalData.slice(from, from + limit);
     }
 
     return NextResponse.json({
