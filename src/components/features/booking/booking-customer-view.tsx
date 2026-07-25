@@ -540,7 +540,7 @@ export function BookingCustomerView({
                                       </div>
                                     )}
                                     {e.staff ? (
-                                      <div className="text-xs text-yellow-600">NV: {e.staff}</div>
+                                      <div className="text-xs text-gray-900">NV: {e.staff}</div>
                                     ) : (
                                       <button
                                         type="button"

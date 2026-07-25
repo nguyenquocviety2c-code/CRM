@@ -709,7 +709,7 @@ function SegmentCard({
             {segStaffName === "—" ? (
               <AssignStaffButtonTG onAssignStaff={onAssignStaff} />
             ) : (
-              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {segStaffName}</div>
+              <div className="mt-0.5 truncate text-[11px] font-medium text-gray-900">NV: {segStaffName}</div>
             )}
           </div>
         ) : (
@@ -727,7 +727,7 @@ function SegmentCard({
                 {segment.services[0]?.service?.name || "Dịch vụ"}
                 {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
               </span>
-              <span className="shrink-0 font-medium text-sky-600">NV: {segStaffName}</span>
+              <span className="shrink-0 font-medium text-gray-900">NV: {segStaffName}</span>
             </div>
           )
         )}
@@ -1396,7 +1396,7 @@ function CustomerGridChip({
                   {s.service?.name || "Dịch vụ"}
                   {s.service?.duration ? <span className="ml-0.5 text-gray-500">({s.service.duration})</span> : null}
                 </span>
-                {s.staff?.name && <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>}
+                {s.staff?.name && <span className="shrink-0 text-[11px] font-medium text-gray-900">NV: {s.staff.name}</span>}
               </div>
             ))}
             {serviceRows.length === 0 && <div className="truncate text-xs text-gray-600">{serviceName}</div>}

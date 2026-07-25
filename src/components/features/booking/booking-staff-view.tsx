@@ -1367,7 +1367,7 @@ function SegmentBlock({
             {staffName === "—" ? (
               <AssignStaffButton onAssignStaff={onAssignStaff} />
             ) : (
-              <div className="mt-0.5 truncate text-[11px] font-medium text-sky-600">NV: {staffName}</div>
+              <div className="mt-0.5 truncate text-[11px] font-medium text-gray-900">NV: {staffName}</div>
             )}
           </>
         ) : (
@@ -1385,7 +1385,7 @@ function SegmentBlock({
                 {segment.services[0]?.service?.name || "Dịch vụ"}
                 {segment.services[0]?.service?.duration ? <span className="ml-0.5 text-gray-500">({segment.services[0].service!.duration})</span> : null}
               </span>
-              <span className="shrink-0 font-medium text-sky-600">NV: {staffName}</span>
+              <span className="shrink-0 font-medium text-gray-900">NV: {staffName}</span>
             </div>
           )
         )}
@@ -1989,7 +1989,7 @@ function BookingChip({
                   ) : null}
                 </span>
                 {s.staff?.name && (
-                  <span className="shrink-0 text-[11px] font-medium text-sky-600">NV: {s.staff.name}</span>
+                  <span className="shrink-0 text-[11px] font-medium text-gray-900">NV: {s.staff.name}</span>
                 )}
               </div>
             ))}
@@ -2277,7 +2277,7 @@ export function BookingHoverDetails({
                 {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
               </div>
               {s.staffName ? (
-                <div className="text-[11px] font-medium text-sky-600">{s.staffName}</div>
+                <div className="text-[11px] font-medium text-gray-900">{s.staffName}</div>
               ) : onAssignStaff ? (
                 <button
                   type="button"
