@@ -1691,6 +1691,22 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     { arr: [], svc: 0 }
   ).arr;
 
+  // For multi-customer "Cùng lịch" bookings with per-customer slotStatuses,
+  // FILTER the display items to only show services whose customer is checked in
+  // (status = "checkin" or "checkout"). Services of customers who are still
+  // "confirmed", "cancelled", or "no_show" are excluded from the invoice
+  // display (and thus from the total). Products/packages are always included.
+  const slotStatusesFilter = activeMultiNote?.slotStatuses;
+  const filteredDisplayItems = isMultiCustomerBooking && slotStatusesFilter && !showSaved
+    ? displayItems.filter((it, idx) => {
+        // Non-service items (products/packages) are always included.
+        if ((it as { type?: string }).type !== "service") return true;
+        const slotIdx = itemSlotIndices[idx];
+        if (slotIdx < 0) return true; // no slot mapping → include
+        const st = slotStatusesFilter[slotIdx] || "confirmed";
+        return st === "checkin" || st === "checkout";
+      })
+    : displayItems;
   // Resolve the invoice id for the activity-history table:
   //  - Paid/cancelled tabs → the saved invoice's id.
   //  - Editable tabs that already have a server invoice (walk-in pending, or a
@@ -1744,13 +1760,13 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
 
       {/* Invoice items */}
       <div className="flex-1 overflow-y-auto">
-        {displayItems.length === 0 ? (
+        {filteredDisplayItems.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-gray-400">
             <p className="text-sm">Chưa có mặt hàng nào</p>
           </div>
         ) : (
           <div className="divide-y">
-            {displayItems.map((item, idx) => (
+            {filteredDisplayItems.map((item, idx) => (
               <div
                 key={item.id || idx}
                 className="grid grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-x-1 px-4 py-2 text-sm"
@@ -2095,81 +2111,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           </div>
         )}
 
-        {/* Photo upload — shown for ALL booking statuses (checkin + checkout)
-            as well as manual customer tabs. For checkin/manual tabs without an
-            invoice yet, photos are held in local state and POSTed at checkout.
-            For paid (checkout) tabs, they are loaded from the saved invoice and
-            persisted via PUT /api/supabase/invoices/:id.
-            Gated by upload_photo permission. */}
-        <div className="border-t p-4 space-y-3">
-          <div className="flex items-center gap-3">
-            {canUploadPhoto && (
-              <label className="flex items-center gap-1 rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 cursor-pointer">
-                <Camera className="h-4 w-4" />
-                Tải ảnh lên
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={handlePhotoUpload}
-                />
-              </label>
-            )}
-            {displayPhotos.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  const checkboxes = document.querySelectorAll('.cashier-photo-checkbox');
-                  const allChecked = Array.from(checkboxes).every((c) => (c as HTMLInputElement).checked);
-                  checkboxes.forEach((c) => ((c as HTMLInputElement).checked = !allChecked));
-                }}
-                className="flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
-              >
-                <CheckSquare className="h-4 w-4" />
-                Chọn tất cả
-              </button>
-            )}
-          </div>
-          {displayPhotos.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {displayPhotos.map((src, idx) => (
-                <div
-                  key={idx}
-                  className="relative h-10 w-10 overflow-hidden rounded border"
-                >
-                  <input
-                    type="checkbox"
-                    className="cashier-photo-checkbox absolute left-0.5 top-0.5 z-10 h-3 w-3"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => canViewCustomerPhoto && setLightboxPhoto(src)}
-                    className="h-full w-full"
-                    disabled={!canViewCustomerPhoto}
-                    title={canViewCustomerPhoto ? undefined : "Bạn không có quyền xem ảnh"}
-                  >
-                    <img
-                      src={src}
-                      alt={`Ảnh ${idx + 1}`}
-                      className="h-full w-full object-cover"
-                    />
-                  </button>
-                  {(!isPaid || canDeletePastPhotos) && (
-                    <button
-                      type="button"
-                      onClick={() => handleRemovePhoto(idx)}
-                      className="absolute right-0 top-0 inline-flex h-3 w-3 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
-                      aria-label="Xóa ảnh"
-                    >
-                      <X className="h-2 w-2" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Photo attachment section REMOVED per user request. */}
       </div>
 
       {/* Footer */}
