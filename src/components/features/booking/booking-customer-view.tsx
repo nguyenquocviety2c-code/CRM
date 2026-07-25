@@ -434,13 +434,15 @@ export function BookingCustomerView({
                                 .filter((e) => e.category || e.staff);
                               if (rawEntries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
 
-                              // For multi-customer bookings, reorder services so
-                              // that all services belonging to the same customer
-                              // are grouped together (1a, 1b, 2, 3a, 3b, 3c...).
-                              // The API returns main services first (in customer
-                              // order), then extras. We map each service to its
-                              // customer, then sort by customer index.
+                              // For multi-customer bookings, we need to know which
+                              // customer each service belongs to. The preferred
+                              // source is `parsed2.serviceSlots` (stored in the
+                              // [[MULTI]] note at creation time — an array where
+                              // serviceSlots[i] = customer slot index for service i).
+                              // For legacy bookings without serviceSlots, fall back
+                              // to a 1:1 mapping (first N = main, extras by staff).
                               const slotCount = slotCustomers ? slotCustomers.length : 0;
+                              const serviceSlots = parsed2?.serviceSlots;
                               const staffToCustomer: Record<string, number> = {};
                               rawEntries.slice(0, slotCount).forEach((e, i) => {
                                 if (e.staff) staffToCustomer[e.staff] = i;
@@ -448,12 +450,20 @@ export function BookingCustomerView({
                               const entries = isMulti
                                 ? rawEntries.map((e, idx) => {
                                     let slotIdx: number;
-                                    if (idx < slotCount) slotIdx = idx;
-                                    else slotIdx = e.staff && staffToCustomer[e.staff] !== undefined ? staffToCustomer[e.staff] : 0;
+                                    if (serviceSlots && idx < serviceSlots.length) {
+                                      // Preferred: use the stored mapping.
+                                      slotIdx = serviceSlots[idx];
+                                    } else if (idx < slotCount) {
+                                      // Legacy: main service → direct slot index.
+                                      slotIdx = idx;
+                                    } else {
+                                      // Legacy fallback: extra service → match by staff.
+                                      slotIdx = e.staff && staffToCustomer[e.staff] !== undefined ? staffToCustomer[e.staff] : 0;
+                                    }
                                     return { ...e, _slotIdx: slotIdx, _origIdx: idx };
                                   }).sort((a, b) => {
-                                    // Sort by customer index, then by original order
-                                    // within the same customer (preserves main-before-extra).
+                                    // Sort by customer index so same-customer
+                                    // services are consecutive (1a, 1b, 2, 3a...).
                                     if (a._slotIdx !== b._slotIdx) return a._slotIdx - b._slotIdx;
                                     return a._origIdx - b._origIdx;
                                   })

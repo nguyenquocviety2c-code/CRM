@@ -41,6 +41,14 @@ export interface MultiCustomerNote {
   slots: SlotCustomer[];
   /** The cashier's own typed note (may be empty). */
   userNote: string;
+  /**
+   * Optional: maps each service index → customer slot index. Present when a
+   * customer has extra services (beyond the 1:1 main service per slot).
+   * `serviceSlots[i]` = the customer slot index that owns service `i`.
+   * When absent (legacy bookings), display sites fall back to a 1:1 mapping
+   * (service i → slot i) + staff-name heuristic for extras.
+   */
+  serviceSlots?: number[];
 }
 
 /**
@@ -73,6 +81,9 @@ export function parseMultiCustomerNote(
           walkin: Boolean(s.walkin),
         })),
         userNote: typeof json.userNote === "string" ? json.userNote : "",
+        serviceSlots: Array.isArray(json.serviceSlots)
+          ? (json.serviceSlots as number[])
+          : undefined,
       };
     }
   } catch {
@@ -87,12 +98,14 @@ export function parseMultiCustomerNote(
  */
 export function buildMultiCustomerNote(
   slots: SlotCustomer[],
-  userNote: string
+  userNote: string,
+  serviceSlots?: number[]
 ): string {
-  return (
-    MULTI_MARKER +
-    JSON.stringify({ slots, userNote: userNote.trim() })
-  );
+  const payload: Record<string, unknown> = { slots, userNote: userNote.trim() };
+  if (serviceSlots && serviceSlots.length > 0) {
+    payload.serviceSlots = serviceSlots;
+  }
+  return MULTI_MARKER + JSON.stringify(payload);
 }
 
 /**

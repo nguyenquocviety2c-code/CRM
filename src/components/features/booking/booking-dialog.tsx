@@ -1249,20 +1249,27 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                 if (parsed && slotCount > 0 && allServices.length > slotCount) {
                   // Restore extra services to state.
                   const restoredExtras: Record<number, Array<{ serviceCategoryId: string; serviceId: string; staffId: string }>> = {};
+                  const svcSlots = parsed.serviceSlots;
                   for (let i = slotCount; i < allServices.length; i++) {
                     const row = allServices[i];
-                    // Find which customer this extra belongs to (by staff match).
-                    const staffId = row.staff_id as string || "";
+                    // Find which customer this extra belongs to.
+                    // Preferred: use stored serviceSlots mapping.
+                    // Fallback: match by staff_id (legacy bookings).
                     let customerIdx = 0;
-                    for (let j = 0; j < slotCount; j++) {
-                      const mainStaff = allServices[j].staff_id as string || "";
-                      if (mainStaff && mainStaff === staffId) { customerIdx = j; break; }
+                    if (svcSlots && i < svcSlots.length) {
+                      customerIdx = svcSlots[i];
+                    } else {
+                      const staffId = row.staff_id as string || "";
+                      for (let j = 0; j < slotCount; j++) {
+                        const mainStaff = allServices[j].staff_id as string || "";
+                        if (mainStaff && mainStaff === staffId) { customerIdx = j; break; }
+                      }
                     }
                     if (!restoredExtras[customerIdx]) restoredExtras[customerIdx] = [];
                     restoredExtras[customerIdx].push({
                       serviceCategoryId: (row.service_category_id || row.serviceCategoryId || "") as string,
                       serviceId: (row.service_id || row.serviceId || "") as string,
-                      staffId: staffId,
+                      staffId: (row.staff_id as string) || "",
                     });
                   }
                   setExtraServices(restoredExtras);
@@ -2046,9 +2053,24 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             walkin,
           };
         });
+        // Build serviceSlots: maps each service index → customer slot index.
+        // Main services (one per customer) map 1:1. Extra services map to the
+        // customer who owns them (from the extraServices state). This is stored
+        // in the [[MULTI]] note so display sites can reliably group services by
+        // customer without guessing via staff names.
+        const serviceSlots: number[] = [];
+        // Main services: serviceSlots[i] = i (service i belongs to customer i).
+        slotEntries.forEach((_, i) => serviceSlots.push(i));
+        // Extra services: for each customer's extras, push the customer index.
+        data.services.forEach((_, i) => {
+          (extraServices[i] || []).filter((e) => e.serviceId).forEach(() => {
+            serviceSlots.push(i);
+          });
+        });
         const combinedNote = buildMultiCustomerNote(
           slots,
-          (data.note || "").trim()
+          (data.note || "").trim(),
+          serviceSlots.length > slots.length ? serviceSlots : undefined
         );
         const payload = {
           date_time: dateTime,
