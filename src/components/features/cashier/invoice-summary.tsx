@@ -1668,18 +1668,25 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     !!activeMultiNote && (activeBooking?.number_of_customers ?? 1) >= 2;
   // Precompute the slot index for each display item (services only). Products
   // and packages don't have a slot → -1 (no customer line shown for them).
-  // Uses an immutable reduce (no in-render variable mutation) to satisfy the
-  // react-hooks/immutability lint rule.
+  // Uses `serviceSlots` from the [[MULTI]] note (stored at booking creation)
+  // to map each service → the customer slot that owns it. When serviceSlots
+  // is absent (legacy bookings), falls back to a 1:1 service-counter (the old
+  // behavior — works only when each customer has exactly 1 service).
   const itemSlotIndices: number[] = displayItems.reduce<{
     arr: number[];
     svc: number;
   }>(
     (acc, it) => {
       const isService = (it as { type?: string }).type === "service";
-      return {
-        arr: [...acc.arr, isService ? acc.svc : -1],
-        svc: isService ? acc.svc + 1 : acc.svc,
-      };
+      if (!isService) {
+        return { arr: [...acc.arr, -1], svc: acc.svc };
+      }
+      // Use serviceSlots if available (maps service index → customer slot index).
+      const svcSlots = activeMultiNote?.serviceSlots;
+      const slotIdx = svcSlots && acc.svc < svcSlots.length
+        ? svcSlots[acc.svc]
+        : acc.svc; // fallback: 1:1 (legacy)
+      return { arr: [...acc.arr, slotIdx], svc: acc.svc + 1 };
     },
     { arr: [], svc: 0 }
   ).arr;
