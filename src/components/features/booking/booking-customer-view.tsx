@@ -571,33 +571,36 @@ export function BookingCustomerView({
                 )}
                 {visibleColumns.payment && (
                 <td className="border-r border-gray-300 px-3 py-1">
-                  {booking.status === "checkin" && (
-                    <div className="space-y-0.5">
-                      <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
-                        Hóa đơn
-                      </button>
-                      {booking.invoice?.final_amount != null && (
-                        <div className="text-xs font-medium text-emerald-700">
-                          {new Intl.NumberFormat("vi-VN").format(Number(booking.invoice.final_amount))}đ
+                  {/* Show "Hóa đơn" link when the booking has an invoice (either
+                      via booking.status = checkin/checkout, OR when a
+                      multi-customer booking has per-customer slotStatuses with
+                      at least one "checkin" → an invoice was auto-created). */}
+                  {(() => {
+                    const parsed = parseMultiCustomerNote(booking.note);
+                    const slotStatuses = parsed?.slotStatuses;
+                    const hasCheckedInSlot = slotStatuses
+                      ? slotStatuses.some((s) => s === "checkin" || s === "checkout")
+                      : false;
+                    const hasInvoice = booking.invoice?.id || (booking.status === "checkin") || (booking.status === "checkout") || hasCheckedInSlot;
+                    if (!hasInvoice) return null;
+                    return (
+                      <div className="space-y-0.5">
+                        {booking.status === "checkout" && (
+                          <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700">Đã thanh toán</span>
+                        )}
+                        <div>
+                          <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
+                            Hóa đơn
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  )}
-                  {booking.status === "checkout" && (
-                    <div className="space-y-0.5">
-                      <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Đã thanh toán</span>
-                      <div>
-                        <button className="text-xs text-blue-600 hover:text-blue-800 hover:underline" onClick={() => openInvoice(booking)}>
-                          Hóa đơn
-                        </button>
+                        {booking.invoice?.final_amount != null && (
+                          <div className="text-xs font-medium text-emerald-700">
+                            {new Intl.NumberFormat("vi-VN").format(Number(booking.invoice.final_amount))}đ
+                          </div>
+                        )}
                       </div>
-                      {booking.invoice?.final_amount != null && (
-                        <div className="text-xs font-medium text-emerald-700">
-                          {new Intl.NumberFormat("vi-VN").format(Number(booking.invoice.final_amount))}đ
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    );
+                  })()}
                 </td>
                 )}
                 {visibleColumns.reminder && (

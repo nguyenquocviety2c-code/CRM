@@ -103,8 +103,94 @@ export async function PATCH(request: NextRequest) {
     // Log activity (best-effort) when the booking has an invoice.
     const invRaw = (booking as { invoice?: unknown }).invoice;
     const inv = Array.isArray(invRaw) ? invRaw[0] : invRaw;
-    const invoiceId = (inv as { id?: string } | null)?.id;
-    const invoiceCode = (inv as { code?: string } | null)?.code;
+    let invoiceId = (inv as { id?: string } | null)?.id;
+    let invoiceCode = (inv as { code?: string } | null)?.code;
+
+    // AUTO-CREATE INVOICE on first checkin: when a customer checks in (status
+    // = "checkin") and no invoice exists yet, create a PENDING invoice so the
+    // "Thanh toán" column shows "Hóa đơn" immediately. The invoice includes
+    // ONLY the checked-in customer's services (the booking's services are
+    // filtered by which slot is checked in). The cashier can then open the
+    // invoice dialog to add products + process payment.
+    if (status === "checkin" && !invoiceId) {
+      // Gather the checked-in customers' services. A service belongs to a
+      // checked-in customer if its serviceSlots mapping points to a slot whose
+      // slotStatuses is "checkin". For legacy bookings without serviceSlots,
+      // only the directly-checked-in slot's main service is included.
+      const svcSlots = parsed.serviceSlots;
+      const bookingBranchId = (booking as { branch_id?: string | null }).branch_id || null;
+      const checkedInSlotIndices = new Set<number>();
+      for (let i = 0; i < slotStatuses.length; i++) {
+        if (slotStatuses[i] === "checkin") checkedInSlotIndices.add(i);
+      }
+
+      // Fetch the booking's services to build invoice items.
+      const { data: bookingServices } = await supabaseAdmin
+        .from("booking_services")
+        .select("id, service_id, staff_id, sort_order, service:services(id, name, price, duration)")
+        .eq("booking_id", bookingId)
+        .order("sort_order", { ascending: true });
+
+      const invoiceItems: Array<Record<string, unknown>> = [];
+      if (bookingServices && Array.isArray(bookingServices)) {
+        (bookingServices as Array<Record<string, unknown>>).forEach((bs, svcIdx) => {
+          // Determine which customer slot this service belongs to.
+          let slotIdx: number;
+          if (svcSlots && svcIdx < svcSlots.length) {
+            slotIdx = svcSlots[svcIdx];
+          } else {
+            slotIdx = svcIdx; // legacy 1:1
+          }
+          // Only include services whose customer is checked in.
+          if (!checkedInSlotIndices.has(slotIdx)) return;
+
+          const svc = bs.service as { id?: string; name?: string; price?: number | string } | null;
+          if (!svc || !svc.id) return;
+          const price = Number(svc.price) || 0;
+          invoiceItems.push({
+            id: `${svc.id}-${crypto.randomUUID?.() || Date.now()}-${svcIdx}`,
+            itemId: svc.id,
+            name: svc.name || "Dịch vụ",
+            type: "service",
+            quantity: 1,
+            price,
+            discount: 0,
+            discountType: "VND",
+            total: price,
+          });
+        });
+      }
+
+      // Get the booking's customer_id for the invoice.
+      const customerId = (booking as { customer_id?: string }).customer_id || null;
+
+      try {
+        const { data: newInv, error: invErr } = await supabaseAdmin
+          .from("invoices")
+          .insert({
+            customer_id: customerId,
+            branch_id: bookingBranchId,
+            booking_id: bookingId,
+            note: JSON.stringify({ items: invoiceItems, promotion: null }),
+            subtotal: invoiceItems.reduce((s, it) => s + (Number(it.price) || 0), 0),
+            discount: 0,
+            tip: 0,
+            final_amount: invoiceItems.reduce((s, it) => s + (Number(it.price) || 0), 0),
+            payment_method: null,
+            status: "pending",
+          })
+          .select("id, code")
+          .single();
+
+        if (!invErr && newInv) {
+          invoiceId = (newInv as { id: string }).id;
+          invoiceCode = (newInv as { code?: string }).code || null;
+        }
+      } catch {
+        // best-effort — the slot status still updated successfully
+      }
+    }
+
     if (invoiceId) {
       const actionMap: Record<string, string> = {
         checkin: "CHECKIN",
