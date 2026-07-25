@@ -981,21 +981,12 @@ export function BookingStaffView({
                         }
                       }}
                       onStatusChange={(status) => {
-                        // For multi-customer "Cùng lịch" bookings, change the
-                        // status of ONLY this customer's slot (not the whole
-                        // booking). The slotIndex is derived from the segment's
-                        // service position via serviceSlots in the note.
-                        const parsed = parseMultiCustomerNote(seg.booking.note);
-                        if (parsed && parsed.slots.length > 0 && onSlotStatusChange) {
-                          // Find the slot index for this segment.
-                          const svcSlots = parsed.serviceSlots;
-                          const slotIdx = svcSlots && seg.segmentIndex < svcSlots.length
-                            ? svcSlots[seg.segmentIndex]
-                            : seg.segmentIndex;
-                          onSlotStatusChange(seg.booking.id, slotIdx, status);
-                        } else {
-                          onStatusChange?.(seg.booking.id, status);
-                        }
+                        // Changing status from the popover always changes the
+                        // WHOLE booking (all slots) via the normal booking PATCH
+                        // — NOT per-customer. Per-customer status changes are
+                        // done elsewhere (not from this popover). This ensures
+                        // all slots in a multi-customer booking sync together.
+                        onStatusChange?.(seg.booking.id, status);
                       }}
                       onEdit={() => onEdit?.(seg.booking)}
                       onDelete={() => onDelete?.(seg.booking.id)}
@@ -1230,8 +1221,11 @@ function SegmentBlock({
   // auto-happens via payment). The current status is excluded so the Select
   // doesn't offer a no-op. NOTE: reverting to confirmed/cancelled auto-deletes
   // the linked invoice (handled in the bookings PATCH route).
+  // For multi-customer bookings with per-customer slotStatuses, use the
+  // EFFECTIVE status (the per-customer slot status) as the "current" to
+  // exclude from the options — so the user sees what THIS customer's status is.
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
-  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== booking.status);
+  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== effectiveStatus);
 
   // z-index by booking-status priority so UNPAID bookings always stack ON TOP
   // of cancelled/no_show ones when their segments overlap (mirrors the segment
