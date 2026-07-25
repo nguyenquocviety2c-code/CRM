@@ -1177,10 +1177,29 @@ function SegmentBlock({
   // "đã bấm Thanh toán" is the shared payment-review flag (useIsReviewing),
   // NOT the invoice's pending status — every checkin booking auto-creates a
   // pending invoice, so pending-status can't tell the two states apart.
-  const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled";
-  const isNoShow = booking.status === "no_show";
-  const isCheckin = booking.status === "checkin";
+  //
+  // For multi-customer "Cùng lịch" bookings, each segment's color is driven by
+  // the PER-CUSTOMER slot status (from slotStatuses in the [[MULTI]] note),
+  // NOT the booking-level status. This way, if customer #2 is checked in but
+  // customer #1 is still confirmed, only customer #2's slots turn green.
+  const parsedMulti = parseMultiCustomerNote(booking.note);
+  const slotStatuses = parsedMulti?.slotStatuses;
+  const svcSlots = parsedMulti?.serviceSlots;
+  // Resolve the effective status for THIS segment:
+  // 1. If multi-customer + has slotStatuses + this segment's slot has a
+  //    per-customer status → use that.
+  // 2. Otherwise → use the booking-level status.
+  const effectiveSlotIdx = svcSlots && segment.segmentIndex < svcSlots.length
+    ? svcSlots[segment.segmentIndex]
+    : segment.segmentIndex;
+  const effectiveStatus = (slotStatuses && effectiveSlotIdx < slotStatuses.length)
+    ? slotStatuses[effectiveSlotIdx]
+    : booking.status;
+
+  const isPaid = effectiveStatus === "checkout";
+  const isCancelled = effectiveStatus === "cancelled";
+  const isNoShow = effectiveStatus === "no_show";
+  const isCheckin = effectiveStatus === "checkin";
 
   let blockBg: string;
   let timeText: string;
