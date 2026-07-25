@@ -128,13 +128,22 @@ function useDraggable(minimized: boolean) {
  * width/height/zoom is committed to React state once on pointerup so it
  * persists across re-renders.
  *
+ * IMPORTANT: getBoundingClientRect() returns the VISUAL size (after CSS zoom),
+ * but el.style.width is the CSS size (before zoom). Using getBoundingClientRect
+ * for baseW caused the dialog to shrink continuously on the 2nd drag because
+ * the base captured the zoomed-in (larger) size, then nextW = baseW + dx would
+ * overshoot, and zoom = nextW / base.w would recalculate to a different factor.
+ * The fix: read the CSS width/height from el.style.width/height (or
+ * getComputedStyle) — these are pre-zom and stable across drag sessions.
+ *
  * `contentRef` is shared with the drag hook (both target the same content el).
  */
 function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
   // `resize_table` permission gate. read once; permission changes are rare and
   // a re-mount (after refreshSession) picks up new values.
   const canResize = useAuthStore((s) => s.hasPermission("resize_table"))
-  // Base width captured on first resize (the dialog's natural CSS width).
+  // Base width captured on first resize (the dialog's natural CSS width, BEFORE
+  // any zoom is applied — used as the denominator for zoom factor calculation).
   const baseSizeRef = React.useRef<{ w: number; h: number } | null>(null)
   const [size, setSize] = React.useState<{ width: number | null; height: number | null; zoom: number }>({
     width: null,
@@ -149,6 +158,22 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
     baseZoom: number;
     edge: string; // "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw"
   } | null>(null)
+
+  /**
+   * Read the CURRENT CSS width/height (pre-zoom) from the element's inline
+   * style. Falls back to getComputedStyle when the inline style is empty
+   * (first resize before any manual sizing). This is critical: using
+   * getBoundingClientRect() here would return the VISUAL (post-zoom) size,
+   * causing a runaway shrink/grow on the 2nd+ drag.
+   */
+  const getCurrentCssSize = React.useCallback((): { w: number; h: number } => {
+    const el = contentRef.current
+    if (!el) return { w: 0, h: 0 }
+    const style = window.getComputedStyle(el)
+    const w = parseFloat(style.width) || el.offsetWidth || 0
+    const h = parseFloat(style.height) || el.offsetHeight || 0
+    return { w, h }
+  }, [contentRef])
 
   const onResizeMove = React.useCallback((e: PointerEvent) => {
     const r = resizeRef.current
@@ -167,7 +192,7 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
     if (r.edge.includes("s")) nextH = Math.max(120, r.baseH + dy)
     if (r.edge.includes("w")) nextW = Math.max(200, r.baseW - dx)
     if (r.edge.includes("n")) nextH = Math.max(120, r.baseH - dy)
-    // zoom = current width / base width → everything scales with width.
+    // zoom = current CSS width / base CSS width → everything scales with width.
     const base = baseSizeRef.current
     const zoom = base && base.w > 0 ? nextW / base.w : 1
     el.style.width = `${nextW}px`
@@ -183,6 +208,8 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
     e.preventDefault()
     const el = contentRef.current
     // Commit final size to React state so it persists across re-renders.
+    // Read the CSS width/height (pre-zoom) from the inline style, NOT from
+    // getBoundingClientRect (which returns the post-zoom visual size).
     if (el) {
       const base = baseSizeRef.current
       const w = parseFloat(el.style.width) || r.baseW
@@ -191,6 +218,11 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
       setSize({ width: w, height: h, zoom })
     }
     resizeRef.current = null
+    const el2 = contentRef.current
+    if (el2) {
+      // Restore transitions (disabled during the drag for zero-lag tracking).
+      el2.style.transition = ""
+    }
     document.body.style.cursor = ""
     document.body.style.userSelect = ""
     document.removeEventListener("pointermove", onResizeMove)
@@ -204,23 +236,28 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
     e.stopPropagation()
     const el = contentRef.current
     if (!el) return
-    // Capture the base size on first resize; reuse for subsequent ones so the
-    // zoom factor stays relative to the ORIGINAL width (consistent scaling).
+    // Capture the base CSS size on first resize; reuse for subsequent ones so
+    // the zoom factor stays relative to the ORIGINAL CSS width (consistent
+    // scaling). This is the PRE-ZOOM natural width.
     if (!baseSizeRef.current) {
-      const rect = el.getBoundingClientRect()
-      baseSizeRef.current = { w: rect.width, h: rect.height }
+      const cs = getCurrentCssSize()
+      baseSizeRef.current = { w: cs.w, h: cs.h }
     }
-    const base = baseSizeRef.current
-    // Current rendered width/height (may differ from base after a prior resize).
-    const rect = el.getBoundingClientRect()
+    // Current CSS width/height (pre-zoom). Use getComputedStyle, NOT
+    // getBoundingClientRect — the latter returns post-zoom visual size and
+    // causes a runaway shrink on the 2nd+ drag.
+    const cs = getCurrentCssSize()
     resizeRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      baseW: rect.width,
-      baseH: rect.height,
-      baseZoom: base.w > 0 ? rect.width / base.w : 1,
+      baseW: cs.w,
+      baseH: cs.h,
+      baseZoom: baseSizeRef.current.w > 0 ? cs.w / baseSizeRef.current.w : 1,
       edge,
     }
+    // Disable transitions during the drag so margins/dimensions apply INSTANTLY
+    // (no CSS animation smoothing that would make the resize feel laggy).
+    el.style.transition = "none"
     // Cursor hint while dragging.
     const cursors: Record<string, string> = {
       n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize",
@@ -231,7 +268,7 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
     document.addEventListener("pointermove", onResizeMove, { passive: false })
     document.addEventListener("pointerup", onResizeUp, { passive: false })
     document.addEventListener("pointercancel", onResizeUp, { passive: false })
-  }, [canResize, contentRef, onResizeMove, onResizeUp])
+  }, [canResize, contentRef, onResizeMove, onResizeUp, getCurrentCssSize])
 
   // Clean up native listeners on unmount.
   React.useEffect(() => {

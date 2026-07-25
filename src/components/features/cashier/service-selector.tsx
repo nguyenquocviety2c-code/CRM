@@ -691,7 +691,15 @@ export function ServiceSelector() {
     // nhân viên and as an "Xếp nhân viên" clickable row in View khách hàng.
     // Previously staff was required to sync; now it's optional so the cashier
     // can create an appointment slot first and assign a staff later.
-    const shouldSyncBooking = !!(selectedDate && selectedTime);
+    //
+    // WALK-IN tabs (created via "Tạo hóa đơn") NEVER sync to Lịch hẹn — they
+    // are standalone cashier orders with no time slot. The order defaults to
+    // "Đã checkin" and has an invoice (created at "Thanh toán"). This avoids
+    // cluttering the booking module with walk-in entries that have no real
+    // appointment time.
+    const metaForSync = activeTabId ? tabMeta[activeTabId] : undefined;
+    const isWalkinTab = metaForSync?.type === "walkin";
+    const shouldSyncBooking = !isWalkinTab && !!(selectedDate && selectedTime);
 
     const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
     const isNewCustomerCut =
@@ -1534,48 +1542,10 @@ export function ServiceSelector() {
             </div>
             )}
 
-            {isParallelService ? (
-              // Service 2+: date/time are derived from the BOOKING's start
-              // time (parallel — all services start simultaneously, each on a
-              // different staff). The date/time are set internally
-              // (selectedDate/selectedTime) but NOT shown — the cashier only
-              // picks the staff. No visible note per the user's request.
-              null
-            ) : (
-              // First service: date/time are pre-filled with the current
-              // date + time (set in handleServiceClick) and DISABLED — the
-              // cashier can't click into the DatePicker/TimePicker to change
-              // them. The `pointer-events-none opacity-60` wrapper makes the
-              // inputs visually read-only and non-interactive. The values are
-              // still sent in the booking payload as "now". Compact: grid
-              // gap-2, labels text-[11px], inputs forced to h-8 via the
-              // [&_input]:h-8 selector so DatePicker/TimePicker inputs match
-              // the staff Select's h-8 height.
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label htmlFor="svc-date" className="text-[11px] text-gray-600">Ngày</Label>
-                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
-                    <DatePicker
-                      id="svc-date"
-                      value={selectedDate}
-                      onChange={setSelectedDate}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="svc-time" className="text-[11px] text-gray-600">Giờ</Label>
-                  <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
-                    <TimePicker
-                      id="svc-time"
-                      value={selectedTime}
-                      onChange={setSelectedTime}
-                      hiddenHours={timeFeasibility.hiddenHours}
-                      hiddenMinutes={timeFeasibility.hiddenMinutes}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Date/time fields REMOVED — walk-in cashier orders no longer
+                create a booking in Lịch hẹn (no time slot needed). The order
+                is a standalone invoice, defaulting to "Đã checkin". */}
+            {null}
 
             {dialogError && (
               <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
@@ -1711,34 +1681,8 @@ export function ServiceSelector() {
                 </span>
               </div>
             )}
-            {/* Date + Time — DISABLED, pre-filled with "now". Shown for BOTH
-                products and packages. The `pointer-events-none opacity-60`
-                wrapper makes the DatePicker/TimePicker read-only and
-                non-interactive. The `[&_input]:h-8 [&_input]:text-xs` forces
-                the inner inputs to h-8 so they match the staff Select's
-                height — all controls in the dialog share the same height. */}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="simple-date" className="text-[11px] text-gray-600">Ngày</Label>
-                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
-                  <DatePicker
-                    id="simple-date"
-                    value={simpleStaffDialogDate}
-                    onChange={setSimpleStaffDialogDate}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="simple-time" className="text-[11px] text-gray-600">Giờ</Label>
-                <div className="pointer-events-none opacity-60 [&_input]:h-8 [&_input]:text-xs [&_input]:px-2 [&_input]:pr-7">
-                  <TimePicker
-                    id="simple-time"
-                    value={simpleStaffDialogTime}
-                    onChange={setSimpleStaffDialogTime}
-                  />
-                </div>
-              </div>
-            </div>
+            {/* Date/time fields REMOVED — walk-in cashier orders no longer
+                create a booking in Lịch hẹn (no time slot needed). */}
             {/* Staff Select — ONLY for packages (when canAssignStaff). Products
                 have NO staff field. For packages, the cashier MUST pick a
                 staff before OK is enabled. h-8 + text-xs matches the date/time

@@ -36,6 +36,8 @@ const PaidInvoiceView = dynamic(
 import { BookingStatusType } from "@/lib/constants";
 import { BranchSelector } from "@/components/layout/branch-selector";
 import { useBranchStore } from "@/stores/branch-store";
+import { StaffReorderDialog } from "@/components/features/booking/staff-reorder-dialog";
+import { useToast } from "@/hooks/use-toast";
 
 export default function BookingPage() {
   // useSearchParams must be inside a <Suspense> boundary in Next.js 16, so the
@@ -128,6 +130,9 @@ function BookingPageContent() {
   // are blocked.
   const { hasPermission } = useAuthStore();
   const canBookPastDate = hasPermission("book_past_date");
+  const canReorderStaff = hasPermission("reorder_staff");
+  const [reorderOpen, setReorderOpen] = useState(false);
+  const { toast } = useToast();
 
   // Apply the "Xem lịch hẹn" deep-link from the Cashier module ONCE on mount.
   // ?view=staff/customer → switch view mode. ?search=CODE → pre-fill the search
@@ -435,6 +440,98 @@ function BookingPageContent() {
     }
   };
 
+  /**
+   * Drag-to-move a CONFIRMED booking to a new time + staff slot (View nhân
+   * viên single-day layout). Checks for conflicts: the booking's [new_start,
+   * new_start + duration] must not overlap any existing booking for the
+   * target staff (excluding the dragged booking itself). If no conflict,
+   * PATCHes the booking's date_time (+ services' staff_id when the staff
+   * changed for a single-staff booking).
+   */
+  const handleMoveBooking = async (
+    bookingId: string,
+    newDateTimeISO: string,
+    newStaffId: string | null,
+    durationMin: number,
+    originalBooking: Booking
+  ) => {
+    const newStartMs = new Date(newDateTimeISO).getTime();
+    const newEndMs = newStartMs + durationMin * 60 * 1000;
+
+    // Conflict check: for the target staff, check if [newStart, newEnd]
+    // overlaps any existing booking's service interval (excluding the dragged
+    // booking). Uses allBookings (the full unfiltered day's list) so the check
+    // isn't affected by the staff/status filter.
+    const targetStaffId = newStaffId || originalBooking.services?.[0]?.staff_id || null;
+    if (targetStaffId) {
+      const conflict = allBookings.some((b) => {
+        if (b.id === bookingId) return false;
+        if (b.status === "cancelled" || b.status === "no_show") return false;
+        const bStart = b.date_time ? new Date(b.date_time).getTime() : NaN;
+        if (isNaN(bStart)) return false;
+        // Check each service of this booking that belongs to the target staff.
+        return (b.services || []).some((s) => {
+          const sStaffId = s.staff_id || (s.staff as { id?: string } | null)?.id;
+          if (sStaffId !== targetStaffId) return false;
+          const sDur = (Number(s.duration) || Number(s.service?.duration) || 60) * 60 * 1000;
+          return newStartMs < bStart + sDur && bStart < newEndMs;
+        });
+      });
+      if (conflict) {
+        toast({
+          title: "Không thể di chuyển",
+          description: "Khung giờ này bị trùng với lịch hẹn khác của nhân viên.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    // Build the PATCH body. Always send date_time. If the staff changed AND
+    // the booking is single-staff (all services share one staff_id), also
+    // send the services array with the new staff_id so syncBookingServices
+    // updates all services' staff.
+    const patchBody: Record<string, unknown> = {
+      date_time: newDateTimeISO,
+      actor_staff_id: useAuthStore.getState().user?.id,
+    };
+    const originalStaffIds = new Set(
+      (originalBooking.services || [])
+        .map((s) => s.staff_id || (s.staff as { id?: string } | null)?.id)
+        .filter(Boolean) as string[]
+    );
+    const isSingleStaff = originalStaffIds.size <= 1;
+    if (newStaffId && targetStaffId && originalStaffIds.has(targetStaffId) === false && isSingleStaff) {
+      // Staff changed for a single-staff booking → update all services' staff.
+      patchBody.services = (originalBooking.services || []).map((s, idx) => ({
+        service_id: s.service_id,
+        staff_id: newStaffId,
+        service_category_id: s.service_category_id || s.category?.id || null,
+        sort_order: s.sort_order ?? idx,
+      }));
+    }
+
+    try {
+      const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patchBody),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "Failed");
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+      toast({ title: "Đã di chuyển lịch hẹn" });
+    } catch (e) {
+      toast({
+        title: "Lỗi",
+        description: e instanceof Error ? e.message : "Di chuyển thất bại",
+        variant: "destructive",
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -491,7 +588,19 @@ function BookingPageContent() {
         visibleColumns={visibleColumns}
         onToggleColumn={toggleColumn}
         columnDefs={columnDefs}
+        canReorderStaff={canReorderStaff}
+        onReorderStaff={() => setReorderOpen(true)}
       />
+
+      {/* Staff reorder dialog (drag-to-reorder) — rendered at the page level
+          so it's accessible from both View khách hàng + View nhân viên. */}
+      {canReorderStaff && (
+        <StaffReorderDialog
+          open={reorderOpen}
+          onClose={() => setReorderOpen(false)}
+          branchId={selectedBranchId}
+        />
+      )}
 
       {/* Content */}
       {isLoading ? (
@@ -567,6 +676,7 @@ function BookingPageContent() {
             to.setHours(23, 59, 59, 999);
             setDateRange({ from, to });
           }}
+          onMoveBooking={handleMoveBooking}
         />
       )}
 

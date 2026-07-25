@@ -344,7 +344,6 @@ function TimelineColumn({
   const useVar = pxPerHour !== undefined;
   const trackHeight = useVar ? `calc(${HOUR_COUNT} * var(--px-per-hour))` : `${trackHeightPx}px`;
   const bandTop = (h: number) => useVar ? `calc(${h - START_HOUR} * var(--px-per-hour))` : `${(h - START_HOUR) * pph}px`;
-  const bandHeight = useVar ? "var(--px-per-hour)" : `${pph}px`;
 
   const rootStyle: React.CSSProperties = fixedWidth
     ? { width: `${fixedWidth}px`, flexShrink: 0, height: trackHeightPx }
@@ -360,15 +359,27 @@ function TimelineColumn({
           {HOURS.map((h) => {
             const count = countByHour.get(h) || 0;
             return (
-              <div
-                key={h}
-                className="absolute left-0 right-0 px-3"
-                style={{ top: bandTop(h) }}
-              >
-                <div className="text-sm font-medium text-gray-700">
-                  {`${String(h).padStart(2, "0")}:00`}
+              <div key={h}>
+                {/* HH:00 label (top of the hour band). Same size + black color
+                    as the HH:30 label — both are first-class 30-min slots. */}
+                <div
+                  className="absolute left-0 right-0 px-3"
+                  style={{ top: bandTop(h) }}
+                >
+                  <div className="text-sm font-medium text-gray-900">
+                    {`${String(h).padStart(2, "0")}:00`}
+                  </div>
+                  {count > 0 && <div className="text-xs text-gray-400">({count})</div>}
                 </div>
-                {count > 0 && <div className="text-xs text-gray-400">({count})</div>}
+                {/* HH:30 label (mid-band) — SAME size + color (black) as HH:00
+                    so every 30-min slot reads identically. A horizontal divider
+                    separates the two half-hour slots. */}
+                <div
+                  className="absolute left-0 right-0 px-3 text-sm font-medium text-gray-900"
+                  style={{ top: `calc(${h - START_HOUR} * var(--px-per-hour) + var(--px-per-hour) / 2)` }}
+                >
+                  {`${String(h).padStart(2, "0")}:30`}
+                </div>
               </div>
             );
           })}
@@ -412,35 +423,49 @@ function TimelineColumn({
 
       {/* The continuous timeline track. */}
       <div className="relative flex-1" style={{ height: trackHeight }}>
-        {/* Horizontal hour gridlines. */}
+        {/* Horizontal gridlines — one at HH:00 (solid) + one at HH:30 (dashed)
+            so every 30-min slot is visually separated. The HH:30 line is dashed
+            + lighter so it reads as a sub-division while the HH:00 line stays
+            the primary band boundary. */}
         {HOURS.map((h) => (
-          <div
-            key={h}
-            className="absolute left-0 right-0 border-t border-gray-300"
-            style={{ top: bandTop(h) }}
-          />
+          <div key={h}>
+            <div
+              className="absolute left-0 right-0 border-t border-gray-300"
+              style={{ top: bandTop(h) }}
+            />
+            <div
+              className="absolute left-0 right-0 border-t border-dashed border-gray-200"
+              style={{ top: `calc(${h - START_HOUR} * var(--px-per-hour) + var(--px-per-hour) / 2)` }}
+            />
+          </div>
         ))}
         {/* Bottom border (21:00 line). */}
         <div className="absolute left-0 right-0 border-t border-gray-300" style={{ top: trackHeight }} />
 
-        {/* Clickable empty hour bands — open the "Create booking" dialog with
-            the band's hour pre-filled. Rendered BEHIND the booking blocks so
-            clicking a block hits the block (not the band). */}
-        {onSlotClick && !slotLocked && slotDate && HOURS.map((h) => (
+        {/* Clickable empty 30-min slot bands — open the "Create booking"
+            dialog with the slot's HH:MM pre-filled. Two bands per hour
+            (HH:00 + HH:30) so the user can pick a 30-min slot directly.
+            Rendered BEHIND the booking blocks so clicking a block hits the
+            block (not the band). */}
+        {onSlotClick && !slotLocked && slotDate && HOURS.flatMap((h) => [
+          { h, m: 0 },
+          { h, m: 30 },
+        ]).map(({ h, m }) => (
           <div
-            key={h}
+            key={`${h}:${m}`}
             className="absolute left-0 right-0 cursor-pointer hover:bg-sky-50/40"
             style={{
-              top: bandTop(h),
-              height: bandHeight,
+              top: `calc(${h - START_HOUR} * var(--px-per-hour) + (${m} / 60) * var(--px-per-hour))`,
+              height: "calc(var(--px-per-hour) / 2)",
             }}
             onClick={(e) => {
               if (e.target !== e.currentTarget) return;
               const hh = String(h).padStart(2, "0");
+              const mm = String(m).padStart(2, "0");
               const dd = String(slotDate.getDate()).padStart(2, "0");
               const mo = String(slotDate.getMonth() + 1).padStart(2, "0");
               const yyyy = slotDate.getFullYear();
-              onSlotClick({ date: `${dd}/${mo}/${yyyy}`, time: `${hh}:00` });
+              onSlotClick({ date: `${dd}/${mo}/${yyyy}`, time: `${hh}:${mm}` });
             }}
           />
         ))}
@@ -904,261 +929,6 @@ function layoutSegments(
 }
 
 // =============================================================================
-// MULTI-DAY COLUMN LAYOUT — DayColumnGrid
-// =============================================================================
-// Renders one TimelineColumn per day in the selected date range, sharing a
-// single left "Giờ" label column. Booking blocks span the SUM of their
-// services' durations exactly like the single-day view (the fix applies to
-// both layouts).
-//
-// Sizing (mirrors View nhân viên):
-//   - 2–4 days → columns fill the full table width (flex-1 each), no scroll.
-//   - 5+ days → each column keeps the SAME width as 4 days would have had
-//     (measured via ResizeObserver), and the table scrolls horizontally.
-//
-// Vertical scrolling happens INSIDE the table body (overflow-y-auto) so the
-// module header / filters stay fixed — the whole page doesn't scroll.
-// =============================================================================
-
-interface DayColumnGridProps {
-  dateRange: { from: Date; to: Date };
-  bookings: Booking[];
-  onSlotClick?: (slot: { date: string; time: string }) => void;
-  slotLocked: boolean;
-  renderCard: (segment: ServiceSegment) => ReactNode;
-}
-
-/** Minimum day column width (used as a floor when computing scrollColWidth). */
-const TG_DAY_COL_MIN_WIDTH = 220;
-/** The 4-day baseline: 1–4 days fill the table; 5+ keep that column width. */
-const TG_BASELINE_DAYS = 4;
-
-/** Build the list of calendar days (inclusive) between `from` and `to`. */
-function buildDays(from: Date, to: Date): Date[] {
-  const days: Date[] = [];
-  const start = new Date(from);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(to);
-  end.setHours(0, 0, 0, 0);
-  if (end < start) return [start];
-  const cur = new Date(start);
-  while (cur <= end) {
-    days.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return days;
-}
-
-/** Build a `YYYY-MM-DD` dayKey from a local Date (no UTC shift). */
-function dateToDayKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** Extract { dayKey, hour } from the ISO date_time (regex, no TZ shift). */
-function getBookingDayHourKey(booking: Booking): { dayKey: string; hour: number } | null {
-  const dt = booking.date_time;
-  if (!dt || typeof dt !== "string") return null;
-  const m = dt.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):/);
-  if (!m) return null;
-  const hour = parseInt(m[4], 10);
-  if (isNaN(hour)) return null;
-  return { dayKey: `${m[1]}-${m[2]}-${m[3]}`, hour };
-}
-
-function DayColumnGrid({
-  dateRange,
-  bookings,
-  onSlotClick,
-  slotLocked,
-  renderCard,
-}: DayColumnGridProps) {
-  const days = useMemo(() => buildDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to]);
-
-  // Measure container width to compute scrollColWidth = (container - timeCol) / 4.
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const update = () => setContainerWidth(el.getBoundingClientRect().width);
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const dayCount = days.length;
-  const needsScroll = dayCount > TG_BASELINE_DAYS;
-  const scrollColWidth = containerWidth > 0
-    ? Math.max(TG_DAY_COL_MIN_WIDTH, (containerWidth - TIME_COL_WIDTH) / TG_BASELINE_DAYS)
-    : 280;
-  const totalWidth = needsScroll
-    ? TIME_COL_WIDTH + dayCount * scrollColWidth
-    : undefined;
-
-  // Horizontal scroll tracking — shows left/right arrow buttons when the grid
-  // content overflows horizontally (many days selected). The buttons let the
-  // user scroll left/right one column at a time, complementing the native
-  // scrollbar (which may be invisible on overlay-scrollbar browsers).
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-  const updateScrollFlags = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 1);
-    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
-  };
-  useEffect(() => {
-    updateScrollFlags();
-    const el = scrollRef.current;
-    if (!el) return;
-    el.addEventListener("scroll", updateScrollFlags);
-    const ro = new ResizeObserver(updateScrollFlags);
-    ro.observe(el);
-    return () => {
-      el.removeEventListener("scroll", updateScrollFlags);
-      ro.disconnect();
-    };
-  }, [days, containerWidth]);
-  const scrollByColumns = (dir: 1 | -1) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollBy({ left: dir * scrollColWidth, behavior: "smooth" });
-  };
-
-  // Index bookings by day so each day column only renders its own bookings.
-  const byDay = useMemo(() => {
-    const m = new Map<string, Booking[]>();
-    for (const b of bookings) {
-      const info = getBookingDayHourKey(b);
-      if (!info) continue;
-      const arr = m.get(info.dayKey);
-      if (arr) arr.push(b);
-      else m.set(info.dayKey, [b]);
-    }
-    return m;
-  }, [bookings]);
-
-  const weekdayVi = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
-
-  return (
-    <div
-      ref={containerRef}
-      className="border bg-white flex flex-col relative"
-      style={{ maxHeight: "calc(100vh - 200px)" }}
-    >
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto time-grid-scroll">
-        <div
-          style={
-            needsScroll
-              ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` }
-              : { width: "100%" }
-          }
-        >
-          {/* Header: "Giờ" + day columns — sticky at top during vertical scroll */}
-          <div className="flex border-b bg-gray-50 sticky top-0 z-10">
-            <div
-              className="shrink-0 border-r px-3 py-2 text-sm font-semibold text-gray-700"
-              style={{ width: TIME_COL_WIDTH }}
-            >
-              Khung giờ
-            </div>
-            {days.map((day, idx) => {
-              const isToday = (() => {
-                const t = new Date();
-                t.setHours(0, 0, 0, 0);
-                const d = new Date(day);
-                d.setHours(0, 0, 0, 0);
-                return t.getTime() === d.getTime();
-              })();
-              return (
-                <div
-                  key={idx}
-                  className={`border-r px-3 py-2 text-center ${isToday ? "bg-emerald-50" : ""}`}
-                  style={needsScroll ? { width: scrollColWidth, flexShrink: 0 } : { flex: "1 1 0%", minWidth: 0 }}
-                >
-                  <div className="text-[11px] font-medium text-gray-500">{weekdayVi[day.getDay()]}</div>
-                  <div className={`text-sm font-semibold ${isToday ? "text-emerald-700" : "text-gray-800"}`}>
-                    {`${String(day.getDate()).padStart(2, "0")}/${String(day.getMonth() + 1).padStart(2, "0")}`}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Body: shared "Giờ" label column + one TimelineColumn per day. */}
-          <div className="flex" style={{ height: TRACK_HEIGHT }}>
-            {/* Giờ label column */}
-            <div
-              className="relative shrink-0 border-r bg-gray-50/60"
-              style={{ width: TIME_COL_WIDTH, height: TRACK_HEIGHT }}
-            >
-              {HOURS.map((h) => (
-                <div
-                  key={h}
-                  className="absolute left-0 right-0 px-3"
-                  style={{ top: (h - START_HOUR) * PX_PER_HOUR }}
-                >
-                  <div className="text-sm font-medium text-gray-700">
-                    {`${String(h).padStart(2, "0")}:00`}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Day columns */}
-            {days.map((day, idx) => {
-              const dayKey = dateToDayKey(day);
-              const dayBookings = byDay.get(dayKey) || [];
-              return (
-                <TimelineColumn
-                  key={idx}
-                  bookings={dayBookings}
-                  showLabels={false}
-                  slotDate={day}
-                  onSlotClick={onSlotClick}
-                  slotLocked={slotLocked}
-                  renderCard={renderCard}
-                  fixedWidth={needsScroll ? scrollColWidth : undefined}
-                />
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Left/right scroll arrows — always-visible clickable buttons that scroll
-          the grid horizontally by one column. Shown only when there is content
-          beyond the visible edge (canScrollLeft / canScrollRight). Complements
-          the native scrollbar (which may be invisible on overlay-scrollbar
-          browsers) so the user can always navigate when many days are selected. */}
-      {needsScroll && canScrollLeft && (
-        <button
-          type="button"
-          onClick={() => scrollByColumns(-1)}
-          aria-label="Cuộn sang trái"
-          className="absolute left-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-r-md border border-l-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
-          style={{ marginLeft: TIME_COL_WIDTH }}
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-      )}
-      {needsScroll && canScrollRight && (
-        <button
-          type="button"
-          onClick={() => scrollByColumns(1)}
-          aria-label="Cuộn sang phải"
-          className="absolute right-0 top-1/2 z-20 flex h-10 w-8 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 border-gray-300 bg-white/90 text-gray-600 shadow-md hover:bg-white hover:text-gray-900"
-        >
-          <ChevronRight className="h-5 w-5" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// =============================================================================
 // MULTI-DAY GRID TABLE (CustomerDayRangeGrid) — grid-table layout mirroring
 // View nhân viên's DayRangeGrid. Rows = hours, columns = days, each cell holds
 // non-overlapping chips stacked top-to-bottom. This replaces the absolute-
@@ -1375,10 +1145,18 @@ function CustomerDayRangeGrid({
   const handleCellClick = (day: Date, hour: number, e: React.MouseEvent<HTMLDivElement>) => {
     if (!onSlotClick || slotLocked) return;
     if (e.target !== e.currentTarget) return; // only empty area
+    // Snap to 30-min slot based on click Y within the cell: top half → :00,
+    // bottom half → :30. Matches the single-day timeline's 30-min bands.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = (e.clientY - rect.top) / rect.height;
+    const minute = ratio < 0.5 ? 0 : 30;
     const dd = String(day.getDate()).padStart(2, "0");
     const mo = String(day.getMonth() + 1).padStart(2, "0");
     const yyyy = day.getFullYear();
-    onSlotClick({ date: `${dd}/${mo}/${yyyy}`, time: `${String(hour).padStart(2, "0")}:00` });
+    onSlotClick({
+      date: `${dd}/${mo}/${yyyy}`,
+      time: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+    });
   };
 
   const handleChipClick = (booking: Booking) => {
@@ -1438,8 +1216,11 @@ function CustomerDayRangeGrid({
                   minHeight: `${CDG_ROW_HEIGHT}px`,
                 }}
               >
-                <div className="border-r bg-gray-50/60 px-2 py-1 text-[11px] text-gray-500">
-                  {String(hour).padStart(2, "0")}:00
+                <div className="relative flex flex-col justify-between border-r bg-gray-50/60 px-2 py-1">
+                  {/* HH:00 (top) + HH:30 (bottom) — same size + black color so
+                      every 30-min slot reads identically. */}
+                  <div className="text-sm font-medium text-gray-900">{String(hour).padStart(2, "0")}:00</div>
+                  <div className="text-sm font-medium text-gray-900">{String(hour).padStart(2, "0")}:30</div>
                 </div>
                 {days.map((day, dayIdx) => {
                   const dayKey = cdgDateKey(day);

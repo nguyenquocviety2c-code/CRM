@@ -1962,3 +1962,151 @@ Stage Summary:
 - Part 2a (Chưa xếp column): verified "Chưa xếp nhân viên" column appears with "1 lịch hẹn" in View nhân viên after booking created without staff.
 - Part 2b (View khách hàng Xếp nhân viên): verified blue "Xếp nhân viên" clickable link (count:1) for no-staff booking. VLM confirmed.
 - Part 3 (walk-in sync): verified full flow — walk-in tab → add service (isGuestCustomer:true, search visible) → link "Trung Kiên" (isGuestCustomer:false, customerId:d9f26eff) → booking API confirms customer_id synced from guest to d9f26eff (Trung Kiên), staffId still "". Booking shows "Trung Kiên" + "LH000088" in /booking page.
+
+---
+Task ID: 22-research
+Agent: explore (Z.ai Code)
+Task: Research how "Ghi chú & dịch vụ" column + "Thông tin khách hàng" section work, in preparation for (a) showing all customers+services in multi-customer "Cùng lịch" Thông tin khách hàng, (b) adding "Xem ghi chú" link/dialog, (c) changing service numbering to customer-number+letter (2a, 2b).
+
+Findings (research only — no code changes):
+
+1. "Ghi chú & dịch vụ" column in View khách hàng list
+   File: src/components/features/booking/booking-customer-view.tsx
+   - Column def: line 195 `{ key: "note", label: "Ghi chú & dịch vụ" }`
+   - Header: line 283 `<th ...>Ghi chú & dịch vụ</th>`
+   - Cell renderer: lines 393-468 (visibleColumns.note branch)
+   - Note display (lines 403-409): parses `[[MULTI]]` note → shows only the `userNote` part inline as a plain `<div className="text-xs text-gray-500">Ghi chú: {userNote}</div>`. NO truncation, NO "Xem ghi chú" link, NO dialog. For plain bookings it shows the raw `booking.note` string the same way.
+   - Services list (lines 410-456): maps `serviceDisplay` (each entry = {category, staff}). For multi-customer, each entry is prefixed with `${idx + 1}. ` (e.g. "1. ", "2. "). For single-customer, NO prefix.
+   - "Tạo bởi" footer (lines 460-466): always shown, displays creator staff name or "Khách hàng" when created_by is null.
+   - Staff line (lines 431-452): shows `NV: {staffName}` in yellow; if no staff, shows a blue "Xếp nhân viên" link (calls `onAssignStaff || onEdit`).
+
+   Exact cell code:
+   ```tsx
+   {visibleColumns.note && (
+   <td className="border-r border-gray-300 px-3 py-1">
+     <div className="space-y-0.5">
+       {(() => {
+         const parsed = parseMultiCustomerNote(booking.note);
+         const userNote = parsed ? parsed.userNote : (booking.note || "");
+         return (
+           <>
+             {userNote && (
+               <div className="text-xs text-gray-500">Ghi chú: {userNote}</div>
+             )}
+             {serviceDisplay.length === 0 ? (
+               <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
+             ) : (
+               (() => {
+                 const parsed = parseMultiCustomerNote(booking.note);
+                 const isMulti = !!(parsed && parsed.slots.length > 0);
+                 const entries = serviceDisplay
+                   .map((s) => ({ category: s.categoryName, staff: s.staffName }))
+                   .filter((e) => e.category || e.staff);
+                 if (entries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
+                 return entries.map((e, idx) => (
+                   <div key={idx} className="space-y-0.5">
+                     {e.category && (
+                       <div className="text-xs font-medium text-gray-900">
+                         {isMulti ? `${idx + 1}. ` : ""}{e.category}
+                       </div>
+                     )}
+                     {e.staff ? (
+                       <div className="text-xs text-yellow-600">NV: {e.staff}</div>
+                     ) : (
+                       <button
+                         type="button"
+                         onClick={() => (onAssignStaff || onEdit)(booking)}
+                         className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                         title="Xếp nhân viên cho dịch vụ này"
+                       >
+                         Xếp nhân viên
+                       </button>
+                     )}
+                   </div>
+                 ));
+               })()
+             )}
+           </>
+         );
+       })()}
+       <div className="text-xs text-gray-500">
+         Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
+       </div>
+     </div>
+   </td>
+   )}
+   ```
+
+2. Multi-customer "Cùng lịch" handling in the note column
+   File: src/components/features/booking/booking-customer-view.tsx
+   - The CUSTOMER column (NOT the note column) handles `[[MULTI]]` parsing: lines 332-390.
+   - `getAllSlotCustomers(booking.note)` is called once per booking row at line 333. If non-null and length > 0, it renders one numbered customer block per slot (lines 337-367):
+     - Numbered label `i + 1. ` + name (or "Khách vãng lai" if walkin)
+     - Phone below (raw if canViewCustomerPhone, else maskPhone)
+     - Named customers → green clickable link to `/customers/${sc.id}`; walk-in customers → plain text.
+   - Single-customer fallback (lines 371-389): renders `booking.customer?.name` and phone.
+   - NOTE: the note column itself parses `[[MULTI]]` only to STRIP the structured block (line 403-404) so it can show the user's typed note. It does NOT display per-customer info — that lives in the customer column.
+   - The note column DOES use `isMulti` (line 415) to decide whether to number services (`${idx + 1}. `).
+
+3. parseMultiCustomerNote / multi-customer.ts
+   File: src/lib/multi-customer.ts
+   - Marker constant: `MULTI_MARKER = "[[MULTI]]"` (line 27)
+   - Storage format: `[[MULTI]]{"slots":[{id,name,phone,walkin},...],"userNote":"..."}`
+   - `parseMultiCustomerNote(note)` (lines 50-82): returns `null` for non-multi notes (single customer / plain note). For multi notes returns:
+     ```ts
+     interface MultiCustomerNote {
+       slots: SlotCustomer[];   // 1:1 with booking's services array, in sort order
+       userNote: string;        // cashier's own typed note (may be "")
+     }
+     interface SlotCustomer {
+       id: string;      // resolved customer_id (always set, even walk-in)
+       name: string;    // "Khách vãng lai" for walk-in slots
+       phone: string;   // empty string for walk-in
+       walkin: boolean; // true when no phone/name was entered
+     }
+     ```
+   - `buildMultiCustomerNote(slots, userNote)` (lines 88-96): constructs the persisted string.
+   - `getSlotCustomer(note, slotIndex)` (lines 102-109): one slot by index.
+   - `getAllSlotCustomers(note)` (lines 116-122): all slots (or null). Used by display sites that list every customer (e.g. customer view's customer column).
+   - Backward compatibility: returns null for plain bookings → callers fall back to `booking.customer`.
+
+4. "Thông tin khách hàng" section in booking dialog (multi-customer "Cùng lịch")
+   File: src/components/features/booking/booking-dialog.tsx
+   - Section 1 header: line 2410-2414 `<h3>Thông tin khách hàng</h3>`
+   - isMultiCustomerMode flag: line 504 `const isMultiCustomerMode = !booking && Number(watchedNumberOfCustomers) >= 2;` — TRUE ONLY IN CREATE MODE + N≥2.
+   - Three render branches (lines 2415-2653):
+     * `isWalkIn` (line 2415): static "Khách vãng lai" box.
+     * `isMultiCustomerMode` (line 2422-2461): a LIVE numbered SUMMARY of every slot (NOT individual inputs). The summary is built from `watchedServices` (lines 2430-2439) showing `displayName` (or "Khách vãng lai"), the resolved service name, and the staff name. Rendered as a green panel with numbered items `<span>{s.idx + 1}.</span>`. Per-customer actual phone/name INPUTS live in the Dịch vụ section (right column, lines 2865-3011) — each slot row has its own SĐT + Tên khách input with autocomplete dropdown.
+     * Default single-customer (lines 2462-2652): the regular phone/name inputs at the top, with autocomplete dropdowns.
+   - The multi summary at lines 2422-2461 currently shows: index + name + service name + staff name. It does NOT show phone (only the inputs in Dịch vụ show phone). For requirement (a) "show all customers+services in the Thông tin khách hàng section" — this summary already exists in CREATE mode. The summary is missing in EDIT mode (see #5).
+
+5. Edit mode (booking !== null) "Thông tin khách hàng" rendering
+   File: src/components/features/booking/booking-dialog.tsx
+   - `isMultiCustomerMode` is FORCED to false in edit mode (line 504: `!booking && ...`). So even if the booking being edited was created in multi-customer "Cùng lịch" mode (note starts with `[[MULTI]]`), the dialog falls through to the SINGLE-customer branch.
+   - In edit mode the dialog shows the regular phone/name inputs (lines 2462-2652) pre-filled from `booking.customer` (useEffect at lines 1309-1318 sets `phoneSearch`/`nameSearch`).
+   - The note field is restored (lines 1223-1231) by parsing `[[MULTI]]` and showing only `parsed.userNote` in the textarea at lines 2801-2808 (`<Textarea id="note" {...register("note")} placeholder="Nhập ghi chú..." className="min-h-[80px]" />`). The structured block is stripped and not editable directly.
+   - Per-slot customer info (phone/name from each `[[MULTI]]` slot) is NOT restored to per-slot fields in edit mode — those fields only exist in CREATE mode (the `useEffect` at lines 510-527 returns early when `booking` is set).
+   - IMPLICATION for requirement (a): to show all customers+services in edit mode, you'll need to (1) relax `isMultiCustomerMode` to be true in edit mode when `parseMultiCustomerNote(booking.note)` returns non-null, AND (2) populate `watchedServices[i].customerPhone/customerName/customerId` from the parsed slots when entering edit mode.
+
+6. Current service numbering format in note column
+   File: src/components/features/booking/booking-customer-view.tsx lines 420-429
+   - For multi-customer bookings: `${idx + 1}. ` → plain sequential numbers "1. ", "2. ", "3. ".
+   - For single-customer bookings: no prefix.
+   - Format is NOT "customer number + letter" (e.g. 2a, 2b). Today each service slot maps 1:1 to one customer (slots[i] = customer for service i), so customer and service numbers are always identical.
+   - For requirement (c): changing to "2a, 2b" requires grouping services by customer (a customer can have N services), which is NOT currently supported — the model is 1 customer per service slot. The `slots` array length always equals the services array length.
+
+7. Where booking.note is displayed in the customer view list
+   File: src/components/features/booking/booking-customer-view.tsx lines 403-409
+   - The note is shown INLINE as `<div className="text-xs text-gray-500">Ghi chú: {userNote}</div>` — full text, no truncation, no expandable dialog, no "Xem ghi chú" link.
+   - For multi-customer bookings, `userNote = parsed.userNote` (the cashier's typed note, with the `[[MULTI]]` JSON block stripped). For plain bookings, `userNote = booking.note || ""`.
+   - There is NO existing "Xem ghi chú" link or note dialog component anywhere in src/ (grep for `Xem ghi chú|noteDialog|NoteDialog` returned zero hits). The dialog would need to be built from scratch — could use the existing `Dialog` component from `@/components/ui/dialog`.
+
+Implementation notes for next step:
+- For (a): two changes needed:
+  * booking-dialog.tsx line 504 — relax `isMultiCustomerMode` to also be true in edit mode when the booking's note is a `[[MULTI]]` note. Something like `const isMultiCustomerMode = (!booking || parseMultiCustomerNote(booking.note)) && Number(watchedNumberOfCustomers) >= 2;` — but `numberOfCustomers` is read from the form, not from the slots length, so verify the reset effect populates N from slots length.
+  * booking-dialog.tsx useEffect that resets the form (lines ~1141-1245) — for multi bookings, populate each `services[i].customerPhone/customerName/customerId` from `parsed.slots[i]` so the Dịch vụ inputs and the summary in "Thông tin khách hàng" reflect actual data.
+  * booking-dialog.tsx updateMutation path — when editing a multi booking, re-serialize the slots via `buildMultiCustomerNote(slots, userNote)` on submit (today the edit mutation just sends `note: data.note` directly, line 1368 in createMutation; the edit mutation needs the same `buildMultiCustomerNote` wrap that the create mode already does — see lines 1968-2146 for the create "Cùng lịch" branch).
+- For (b): add a new "Xem ghi chú" link in the note column cell (booking-customer-view.tsx, around lines 407-409) that opens a Dialog (component at @/components/ui/dialog). Replace the inline `<div>Ghi chú: {userNote}</div>` with a button + Dialog showing the full userNote text. State for the dialog can be a simple `useState<string | null>(null)` for the selected note, plus a Dialog component with the note text inside.
+- For (c): changing numbering to "2a, 2b" implies the data model needs to support N services per customer (currently 1:1). Two paths:
+  * Path A (data model unchanged): if the requirement is purely visual and the 1:1 mapping is kept, the numbering can stay as 1, 2, 3 (no change needed). The "2a, 2b" format only makes sense when a customer owns multiple services.
+  * Path B (allow N services per customer): the `slots` array length would no longer equal services length; you'd need a different data structure (e.g. `slots: { customerId, name, phone, walkin, serviceIndices: number[] }[]`). This is a bigger change touching multi-customer.ts, booking-dialog.tsx submit logic, booking-customer-view.tsx, and the API. Confirm with the user which path is intended before implementing.

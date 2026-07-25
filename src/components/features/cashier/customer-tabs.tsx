@@ -1486,6 +1486,24 @@ export function CustomerTabs({ selectedDate }: CustomerTabsProps) {
             </div>
           )}
 
+          {/* Walk-in tabs (created via "Tạo hóa đơn") show a synthetic status
+              badge since they have no booking in Lịch hẹn. "Đã checkin" (green)
+              when the tab has items; "Đã thanh toán" (emerald) when the invoice
+              is completed. */}
+          {isWalkinTab && !isEmptyTab && (
+            <div className="ml-auto flex items-center gap-2">
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                  activeMeta?.paid
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-green-100 text-green-700"
+                }`}
+              >
+                {activeMeta?.paid ? "Đã thanh toán" : "Đã checkin"}
+              </span>
+            </div>
+          )}
+
           {/* X close button — for ANY empty tab (no items, no pending invoice).
               Lets the cashier discard a mistakenly opened tab OR an empty
               booking tab (no service/product/package). Once an item is added

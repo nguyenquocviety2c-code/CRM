@@ -425,11 +425,9 @@ export default function DatLichPage() {
   // Compute the set of feasible 30-min slot starts across ALL active rows.
   // A slot start is feasible if NO active row's staff is busy during
   // [start, start + that row's service duration). Used by the button grid to
-  // disable busy slots. (hiddenHours/hiddenMinutes were used by the old
-  // TimePicker popover — kept in the return for backward compat but no longer
-  // consumed by the UI.)
+  // disable busy slots.
   const { feasibleSlots } = useMemo(() => {
-    const empty = { hiddenHours: new Set<string>(), hiddenMinutes: {} as Record<string, Set<string>>, feasibleSlots: new Set<string>() };
+    const empty = { feasibleSlots: new Set<string>() };
     if (!isoDay || activeRows.length === 0) return empty;
     const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!m) return empty;
@@ -464,34 +462,22 @@ export default function DatLichPage() {
     }
     if (rowSpecs.length === 0) return empty;
 
-    const hh = new Set<string>();
-    const hm: Record<string, Set<string>> = {};
+    // Only check 30-min-aligned slot starts (the button grid's granularity).
+    // A slot is feasible if NO row's staff is busy during [start, start+dur].
     const feasible = new Set<string>();
-    const hourHasFeasible: Record<string, boolean> = {};
-    for (let h = 0; h < 24; h++) hourHasFeasible[String(h).padStart(2, "0")] = false;
-    for (let min = 0; min < 60 * 24; min++) {
+    for (let min = 0; min < 60 * 24; min += 30) {
       const startMs = dayBase + min * 60 * 1000;
-      // A minute conflicts if ANY row's staff is busy during [start, start+dur].
       const overlaps = rowSpecs.some((spec) => {
         const endMs = startMs + spec.durationMs;
         return spec.intervals.some((iv) => startMs < iv.endMs && iv.startMs < endMs);
       });
-      const hStr = String(Math.floor(min / 60)).padStart(2, "0");
-      const mStr = String(min % 60).padStart(2, "0");
-      if (overlaps) {
-        if (!hm[hStr]) hm[hStr] = new Set<string>();
-        hm[hStr].add(mStr);
-      } else {
-        hourHasFeasible[hStr] = true;
-        // Record feasible 30-min-aligned slot starts (used by the button grid).
-        if (min % 30 === 0) feasible.add(`${hStr}:${mStr}`);
+      if (!overlaps) {
+        const hStr = String(Math.floor(min / 60)).padStart(2, "0");
+        const mStr = String(min % 60).padStart(2, "0");
+        feasible.add(`${hStr}:${mStr}`);
       }
     }
-    for (let h = 0; h < 24; h++) {
-      const hStr = String(h).padStart(2, "0");
-      if (!hourHasFeasible[hStr]) hh.add(hStr);
-    }
-    return { hiddenHours: hh, hiddenMinutes: hm, feasibleSlots: feasible };
+    return { feasibleSlots: feasible };
   }, [activeRows, isoDay, dayBookings, bookingDate, allServices]);
 
   // Build the list of 30-min time-slot buttons from the salon's operating

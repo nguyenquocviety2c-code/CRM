@@ -33,7 +33,6 @@ import { localDayToUtcRange, localDayStartUtc, toVietnamDay, toVietnamTime } fro
 import { bookingSchema } from "@/lib/validations";
 import { buildMultiCustomerNote, parseMultiCustomerNote } from "@/lib/multi-customer";
 import { phoneContains, scorePhoneMatch } from "@/lib/phone-search";
-import { StaffReorderDialog } from "@/components/features/booking/staff-reorder-dialog";
 import { useBranchStore } from "@/stores/branch-store";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -123,6 +122,26 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       setScheduleMode("same");
       setActiveSlotDropdown(null);
       setIsMultiSubmitting(false);
+      setExtraServices({});
+      setServiceConflict("");
+      // Clear the phone/name search fields so the dialog is CLEAN on reopen.
+      // Without this, typing a phone/name then closing without saving would
+      // leave the old text visible the next time the dialog opens.
+      setPhoneSearch("");
+      setNameSearch("");
+      setShowCustomerDropdown(false);
+      // `activeSlotDropdown`, `activeSlotField` etc. are derived from the
+      // form's service entries — they're already cleared by the reset() call
+      // in the open effect. No need to set them here (and setShowSlotDropdown
+      // doesn't exist — it was a wrong guess).
+      setQuickAddOpen(false);
+      setQuickAddName("");
+      setQuickAddPhone("");
+      setQuickAddError("");
+      setConflictMessage("");
+      setPendingExistingBookings([]);
+      setSkipExistingCheck(false);
+      setLastValidatedData(null);
     }
   }, [open]);
   // Permission: can the logged-in staff assign employees to services?
@@ -130,17 +149,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // are booked without a specific staff assignment (staffId left empty).
   const { hasPermission, user } = useAuthStore();
   const canAssignStaff = hasPermission("assign_staff");
-  const canReorderStaff = hasPermission("reorder_staff");
   const canBookPastDate = hasPermission("book_past_date");
 
   // Fetch customers from Supabase (server-side search)
   const [phoneSearch, setPhoneSearch] = useState("");
   const [nameSearch, setNameSearch] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
-  // Staff reorder dialog (drag-to-reorder) — opened via the "Sắp xếp" button
-  // next to the staff Select. Only the owner of the `reorder_staff` perm sees
-  // the button.
-  const [reorderOpen, setReorderOpen] = useState(false);
 
   // Quick-add customer dialog state
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -482,12 +496,15 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
 
   // ------------------------------------------------------------------
   // Multi-customer mode detection.
-  // Active ONLY in CREATE mode (booking === null) when numberOfCustomers >= 2.
-  // In edit mode the multi-customer UI is never shown (existing bookings were
-  // created as single records and the per-slot fields don't apply).
+  // Active in CREATE mode when numberOfCustomers >= 2, AND in EDIT mode when
+  // the booking's note is a [[MULTI]] multi-customer note (so the Thông tin
+  // khách hàng section shows the per-customer summary instead of the single
+  // phone/name inputs).
   // ------------------------------------------------------------------
   const watchedNumberOfCustomers = useWatch({ control, name: "numberOfCustomers" }) as number;
-  const isMultiCustomerMode = !booking && Number(watchedNumberOfCustomers) >= 2;
+  const isMultiCustomerMode =
+    (!booking && Number(watchedNumberOfCustomers) >= 2) ||
+    (!!booking && !!(parseMultiCustomerNote(booking.note)));
 
   // Auto-adjust the services field array to match numberOfCustomers.
   // When numberOfCustomers changes to N (>= 2) in CREATE mode, append/remove
@@ -863,6 +880,93 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     return { hiddenHours, hiddenMinutes };
   };
 
+  /**
+   * Check if a single service+staff would conflict with the staff's existing
+   * bookings for the selected date+time. Returns a conflict message string
+   * (for display in a dialog) or null if no conflict.
+   *
+   * Used by the per-customer "Thêm dịch vụ" flow + the main service selection
+   * to give INSTANT feedback (not just on submit). The existing submit-time
+   * validation (validateBooking) still runs as a safety net.
+   */
+  const checkServiceConflict = (
+    staffId: string,
+    serviceId: string,
+    bookingDate: string,
+    bookingTime: string,
+    excludeBookingId?: string
+  ): string | null => {
+    if (!staffId || !serviceId || !bookingDate || !bookingTime) return null;
+    const svc = services.find((s) => s.id === serviceId);
+    if (!svc) return null;
+    const durationMs = (svc.duration || 60) * 60 * 1000;
+    if (durationMs <= 0) return null;
+    const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+    const isoDay = `${m[3]}-${m[2]}-${m[1]}`;
+    // Compute start epoch ms from dd/MM/yyyy + HH:MM with +07:00 offset.
+    const tm = bookingTime.match(/^(\d{1,2}):(\d{2})$/);
+    if (!tm) return null;
+    const startMs = new Date(`${isoDay}T${tm[1].padStart(2, "0")}:${tm[2]}:00+07:00`).getTime();
+    if (isNaN(startMs)) return null;
+    const endMs = startMs + durationMs;
+    // Check against the staff's existing bookings (busyIntervals).
+    const intervals = busyIntervals[`${staffId}|${isoDay}`];
+    if (intervals && intervals.length > 0) {
+      const conflict = intervals.find((iv) => startMs < iv.endMs && iv.startMs < endMs);
+      if (conflict) {
+        const fmtHMM = (ms: number) => {
+          const vn = new Date(ms + 7 * 3600 * 1000);
+          return `${String(vn.getUTCHours()).padStart(2, "0")}:${String(vn.getUTCMinutes()).padStart(2, "0")}`;
+        };
+        return `Không thể đặt dịch vụ "${svc.name}" cho nhân viên này vì trùng lịch với một lịch hẹn đã có (${fmtHMM(conflict.startMs)} - ${fmtHMM(conflict.endMs)}).\nVui lòng chọn nhân viên khác hoặc khung giờ khác.`;
+      }
+    }
+    return null;
+  };
+
+  /** Add an extra service row for a customer in multi-customer mode. */
+  const addExtraService = (customerIndex: number) => {
+    setExtraServices((prev) => ({
+      ...prev,
+      [customerIndex]: [...(prev[customerIndex] || []), { serviceCategoryId: "", serviceId: "", staffId: "" }],
+    }));
+  };
+
+  /** Remove an extra service row. */
+  const removeExtraService = (customerIndex: number, extraIndex: number) => {
+    setExtraServices((prev) => ({
+      ...prev,
+      [customerIndex]: (prev[customerIndex] || []).filter((_, i) => i !== extraIndex),
+    }));
+  };
+
+  /** Update an extra service field. Also runs a conflict check on staff/service change. */
+  const updateExtraService = (customerIndex: number, extraIndex: number, field: "serviceCategoryId" | "serviceId" | "staffId", value: string) => {
+    setExtraServices((prev) => {
+      const arr = [...(prev[customerIndex] || [])];
+      if (!arr[extraIndex]) return prev;
+      arr[extraIndex] = { ...arr[extraIndex], [field]: value };
+      // Clear dependent fields when category changes.
+      if (field === "serviceCategoryId") {
+        arr[extraIndex].serviceId = "";
+        arr[extraIndex].staffId = "";
+      }
+      // Run conflict check when both serviceId + staffId are set.
+      if (arr[extraIndex].serviceId && arr[extraIndex].staffId) {
+        const bookingDate = watch("date") || "";
+        const bookingTime = watch("time") || "";
+        const conflict = checkServiceConflict(arr[extraIndex].staffId, arr[extraIndex].serviceId, bookingDate, bookingTime);
+        if (conflict) {
+          setServiceConflict(conflict);
+          // Clear the staff selection so the user must pick a different staff.
+          arr[extraIndex].staffId = "";
+        }
+      }
+      return { ...prev, [customerIndex]: arr };
+    });
+  };
+
   // Determine the selected customer's "Khách cũ" status. A customer is "old"
   // when they have at least one completed invoice OR belong to a customer
   // group whose name contains "khách cũ". Drives which service categories are
@@ -1132,7 +1236,63 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         time: startTime,
         services:
           booking.services && booking.services.length > 0
-            ? (booking.services as unknown as Array<Record<string, unknown>>).map(mapService)
+            ? (() => {
+                const allServices = booking.services as unknown as Array<Record<string, unknown>>;
+                const parsed = parseMultiCustomerNote(booking.note || "");
+                const slotCount = parsed ? parsed.slots.length : 0;
+                // For multi-customer bookings: the first `slotCount` services
+                // are the MAIN services (one per customer). Services beyond
+                // that are EXTRA services (added via "Thêm dịch vụ") — they
+                // need to be restored to the `extraServices` state, NOT to the
+                // form's services array (which should only have `slotCount`
+                // entries, one per customer).
+                if (parsed && slotCount > 0 && allServices.length > slotCount) {
+                  // Restore extra services to state.
+                  const restoredExtras: Record<number, Array<{ serviceCategoryId: string; serviceId: string; staffId: string }>> = {};
+                  for (let i = slotCount; i < allServices.length; i++) {
+                    const row = allServices[i];
+                    // Find which customer this extra belongs to (by staff match).
+                    const staffId = row.staff_id as string || "";
+                    let customerIdx = 0;
+                    for (let j = 0; j < slotCount; j++) {
+                      const mainStaff = allServices[j].staff_id as string || "";
+                      if (mainStaff && mainStaff === staffId) { customerIdx = j; break; }
+                    }
+                    if (!restoredExtras[customerIdx]) restoredExtras[customerIdx] = [];
+                    restoredExtras[customerIdx].push({
+                      serviceCategoryId: (row.service_category_id || row.serviceCategoryId || "") as string,
+                      serviceId: (row.service_id || row.serviceId || "") as string,
+                      staffId: staffId,
+                    });
+                  }
+                  setExtraServices(restoredExtras);
+                  // Return only the MAIN services (one per customer) for the form.
+                  return allServices.slice(0, slotCount).map((row, i) => {
+                    const base = mapService(row);
+                    const slot = parsed.slots[i];
+                    return {
+                      ...base,
+                      customerPhone: slot.phone || "",
+                      customerName: slot.name || "",
+                      customerId: slot.id || "",
+                    };
+                  });
+                }
+                // Non-multi or no extras: map all services normally.
+                return allServices.map((row, i) => {
+                  const base = mapService(row);
+                  if (parsed && parsed.slots[i]) {
+                    const slot = parsed.slots[i];
+                    return {
+                      ...base,
+                      customerPhone: slot.phone || "",
+                      customerName: slot.name || "",
+                      customerId: slot.id || "",
+                    };
+                  }
+                  return base;
+                });
+              })()
             : [
                 {
                   serviceCategoryId: "",
@@ -1155,6 +1315,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       // blocked upstream, but this is a safety net).
       let preDate = prefillSlot?.date || defaultNewSlot?.date || "";
       let preTime = prefillSlot?.time || defaultNewSlot?.time || "";
+      // When no slot is pre-filled (user clicked "Tạo mới" with no existing
+      // bookings on the viewed day), default the date to TODAY so the user
+      // doesn't have to pick it manually. The time stays blank — the user
+      // picks it from the Khung giờ grid or types it.
+      if (!preDate) {
+        const now = new Date();
+        preDate = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
+      }
       if (!canBookPastDate && preDate) {
         const m = preDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
         if (m) {
@@ -1388,6 +1556,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   });
 
   const [conflictMessage, setConflictMessage] = useState<string>("");
+  // Extra services per customer in multi-customer mode. Each customer can have
+  // multiple services beyond the main one. Keyed by the customer's field index.
+  // Each extra service has: serviceCategoryId, serviceId, staffId.
+  const [extraServices, setExtraServices] = useState<Record<number, Array<{
+    serviceCategoryId: string;
+    serviceId: string;
+    staffId: string;
+  }>>>({});
+  // Per-service conflict message — shown when adding/selecting a service that
+  // would overlap an existing booking for the selected staff.
+  const [serviceConflict, setServiceConflict] = useState<string>("");
   // Existing-booking confirmation: when the customer (by phone) already has
   // non-cancelled bookings, show a confirmation prompt listing them before
   // actually creating/updating. `pendingExistingBookings` holds the list;
@@ -1881,11 +2060,24 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           note: combinedNote,
           branch_id: selectedBranchId || null,
           created_by: user?.id || null,
-          services: slotEntries.map((g) => ({
-            service_id: g.serviceId,
-            service_category_id: g.serviceCategoryId || null,
-            staff_id: g.staffId || null,
-          })),
+          services: [
+            // Main services (one per customer slot).
+            ...slotEntries.map((g) => ({
+              service_id: g.serviceId,
+              service_category_id: g.serviceCategoryId || null,
+              staff_id: g.staffId || null,
+            })),
+            // Extra services (each customer can have multiple via "Thêm dịch vụ").
+            ...data.services.flatMap((_, i) =>
+              (extraServices[i] || [])
+                .filter((e) => e.serviceId)
+                .map((e) => ({
+                  service_id: e.serviceId,
+                  service_category_id: e.serviceCategoryId || null,
+                  staff_id: e.staffId || null,
+                }))
+            ),
+          ],
         };
         try {
           const res = await fetch("/api/supabase/bookings", {
@@ -1931,6 +2123,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                 service_category_id: svc.serviceCategoryId || null,
                 staff_id: svc.staffId || null,
               },
+              // Extra services for this customer (via "Thêm dịch vụ").
+              ...(extraServices[i] || [])
+                .filter((e) => e.serviceId)
+                .map((e) => ({
+                  service_id: e.serviceId,
+                  service_category_id: e.serviceCategoryId || null,
+                  staff_id: e.staffId || null,
+                })),
             ],
           };
           try {
@@ -2294,27 +2494,44 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                       const stf = entry.staffId
                         ? staffList.find((st) => st.id === entry.staffId)
                         : null;
-                      return { idx, displayName, rawName, svcName: svc?.name, stfName: stf?.name };
+                      // Collect ALL services for this customer: the main one +
+                      // any extra services added via "Thêm dịch vụ".
+                      const extras = (extraServices[idx] || []).filter((e) => e.serviceId);
+                      const allServices = [
+                        svc ? { name: svc.name, staffName: stf?.name } : null,
+                        ...extras.map((e) => {
+                          const eSvc = services.find((s) => s.id === e.serviceId);
+                          const eStf = e.staffId ? staffList.find((st) => st.id === e.staffId) : null;
+                          return eSvc ? { name: eSvc.name, staffName: eStf?.name } : null;
+                        }),
+                      ].filter(Boolean) as Array<{ name: string; staffName?: string }>;
+                      return { idx, displayName, rawName, rawPhone, allServices };
                     });
                     return (
-                      <div className="rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-xs text-emerald-800 space-y-1">
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-xs text-emerald-800 space-y-1.5">
                         {slots.map((s) => (
-                          <div key={s.idx} className="flex gap-1.5">
-                            <span className="font-semibold shrink-0">{s.idx + 1}.</span>
-                            <span className="min-w-0">
+                          <div key={s.idx} className="space-y-0.5">
+                            {/* Line 1: customer number + name + phone (same line) */}
+                            <div className="flex gap-1.5">
+                              <span className="font-semibold shrink-0">{s.idx + 1}.</span>
                               <span className="font-medium">{s.displayName}</span>
-                              <span className="text-emerald-600">
-                                {s.svcName ? ` — ${s.svcName}` : " — Chưa chọn DV"}
-                                {s.stfName ? ` (NV: ${s.stfName})` : ""}
-                              </span>
-                            </span>
+                              {s.rawPhone && (
+                                <span className="text-emerald-600/80">— {s.rawPhone}</span>
+                              )}
+                            </div>
+                            {/* Lines 2+: each service on its own line (name + NV) */}
+                            {s.allServices.length === 0 ? (
+                              <div className="pl-4 text-emerald-600/70">Chưa chọn DV</div>
+                            ) : (
+                              s.allServices.map((sv, si) => (
+                                <div key={si} className="pl-4 text-emerald-600">
+                                  <span className="font-medium">{sv.name}</span>
+                                  {sv.staffName ? ` (NV: ${sv.staffName})` : ""}
+                                </div>
+                              ))
+                            )}
                           </div>
                         ))}
-                        <p className="pt-1 text-[10px] text-emerald-600/80">
-                          {scheduleMode === "same"
-                            ? "Cùng lịch: tất cả khách gộp vào 1 lịch hẹn. Ô không nhập tên → Khách vãng lai."
-                            : "Khác lịch: mỗi khách tạo 1 lịch riêng. Ô không nhập tên → Khách vãng lai."}
-                        </p>
                       </div>
                     );
                   })()
@@ -2712,11 +2929,14 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               <div className="space-y-3">
                 {/* Scrollable services list: when the customer adds many services
                     the list scrolls vertically instead of growing the dialog unboundedly. */}
-                <div className="space-y-3">
+                <div className={isMultiCustomerMode ? "space-y-2" : "space-y-3"}>
                 {fields.map((field, index) => (
                   <div
                     key={field.id}
-                    className="rounded-lg border bg-gray-50 p-4 space-y-3"
+                    className={isMultiCustomerMode
+                      ? "rounded-lg border bg-gray-50 p-2.5 space-y-1.5"
+                      : "rounded-lg border bg-gray-50 p-4 space-y-3"
+                    }
                   >
                     {isMultiCustomerMode ? (
                       // Multi-customer: "Khách #i" header + remove button,
@@ -2883,8 +3103,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                       )
                     )}
 
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="space-y-2">
+                    <div className={isMultiCustomerMode ? "grid grid-cols-3 gap-2" : "grid grid-cols-3 gap-3"}>
+                      <div className={isMultiCustomerMode ? "space-y-1" : "space-y-2"}>
                         <Label htmlFor={`services.${index}.serviceCategoryId`}>
                           Nhóm dịch vụ
                         </Label>
@@ -2908,7 +3128,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                         </Select>
                       </div>
 
-                      <div className="space-y-2">
+                      <div className={isMultiCustomerMode ? "space-y-1" : "space-y-2"}>
                         <Label htmlFor={`services.${index}.serviceId`}>
                           Chọn dịch vụ
                         </Label>
@@ -2943,31 +3163,29 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                       </div>
 
                       {canAssignStaff && (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <Label htmlFor={`services.${index}.staffId`}>
-                              Chọn nhân viên
-                            </Label>
-                            {/* "Sắp xếp" — opens the drag-to-reorder dialog. Only
-                                the first service row shows the button to avoid
-                                duplicates (the reorder dialog reorders the FULL
-                                branch staff list, shared across all rows). */}
-                            {canReorderStaff && index === 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setReorderOpen(true)}
-                                className="text-[11px] font-medium text-emerald-600 hover:text-emerald-700 hover:underline"
-                                title="Sắp xếp thứ tự nhân viên"
-                              >
-                                Sắp xếp
-                              </button>
-                            )}
-                          </div>
+                        <div className={isMultiCustomerMode ? "space-y-1" : "space-y-2"}>
+                          <Label htmlFor={`services.${index}.staffId`}>
+                            Chọn nhân viên
+                          </Label>
                           <Select
                             value={watch(`services.${index}.staffId`) || ""}
-                            onValueChange={(value) =>
-                              setValue(`services.${index}.staffId`, value)
-                            }
+                            onValueChange={(value) => {
+                              setValue(`services.${index}.staffId`, value);
+                              // Run instant conflict check when both service +
+                              // staff are set. If the service would overlap an
+                              // existing booking for this staff, show a dialog
+                              // + clear the staff selection.
+                              const svcId = watch(`services.${index}.serviceId`);
+                              if (svcId && value) {
+                                const bDate = watch("date") || "";
+                                const bTime = watch("time") || "";
+                                const conflict = checkServiceConflict(value, svcId, bDate, bTime);
+                                if (conflict) {
+                                  setServiceConflict(conflict);
+                                  setValue(`services.${index}.staffId`, "");
+                                }
+                              }
+                            }}
                           >
                             <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">
                               <SelectValue placeholder="Chọn nhân viên" />
@@ -3002,6 +3220,95 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                             Khách #{index + 1}: {errors.services[index]?.serviceId?.message}
                           </p>
                         )}
+                      </div>
+                    )}
+
+                    {/* Extra services per customer (multi-customer mode only).
+                        Each customer can have multiple services beyond the main
+                        one. "Thêm dịch vụ" adds a new compact row. Conflict
+                        check runs on staff selection — if the service would
+                        overlap an existing booking, a dialog is shown + the
+                        staff selection is cleared. */}
+                    {isMultiCustomerMode && (
+                      <div className="space-y-1.5">
+                        {(extraServices[index] || []).map((extra, extraIdx) => (
+                          <div key={extraIdx} className="flex items-end gap-1.5">
+                            <div className="flex-1 min-w-0">
+                              <Select
+                                value={extra.serviceCategoryId}
+                                onValueChange={(v) => updateExtraService(index, extraIdx, "serviceCategoryId", v)}
+                              >
+                                <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate h-7">
+                                  <SelectValue placeholder="Nhóm DV" />
+                                </SelectTrigger>
+                                <SelectContent className="text-xs">
+                                  {getSlotVisibleCategories(index).map((cat) => (
+                                    <SelectItem key={cat.id} value={cat.id} className="text-xs py-1">
+                                      <span className="truncate block">{cat.name}</span>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <Select
+                                value={extra.serviceId}
+                                onValueChange={(v) => updateExtraService(index, extraIdx, "serviceId", v)}
+                                disabled={!extra.serviceCategoryId}
+                              >
+                                <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate h-7">
+                                  <SelectValue placeholder={extra.serviceCategoryId ? "Dịch vụ" : "Chọn nhóm"} />
+                                </SelectTrigger>
+                                <SelectContent className="text-xs">
+                                  {services.filter((s) => s.categoryId === extra.serviceCategoryId).map((s) => (
+                                    <SelectItem key={s.id} value={s.id} className="text-xs py-1">
+                                      <span className="truncate block">{s.name}</span>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            {canAssignStaff && (
+                              <div className="flex-1 min-w-0">
+                                <Select
+                                  value={extra.staffId}
+                                  onValueChange={(v) => updateExtraService(index, extraIdx, "staffId", v)}
+                                  disabled={!extra.serviceId}
+                                >
+                                  <SelectTrigger size="sm" className="w-full min-w-0 gap-1 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate h-7">
+                                    <SelectValue placeholder={extra.serviceId ? "NV" : "Chọn DV"} />
+                                  </SelectTrigger>
+                                  <SelectContent className="text-xs">
+                                    {getStaffForService(extra.serviceId, index).map((staff) => (
+                                      <SelectItem key={staff.id} value={staff.id} className="text-xs py-1">
+                                        <span className="truncate block">{staff.name}</span>
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeExtraService(index, extraIdx)}
+                              className="h-7 w-7 shrink-0 p-0 text-red-500 hover:text-red-700"
+                              title="Xóa dịch vụ này"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ))}
+                        {/* "Thêm dịch vụ" button — adds a new extra service row. */}
+                        <button
+                          type="button"
+                          onClick={() => addExtraService(index)}
+                          className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700"
+                        >
+                          <Plus className="h-3 w-3" />
+                          Thêm dịch vụ
+                        </button>
                       </div>
                     )}
 
@@ -3161,16 +3468,6 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         )}
       </DialogContent>
 
-      {/* Staff reorder dialog (drag-to-reorder) — opened via "Sắp xếp" next to
-          the staff Select. Renders once here (shared across all service rows). */}
-      {canReorderStaff && (
-        <StaffReorderDialog
-          open={reorderOpen}
-          onClose={() => setReorderOpen(false)}
-          branchId={selectedBranchId}
-        />
-      )}
-
       {/* Quick-add customer dialog */}
       <Dialog open={quickAddOpen} onOpenChange={(v) => { setQuickAddOpen(v); if (!v) setQuickAddError(""); }}>
         <DialogContent className="max-w-sm">
@@ -3245,6 +3542,23 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           <p className="whitespace-pre-line text-sm text-gray-700">{conflictMessage}</p>
           <DialogFooter>
             <Button type="button" onClick={() => setConflictMessage("")}>
+              Đóng
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Per-service conflict dialog — shown when adding/selecting a service
+          that would overlap an existing booking for the selected staff.
+          Separate from the submit-time conflict dialog above. */}
+      <Dialog open={serviceConflict !== ""} onOpenChange={(v) => { if (!v) setServiceConflict(""); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Trùng lịch nhân viên</DialogTitle>
+          </DialogHeader>
+          <p className="whitespace-pre-line text-sm text-gray-700">{serviceConflict}</p>
+          <DialogFooter>
+            <Button type="button" onClick={() => setServiceConflict("")}>
               Đóng
             </Button>
           </DialogFooter>

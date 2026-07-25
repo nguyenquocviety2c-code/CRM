@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
-import { List, Clock, ChevronDown, Columns3 } from "lucide-react";
+import { List, Clock, ChevronDown, Columns3, ArrowUpDown } from "lucide-react";
 import { BookingViewMode, DateNav } from "@/stores/booking-store";
 import { useBranchStore } from "@/stores/branch-store";
 import { DateRangePicker } from "@/components/shared/date-range-picker";
@@ -64,6 +64,11 @@ interface BookingFilterProps {
   visibleColumns?: Record<string, boolean>;
   onToggleColumn?: (key: string) => void;
   columnDefs?: Array<{ key: string; label: string }>;
+  /** When true, the logged-in staff has the `reorder_staff` permission → show
+   *  the "Sắp xếp" button next to the staff filter. */
+  canReorderStaff?: boolean;
+  /** Called when the user clicks "Sắp xếp" — opens the drag-to-reorder dialog. */
+  onReorderStaff?: () => void;
 }
 
 export function BookingFilter({
@@ -84,6 +89,8 @@ export function BookingFilter({
   visibleColumns,
   onToggleColumn,
   columnDefs,
+  canReorderStaff,
+  onReorderStaff,
 }: BookingFilterProps) {
   const { selectedBranchId } = useBranchStore();
 
@@ -225,6 +232,22 @@ export function BookingFilter({
                 </SelectContent>
               </Select>
 
+              {/* "Sắp xếp" — opens the drag-to-reorder dialog. Placed next to the
+                  staff filter so it's discoverable in both views. Only shown when
+                  the logged-in staff has the reorder_staff permission. */}
+              {canReorderStaff && onReorderStaff && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 h-9"
+                  onClick={onReorderStaff}
+                  title="Sắp xếp thứ tự nhân viên"
+                >
+                  <ArrowUpDown className="h-4 w-4" />
+                  Sắp xếp
+                </Button>
+              )}
+
               {/* Danh sách / Khung giờ dropdown — same row as search + staff */}
               {onListViewModeChange && (
                 <DropdownMenu>
@@ -335,6 +358,20 @@ export function BookingFilter({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              {/* "Sắp xếp" — same button, shown in staff view too. */}
+              {canReorderStaff && onReorderStaff && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 h-9"
+                  onClick={onReorderStaff}
+                  title="Sắp xếp thứ tự nhân viên"
+                >
+                  <ArrowUpDown className="h-4 w-4" />
+                  Sắp xếp
+                </Button>
+              )}
             </>
           )}
         </div>

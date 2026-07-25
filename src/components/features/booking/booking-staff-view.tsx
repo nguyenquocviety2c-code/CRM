@@ -75,6 +75,22 @@ interface BookingStaffViewProps {
    * The parent switches the date range to show ONLY that single day.
    */
   onSelectDay?: (day: Date) => void;
+  /**
+   * Called when the user drags a CONFIRMED booking block to a new slot in the
+   * single-day staff-column layout. The parent PATCHes the booking's date_time
+   * (+ optionally staff) after a conflict check. Arguments: bookingId, new
+   * ISO date_time (Vietnam +07:00), new staffId (the column the block was
+   * dropped on — null = unassigned), the booking's total duration in minutes
+   * (for the conflict check), and the original booking (so the parent can
+   * check per-segment staff conflicts).
+   */
+  onMoveBooking?: (
+    bookingId: string,
+    newDateTimeISO: string,
+    newStaffId: string | null,
+    durationMin: number,
+    originalBooking: Booking
+  ) => void;
 }
 
 interface StaffColumn {
@@ -159,6 +175,7 @@ export function BookingStaffView({
   branchId,
   flashBookingId,
   onSelectDay,
+  onMoveBooking,
 }: BookingStaffViewProps) {
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
@@ -196,7 +213,24 @@ export function BookingStaffView({
   // Tracks which (column, hour) slot the mouse is hovering over in the
   // single-day staff-column layout. Used to highlight ONLY that slot (not
   // the entire column) with an orange overlay on hover.
-  const [hoveredSlot, setHoveredSlot] = useState<{ col: number; hour: number } | null>(null);
+  const [hoveredSlot, setHoveredSlot] = useState<{ col: number; hour: number; minute: number } | null>(null);
+
+  // --- Drag-to-move (confirmed bookings only, single-day staff layout) ----
+  // The user drags a confirmed booking block to a new slot (time + staff
+  // column). The drop target computes the new HH:MM from Y + the new staff
+  // from the column, then calls onMoveBooking (parent does the conflict check
+  // + PATCH). dragStateRef holds the dragged booking info during the drag.
+  const dragStateRef = useRef<{
+    bookingId: string;
+    durationMin: number;
+    originalStaffId: string | null;
+    originalBooking: Booking;
+  } | null>(null);
+  // Whether a drag is in progress (state, not ref — needed during render to
+  // hide the normal hover overlay while the green drop-target overlay shows).
+  const [isDragging, setIsDragging] = useState(false);
+  // Highlight the slot the drag is over (green = droppable, red = blocked).
+  const [dragOverSlot, setDragOverSlot] = useState<{ col: number; hour: number; minute: number } | null>(null);
 
   // Number of days in the selected range. When 1 day → use the legacy
   // per-staff column layout (one column per staff). When 2+ days → use the
@@ -673,12 +707,24 @@ export function BookingStaffView({
                 style={{ height: `${timelineHeight}px` }}
               >
                 {hours.map((h) => (
-                  <div
-                    key={h}
-                    className="absolute left-0 right-0 border-t px-2 text-[10px] text-gray-400"
-                    style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
-                  >
-                    <span className="block pt-0.5">{h.toString().padStart(2, "0")}:00</span>
+                  <div key={h}>
+                    {/* HH:00 label (top of the hour band) — same size + black
+                        color as HH:30 so every 30-min slot reads identically. */}
+                    <div
+                      className="absolute left-0 right-0 border-t px-2 text-sm font-medium text-gray-900"
+                      style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
+                    >
+                      <span className="block pt-0.5">{h.toString().padStart(2, "0")}:00</span>
+                    </div>
+                    {/* HH:30 label (mid-band) — SAME size + color (black) as
+                        HH:00. A dashed horizontal divider separates the two
+                        half-hour slots (drawn in the staff column body below). */}
+                    <div
+                      className="absolute left-0 right-0 px-2 text-sm font-medium text-gray-900"
+                      style={{ top: `${(h - START_HOUR) * pxPerHour + pxPerHour / 2}px` }}
+                    >
+                      {h.toString().padStart(2, "0")}:30
+                    </div>
                   </div>
                 ))}
                 {/* Hour-band drag handles — one at each gridline. The user grabs
@@ -728,14 +774,78 @@ export function BookingStaffView({
                     const totalMinutes = (clampedY / pxPerHour) * 60;
                     let hour = START_HOUR + Math.floor(totalMinutes / 60);
                     if (hour >= END_HOUR) hour = END_HOUR - 1;
+                    // Snap the hover to a 30-min slot so the orange overlay
+                    // highlights the exact slot a click would book (HH:00 or HH:30).
+                    // Uses Math.floor (NOT round) so the slot boundary is exactly at
+                    // 30 min — matches the click handler + the dashed gridline. A
+                    // mouse anywhere in the HH:00 slot (incl. near the HH:30
+                    // boundary) stays :00 until the cursor crosses the dashed line.
+                    let minute = Math.floor((totalMinutes % 60) / 30) * 30;
+                    if (hour >= END_HOUR) { hour = END_HOUR - 1; minute = 0; }
                     setHoveredSlot((prev) =>
-                      prev && prev.col === colIdx && prev.hour === hour
+                      prev && prev.col === colIdx && prev.hour === hour && prev.minute === minute
                         ? prev
-                        : { col: colIdx, hour }
+                        : { col: colIdx, hour, minute }
                     );
                   }}
                   onMouseLeave={() => {
                     setHoveredSlot((prev) => (prev && prev.col === colIdx ? null : prev));
+                  }}
+                  onDragOver={(e) => {
+                    // Allow drop when a confirmed booking is being dragged.
+                    if (!dragStateRef.current || slotLocked) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const clampedY = Math.max(0, Math.min(y, timelineHeight - 1));
+                    const totalMinutes = (clampedY / pxPerHour) * 60;
+                    let hour = START_HOUR + Math.floor(totalMinutes / 60);
+                    if (hour >= END_HOUR) hour = END_HOUR - 1;
+                    let minute = Math.floor((totalMinutes % 60) / 30) * 30;
+                    if (hour >= END_HOUR) { hour = END_HOUR - 1; minute = 0; }
+                    setDragOverSlot((prev) =>
+                      prev && prev.col === colIdx && prev.hour === hour && prev.minute === minute
+                        ? prev
+                        : { col: colIdx, hour, minute }
+                    );
+                  }}
+                  onDragLeave={() => {
+                    setDragOverSlot((prev) => (prev && prev.col === colIdx ? null : prev));
+                  }}
+                  onDrop={(e) => {
+                    if (!dragStateRef.current || slotLocked || !onMoveBooking || !currentDate) {
+                      dragStateRef.current = null;
+                      setIsDragging(false);
+                      setDragOverSlot(null);
+                      return;
+                    }
+                    e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const clampedY = Math.max(0, Math.min(y, timelineHeight - 1));
+                    const totalMinutes = (clampedY / pxPerHour) * 60;
+                    let hour = START_HOUR + Math.floor(totalMinutes / 60);
+                    if (hour >= END_HOUR) hour = END_HOUR - 1;
+                    let minute = Math.floor((totalMinutes % 60) / 30) * 30;
+                    if (hour >= END_HOUR) { hour = END_HOUR - 1; minute = 0; }
+                    const hh = String(hour).padStart(2, "0");
+                    const mm = String(minute).padStart(2, "0");
+                    const dd = String(currentDate.getDate()).padStart(2, "0");
+                    const mo = String(currentDate.getMonth() + 1).padStart(2, "0");
+                    const yyyy = currentDate.getFullYear();
+                    const newDateTimeISO = `${yyyy}-${mo}-${dd}T${hh}:${mm}:00+07:00`;
+                    const ds = dragStateRef.current;
+                    dragStateRef.current = null;
+                    setIsDragging(false);
+                    setDragOverSlot(null);
+                    onMoveBooking(
+                      ds.bookingId,
+                      newDateTimeISO,
+                      col.staff?.id || null,
+                      ds.durationMin,
+                      ds.originalBooking
+                    );
                   }}
                   onClick={(e) => {
                     // Only fire when clicking the EMPTY area of the column (not
@@ -749,11 +859,13 @@ export function BookingStaffView({
                     const totalMinutes = (clampedY / pxPerHour) * 60;
                     let hour = START_HOUR + Math.floor(totalMinutes / 60);
                     let minute = Math.floor(totalMinutes % 60);
-                    // Snap to 30-minute intervals (00 or 30) — matches the
-                    // booking dialog's TimePicker minuteStep=30 so the prefilled
-                    // slot time is always selectable.
-                    minute = Math.round(minute / 30) * 30;
-                    if (minute >= 60) { hour += 1; minute = 0; }
+                    // Snap to 30-min slots: [0,30) → :00, [30,60) → :30. Uses
+                    // Math.floor (NOT round) so the slot boundary is exactly at
+                    // 30 min — matches the HH:00/HH:30 label positions + the
+                    // dashed gridline. A click anywhere in the HH:00 slot (incl.
+                    // near the HH:30 boundary) stays :00 until the cursor
+                    // crosses the dashed line.
+                    minute = Math.floor(minute / 30) * 30;
                     if (hour >= END_HOUR) { hour = END_HOUR - 1; minute = 0; }
                     const hh = String(hour).padStart(2, "0");
                     const mm = String(minute).padStart(2, "0");
@@ -767,24 +879,43 @@ export function BookingStaffView({
                     });
                   }}
                 >
-                  {/* Hour grid lines (background) */}
+                  {/* Horizontal gridlines — HH:00 (solid) + HH:30 (dashed) so
+                      every 30-min slot is visually separated. pointer-events-none
+                      so they don't block clicks. */}
                   {hours.map((h) => (
-                    <div
-                      key={h}
-                      className="absolute left-0 right-0 border-t border-gray-300 pointer-events-none"
-                      style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
-                    />
+                    <div key={h}>
+                      <div
+                        className="absolute left-0 right-0 border-t border-gray-300 pointer-events-none"
+                        style={{ top: `${(h - START_HOUR) * pxPerHour}px` }}
+                      />
+                      <div
+                        className="absolute left-0 right-0 border-t border-dashed border-gray-200 pointer-events-none"
+                        style={{ top: `${(h - START_HOUR) * pxPerHour + pxPerHour / 2}px` }}
+                      />
+                    </div>
                   ))}
 
                   {/* Hover highlight — only the hovered hour slot (orange),
                       NOT the entire column. pointer-events-none so it doesn't
                       block clicks on the column (which computes time from Y). */}
-                  {!slotLocked && hoveredSlot && hoveredSlot.col === colIdx && (
+                  {!slotLocked && !isDragging && hoveredSlot && hoveredSlot.col === colIdx && (
                     <div
                       className="absolute left-0 right-0 bg-orange-100 pointer-events-none"
                       style={{
-                        top: `${(hoveredSlot.hour - START_HOUR) * pxPerHour}px`,
-                        height: `${pxPerHour}px`,
+                        top: `${((hoveredSlot.hour - START_HOUR) * 60 + hoveredSlot.minute) * (pxPerHour / 60)}px`,
+                        height: `${pxPerHour / 2}px`,
+                      }}
+                    />
+                  )}
+
+                  {/* Drag-drop target highlight (green) — shows where the
+                      dragged booking would land. pointer-events-none. */}
+                  {dragOverSlot && dragOverSlot.col === colIdx && (
+                    <div
+                      className="absolute left-0 right-0 bg-emerald-200/70 border-2 border-emerald-500 pointer-events-none z-40"
+                      style={{
+                        top: `${((dragOverSlot.hour - START_HOUR) * 60 + dragOverSlot.minute) * (pxPerHour / 60)}px`,
+                        height: `${pxPerHour / 2}px`,
                       }}
                     />
                   )}
@@ -800,6 +931,27 @@ export function BookingStaffView({
                       segment={seg}
                       pxPerHour={pxPerHour}
                       flashBookingId={flashBookingId}
+                      // Drag-to-move: only confirmed bookings are draggable.
+                      // The callback stores the booking info in dragStateRef so
+                      // the staff column's onDrop can compute the new time/staff.
+                      draggable={!!onMoveBooking && seg.booking.status === "confirmed"}
+                      onDragStart={(e) => {
+                        if (!onMoveBooking) return;
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", seg.booking.id);
+                        dragStateRef.current = {
+                          bookingId: seg.booking.id,
+                          durationMin: seg.duration,
+                          originalStaffId: col.staff?.id || null,
+                          originalBooking: seg.booking,
+                        };
+                        setIsDragging(true);
+                      }}
+                      onDragEnd={() => {
+                        dragStateRef.current = null;
+                        setIsDragging(false);
+                        setDragOverSlot(null);
+                      }}
                       // Click logic:
                       // - checkout (paid) → open the full paid invoice view (giao diện hóa
                       //   đơn hoàn tất) so the cashier can review/print the receipt.
@@ -875,6 +1027,8 @@ function SegmentBlock({
   onAssignStaff,
   pxPerHour = PX_PER_HOUR,
   flashBookingId,
+  draggable,
+  onDragStart,
 }: {
   segment: ServiceSegment;
   onClick: () => void;
@@ -893,6 +1047,12 @@ function SegmentBlock({
       booking's status-badge bg color and scrolls into view (deep-link from
       Cashier "Xem lịch hẹn"). */
   flashBookingId?: string | null;
+  /** When true, the block is HTML5-draggable (drag-to-move a confirmed booking
+   *  to a new time/staff slot). */
+  draggable?: boolean;
+  /** Drag-start handler — the parent stores the booking info in a ref so the
+   *  drop target can compute the new time/staff. */
+  onDragStart?: (e: React.DragEvent) => void;
 }) {
   const booking = segment.booking;
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
@@ -1068,6 +1228,8 @@ function SegmentBlock({
         ref={isFlashing ? flashRef : undefined}
         role="button"
         tabIndex={0}
+        draggable={draggable}
+        onDragStart={onDragStart}
         onClick={onClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -1075,7 +1237,7 @@ function SegmentBlock({
             onClick();
           }
         }}
-        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg}`}
+        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg} ${draggable ? "active:cursor-grabbing" : ""}`}
       >
         {/* Time range for THIS service's slice + date + multi-service badge */}
         <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
@@ -1478,12 +1640,17 @@ function DayRangeGrid({
   const handleCellClick = (day: Date, hour: number, e: React.MouseEvent<HTMLDivElement>) => {
     if (!onSlotClick || slotLocked) return;
     if (e.target !== e.currentTarget) return; // only empty area
+    // Snap to 30-min slot based on click Y within the cell: top half → :00,
+    // bottom half → :30. Matches the single-day timeline's 30-min snapping.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = (e.clientY - rect.top) / rect.height;
+    const minute = ratio < 0.5 ? 0 : 30;
     const dd = String(day.getDate()).padStart(2, "0");
     const mo = String(day.getMonth() + 1).padStart(2, "0");
     const yyyy = day.getFullYear();
     onSlotClick({
       date: `${dd}/${mo}/${yyyy}`,
-      time: `${String(hour).padStart(2, "0")}:00`,
+      time: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
       staffId: null,
     });
   };
@@ -1551,9 +1718,11 @@ function DayRangeGrid({
                   minHeight: `${DAYGRID_ROW_HEIGHT}px`,
                 }}
               >
-                {/* Time label */}
-                <div className="border-r bg-gray-50/60 px-2 py-1 text-[11px] text-gray-500">
-                  {String(hour).padStart(2, "0")}:00
+                {/* Time label — HH:00 (top) + HH:30 (bottom), same size +
+                    black color so every 30-min slot reads identically. */}
+                <div className="relative flex flex-col justify-between border-r bg-gray-50/60 px-2 py-1">
+                  <div className="text-sm font-medium text-gray-900">{String(hour).padStart(2, "0")}:00</div>
+                  <div className="text-sm font-medium text-gray-900">{String(hour).padStart(2, "0")}:30</div>
                 </div>
                 {/* Day cells */}
                 {days.map((day, dayIdx) => {

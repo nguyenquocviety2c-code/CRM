@@ -39,6 +39,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 interface BookingCustomerViewProps {
   bookings: Booking[];
@@ -109,6 +116,8 @@ export function BookingCustomerView({
   // Tracks which booking's reminder is currently being PATCHed (set → reset)
   // so we can disable the control and prevent double-clicks while in flight.
   const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
+  // Note dialog — when non-null, a Dialog showing the booking's user note is open.
+  const [noteDialogText, setNoteDialogText] = useState<string | null>(null);
 
   // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") -------------
   // Map a booking's status → its status-badge bg color as a CSS color string.
@@ -405,53 +414,95 @@ export function BookingCustomerView({
                       return (
                         <>
                           {userNote && (
-                            <div className="text-xs text-gray-500">Ghi chú: {userNote}</div>
+                            <button
+                              type="button"
+                              onClick={() => setNoteDialogText(userNote)}
+                              className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              Xem ghi chú
+                            </button>
                           )}
                           {serviceDisplay.length === 0 ? (
                             <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
                           ) : (
                             (() => {
-                              const parsed = parseMultiCustomerNote(booking.note);
-                              const isMulti = !!(parsed && parsed.slots.length > 0);
-                              const entries = serviceDisplay
+                              const parsed2 = parseMultiCustomerNote(booking.note);
+                              const isMulti = !!(parsed2 && parsed2.slots.length > 0);
+                              const slotCustomers = getAllSlotCustomers(booking.note);
+                              const rawEntries = serviceDisplay
                                 .map((s) => ({ category: s.categoryName, staff: s.staffName }))
                                 .filter((e) => e.category || e.staff);
-                              if (entries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
-                              return entries.map((e, idx) => (
-                                <div key={idx} className="space-y-0.5">
-                                  {/* Service name: black (text-gray-900). Staff name:
-                                      yellow (text-yellow-600). For multi-customer
-                                      bookings, number each service to match the
-                                      numbered customers in the customer column. */}
-                                  {e.category && (
-                                    <div className="text-xs font-medium text-gray-900">
-                                      {isMulti ? `${idx + 1}. ` : ""}{e.category}
-                                    </div>
-                                  )}
-                                  {e.staff ? (
-                                    <div className="text-xs text-yellow-600">NV: {e.staff}</div>
-                                  ) : (
-                                    /* When no staff is assigned to this service,
-                                       show a blue "Xếp nhân viên" link so the
-                                       cashier/staff can click it to open the
-                                       booking edit dialog and pick a staff. The
-                                       booking was created with a null staff_id
-                                       (cashier allowed optional staff) and shows
-                                       in the "Chưa xếp nhân viên" column in View
-                                       nhân viên; here in View khách hàng the
-                                       clickable link lets them assign a staff
-                                       directly from the customer list. */
-                                    <button
-                                      type="button"
-                                      onClick={() => (onAssignStaff || onEdit)(booking)}
-                                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
-                                      title="Xếp nhân viên cho dịch vụ này"
-                                    >
-                                      Xếp nhân viên
-                                    </button>
-                                  )}
-                                </div>
-                              ));
+                              if (rawEntries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
+
+                              // For multi-customer bookings, reorder services so
+                              // that all services belonging to the same customer
+                              // are grouped together (1a, 1b, 2, 3a, 3b, 3c...).
+                              // The API returns main services first (in customer
+                              // order), then extras. We map each service to its
+                              // customer, then sort by customer index.
+                              const slotCount = slotCustomers ? slotCustomers.length : 0;
+                              const staffToCustomer: Record<string, number> = {};
+                              rawEntries.slice(0, slotCount).forEach((e, i) => {
+                                if (e.staff) staffToCustomer[e.staff] = i;
+                              });
+                              const entries = isMulti
+                                ? rawEntries.map((e, idx) => {
+                                    let slotIdx: number;
+                                    if (idx < slotCount) slotIdx = idx;
+                                    else slotIdx = e.staff && staffToCustomer[e.staff] !== undefined ? staffToCustomer[e.staff] : 0;
+                                    return { ...e, _slotIdx: slotIdx, _origIdx: idx };
+                                  }).sort((a, b) => {
+                                    // Sort by customer index, then by original order
+                                    // within the same customer (preserves main-before-extra).
+                                    if (a._slotIdx !== b._slotIdx) return a._slotIdx - b._slotIdx;
+                                    return a._origIdx - b._origIdx;
+                                  })
+                                : rawEntries;
+                              // Number services: customer #1 with 2 services → 1a, 1b;
+                              // customer #2 with 1 service → 2 (no letter for single).
+                              // Uses the _slotIdx already computed during reordering.
+                              const customerServiceCount: Record<number, number> = {};
+                              // Count total services per customer (from the sorted entries).
+                              entries.forEach((e) => {
+                                const si = isMulti ? (e as { _slotIdx: number })._slotIdx : 0;
+                                customerServiceCount[si] = (customerServiceCount[si] || 0) + 1;
+                              });
+                              const customerLetterIdx: Record<number, number> = {};
+                              return entries.map((e, idx) => {
+                                let prefix = "";
+                                if (isMulti && slotCustomers) {
+                                  const slotIdx = (e as { _slotIdx: number })._slotIdx;
+                                  const total = customerServiceCount[slotIdx] || 1;
+                                  if (total <= 1) {
+                                    prefix = `${slotIdx + 1}. `;
+                                  } else {
+                                    customerLetterIdx[slotIdx] = (customerLetterIdx[slotIdx] || 0) + 1;
+                                    const letter = String.fromCharCode(96 + customerLetterIdx[slotIdx]);
+                                    prefix = `${slotIdx + 1}${letter}. `;
+                                  }
+                                }
+                                return (
+                                  <div key={idx} className="space-y-0.5">
+                                    {e.category && (
+                                      <div className="text-xs font-medium text-gray-900">
+                                        {prefix}{e.category}
+                                      </div>
+                                    )}
+                                    {e.staff ? (
+                                      <div className="text-xs text-yellow-600">NV: {e.staff}</div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => (onAssignStaff || onEdit)(booking)}
+                                        className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                                        title="Xếp nhân viên cho dịch vụ này"
+                                      >
+                                        Xếp nhân viên
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              });
                             })()
                           )}
                         </>
@@ -752,6 +803,19 @@ export function BookingCustomerView({
           />
         )
       )}
+
+      {/* Note dialog — shows the booking's user note in a popup. */}
+      <Dialog open={noteDialogText !== null} onOpenChange={(v) => { if (!v) setNoteDialogText(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ghi chú</DialogTitle>
+          </DialogHeader>
+          <p className="whitespace-pre-line text-sm text-gray-700">{noteDialogText}</p>
+          <DialogFooter>
+            <Button type="button" onClick={() => setNoteDialogText(null)}>Đóng</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );
