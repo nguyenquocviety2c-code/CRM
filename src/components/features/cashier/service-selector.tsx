@@ -207,12 +207,8 @@ export function ServiceSelector() {
   // type at add time via `handleAddItem`).
   const [simpleStaffDialogItem, setSimpleStaffDialogItem] = useState<ServiceItem | null>(null);
   const [simpleStaffPickStaffId, setSimpleStaffPickStaffId] = useState<string>("");
-  // Date/time stamped when the dialog opens (= the moment the cashier clicked
-  // "Thêm sản phẩm" / "Thêm gói dịch vụ"). Read-only in the UI; passed to
-  // `handleAddItem` on confirm so each product/package line item carries the
-  // timestamp of when it was added.
-  const [simpleStaffDialogDate, setSimpleStaffDialogDate] = useState<string>("");
-  const [simpleStaffDialogTime, setSimpleStaffDialogTime] = useState<string>("");
+  // Quantity selector for the product/package dialog (default 1).
+  const [simpleStaffDialogQty, setSimpleStaffDialogQty] = useState<number>(1);
 
   // Fetch services from Supabase
   const { data: servicesData, isLoading: servicesLoading } = useQuery({
@@ -524,18 +520,19 @@ export function ServiceSelector() {
 
   const handleAddItem = (
     item: ServiceItem,
-    opts?: { staffName?: string; date?: string; time?: string }
+    opts?: { staffName?: string; date?: string; time?: string; quantity?: number }
   ) => {
     if (!activeTabId) return;
+    const qty = opts?.quantity || 1;
     const invoiceItem: InvoiceItem = {
       id: `${item.id}-${crypto.randomUUID()}`,
       itemId: item.id,
       name: item.name,
       type: activeTab,
       price: Number(item.price),
-      quantity: 1,
+      quantity: qty,
       discount: 0,
-      total: Number(item.price),
+      total: Number(item.price) * qty,
       staffName: opts?.staffName,
       date: opts?.date,
       time: opts?.time,
@@ -625,17 +622,9 @@ export function ServiceSelector() {
   // (products have no staff field). On OK the item is added with the stamped
   // date/time (+ staff name for packages); on Cancel it is NOT added.
   const handleProductOrPackageClick = (item: ServiceItem) => {
-    // Stamp the current date/time — these are read-only in the dialog.
-    const now = new Date();
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const yyyy = now.getFullYear();
-    const hh = String(now.getHours()).padStart(2, "0");
-    const mi = String(now.getMinutes()).padStart(2, "0");
-    setSimpleStaffDialogDate(`${dd}/${mm}/${yyyy}`);
-    setSimpleStaffDialogTime(`${hh}:${mi}`);
     setSimpleStaffDialogItem(item);
     setSimpleStaffPickStaffId("");
+    setSimpleStaffDialogQty(1);
   };
 
   // OK on the shared dialog: add the product/package to the invoice with the
@@ -646,22 +635,18 @@ export function ServiceSelector() {
   // staff (the Select is hidden and OK is enabled).
   const handleSimpleStaffDialogConfirm = () => {
     if (!simpleStaffDialogItem) return;
-    // Packages require a staff (when the cashier can assign staff). Products
-    // never require a staff.
     const isPackage = activeTab === "package";
     const staff = isPackage
       ? allStaff.find((s) => s.id === simpleStaffPickStaffId)
       : null;
-    if (isPackage && canAssignStaff && !staff) return; // safety — OK disabled
+    if (isPackage && canAssignStaff && !staff) return;
     handleAddItem(simpleStaffDialogItem, {
       staffName: staff?.name,
-      date: simpleStaffDialogDate,
-      time: simpleStaffDialogTime,
+      quantity: simpleStaffDialogQty,
     });
     setSimpleStaffDialogItem(null);
     setSimpleStaffPickStaffId("");
-    setSimpleStaffDialogDate("");
-    setSimpleStaffDialogTime("");
+    setSimpleStaffDialogQty(1);
   };
 
   // OK on the service dialog: ALWAYS adds the service to the invoice. A booking
@@ -1659,8 +1644,7 @@ export function ServiceSelector() {
           if (!v) {
             setSimpleStaffDialogItem(null);
             setSimpleStaffPickStaffId("");
-            setSimpleStaffDialogDate("");
-            setSimpleStaffDialogTime("");
+            setSimpleStaffDialogQty(1);
           }
         }}
       >
@@ -1681,8 +1665,27 @@ export function ServiceSelector() {
                 </span>
               </div>
             )}
-            {/* Date/time fields REMOVED — walk-in cashier orders no longer
-                create a booking in Lịch hẹn (no time slot needed). */}
+            {/* Date/time fields REMOVED. Quantity selector added. */}
+            <div className="flex items-center gap-2">
+              <Label className="text-[11px] text-gray-600 shrink-0">Số lượng</Label>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSimpleStaffDialogQty((q) => Math.max(1, q - 1))}
+                  className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  −
+                </button>
+                <span className="w-8 text-center text-sm font-medium">{simpleStaffDialogQty}</span>
+                <button
+                  type="button"
+                  onClick={() => setSimpleStaffDialogQty((q) => Math.min(99, q + 1))}
+                  className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  +
+                </button>
+              </div>
+            </div>
             {/* Staff Select — ONLY for packages (when canAssignStaff). Products
                 have NO staff field. For packages, the cashier MUST pick a
                 staff before OK is enabled. h-8 + text-xs matches the date/time

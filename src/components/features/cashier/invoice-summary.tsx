@@ -229,13 +229,16 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
   // The active tab's booking status (if the tab was opened from a booking).
   // null when the tab is a manual customer (no booking) — those are treated
   // as editable+not-paid (no status restriction).
-  const activeBooking = (dayBookings || []).find((b) => b.id === activeTabId) || null;
+  // Also look up by meta.bookingId (walk-in tabs auto-linked to a booking).
+  const activeTabMetaForInvoice = activeTabId ? tabMeta[activeTabId] : undefined;
+  const activeBooking = (dayBookings || []).find(
+    (b) => b.id === activeTabId || b.id === activeTabMetaForInvoice?.bookingId
+  ) || null;
   const bookingStatus = activeBooking?.status || null;
   // The active tab's standalone-invoice status (if the tab was opened from a
   // product-only invoice, OR a draft tab that was just paid/cancelled and
   // linked to a standalone invoice via meta.invoiceId). A standalone invoice's
   // status is "completed" (paid) or "cancelled".
-  const activeTabMetaForInvoice = activeTabId ? tabMeta[activeTabId] : undefined;
   const activeStandaloneInvoice = (dayStandaloneInvoices || []).find(
     (inv) =>
       inv.id === activeTabId ||
