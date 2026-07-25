@@ -337,46 +337,67 @@ export function BookingCustomerView({
                   {/* Multi-customer "Cùng lịch" booking: list every slot's
                       customer — those with info → name (line 1) + phone (line 2);
                       empty slots → "Khách vãng lai". Single-customer / "Khác
-                      lịch" bookings show the booking's one customer as before. */}
+                      lịch" bookings show the booking's one customer as before.
+                      Per-customer status colors: confirmed → blue, checkin →
+                      green, checkout → black/white, cancelled → red, no_show →
+                      gray. Applied to both customer name + phone text. */}
                   {(() => {
                     const slotCustomers = getAllSlotCustomers(booking.note);
+                    const parsed = parseMultiCustomerNote(booking.note);
+                    const slotStatuses = parsed?.slotStatuses;
+                    // Helper: resolve the effective status for a customer slot.
+                    const getSlotStatus = (idx: number): string => {
+                      if (slotStatuses && idx < slotStatuses.length) return slotStatuses[idx];
+                      return booking.status;
+                    };
+                    // Color classes per status — applied to customer name + phone.
+                    const statusColorClass = (st: string): { name: string; phone: string } => {
+                      switch (st) {
+                        case "confirmed": return { name: "text-blue-700", phone: "text-blue-500" };
+                        case "checkin": return { name: "text-green-700", phone: "text-green-600" };
+                        case "checkout": return { name: "text-gray-900", phone: "text-gray-500" };
+                        case "cancelled": return { name: "text-red-600", phone: "text-red-400" };
+                        case "no_show": return { name: "text-gray-400", phone: "text-gray-300" };
+                        default: return { name: "text-gray-900", phone: "text-gray-500" };
+                      }
+                    };
                     if (slotCustomers && slotCustomers.length > 0) {
                       return (
                         <div className="space-y-0.5">
-                          {slotCustomers.map((sc, i) => (
-                            <div key={i} className="space-y-0.5">
-                              {/* Numbered customer label: "1. Hoàng Vũ" / "2. Khách vãng lai".
-                                  Uses the same text size as single-customer bookings
-                                  (font-medium, default table text-xs) so the column
-                                  reads consistently. Named customers are green
-                                  clickable links to the history dialog; walk-in
-                                  customers are plain text. */}
-                              {sc.walkin || !sc.id ? (
-                                <div className="font-medium text-gray-900">
-                                  {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    router.push(`/customers/${sc.id}`)
-                                  }
-                                  className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
-                                  title="Xem lịch sử khách hàng"
-                                >
-                                  {i + 1}. {sc.name || "Khách"}
-                                </button>
-                              )}
-                              {!sc.walkin && (
-                                <div className="text-xs text-gray-500">
-                                  {canViewCustomerPhone ? (sc.phone || "—") : maskPhone(sc.phone)}
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                          {slotCustomers.map((sc, i) => {
+                            const st = getSlotStatus(i);
+                            const colors = statusColorClass(st);
+                            return (
+                              <div key={i} className="space-y-0.5">
+                                {sc.walkin || !sc.id ? (
+                                  <div className={`font-medium ${colors.name}`}>
+                                    {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      router.push(`/customers/${sc.id}`)
+                                    }
+                                    className={`font-medium hover:underline cursor-pointer text-left ${colors.name}`}
+                                    title="Xem lịch sử khách hàng"
+                                  >
+                                    {i + 1}. {sc.name || "Khách"}
+                                  </button>
+                                )}
+                                {!sc.walkin && (
+                                  <div className={`text-xs ${colors.phone}`}>
+                                    {canViewCustomerPhone ? (sc.phone || "—") : maskPhone(sc.phone)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       );
                     }
+                    // Single-customer: use booking.status color.
+                    const colors = statusColorClass(booking.status);
                     return (
                       <div className="space-y-0.5">
                         {booking.customer?.id ? (
@@ -385,15 +406,15 @@ export function BookingCustomerView({
                             onClick={() =>
                               router.push(`/customers/${booking.customer!.id}`)
                             }
-                            className="font-medium text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer text-left"
+                            className={`font-medium hover:underline cursor-pointer text-left ${colors.name}`}
                             title="Xem lịch sử khách hàng"
                           >
                             {booking.customer?.name || "—"}
                           </button>
                         ) : (
-                          <div className="font-medium text-gray-900">{booking.customer?.name || "—"}</div>
+                          <div className={`font-medium ${colors.name}`}>{booking.customer?.name || "—"}</div>
                         )}
-                        <div className="text-xs text-gray-500">{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
+                        <div className={`text-xs ${colors.phone}`}>{canViewCustomerPhone ? (booking.customer?.phone || "—") : maskPhone(booking.customer?.phone)}</div>
                       </div>
                     );
                   })()}
@@ -429,6 +450,7 @@ export function BookingCustomerView({
                               const parsed2 = parseMultiCustomerNote(booking.note);
                               const isMulti = !!(parsed2 && parsed2.slots.length > 0);
                               const slotCustomers = getAllSlotCustomers(booking.note);
+                              const slotStatuses2 = parsed2?.slotStatuses;
                               const rawEntries = serviceDisplay
                                 .map((s) => ({ category: s.categoryName, staff: s.staffName }))
                                 .filter((e) => e.category || e.staff);
@@ -478,8 +500,20 @@ export function BookingCustomerView({
                                 customerServiceCount[si] = (customerServiceCount[si] || 0) + 1;
                               });
                               const customerLetterIdx: Record<number, number> = {};
+                              // Color classes per status (same as customer column).
+                              const svcColorClass = (st: string): string => {
+                                switch (st) {
+                                  case "confirmed": return "text-blue-700";
+                                  case "checkin": return "text-green-700";
+                                  case "checkout": return "text-gray-900";
+                                  case "cancelled": return "text-red-600";
+                                  case "no_show": return "text-gray-400";
+                                  default: return "text-gray-900";
+                                }
+                              };
                               return entries.map((e, idx) => {
                                 let prefix = "";
+                                let svcColor = "text-gray-900";
                                 if (isMulti && slotCustomers) {
                                   const slotIdx = (e as { _slotIdx: number })._slotIdx;
                                   const total = customerServiceCount[slotIdx] || 1;
@@ -490,11 +524,18 @@ export function BookingCustomerView({
                                     const letter = String.fromCharCode(96 + customerLetterIdx[slotIdx]);
                                     prefix = `${slotIdx + 1}${letter}. `;
                                   }
+                                  // Resolve this customer's effective status.
+                                  const slotSt = slotStatuses2 && slotIdx < slotStatuses2.length
+                                    ? slotStatuses2[slotIdx]
+                                    : booking.status;
+                                  svcColor = svcColorClass(slotSt);
+                                } else {
+                                  svcColor = svcColorClass(booking.status);
                                 }
                                 return (
                                   <div key={idx} className="space-y-0.5">
                                     {e.category && (
-                                      <div className="text-xs font-medium text-gray-900">
+                                      <div className={`text-xs font-medium ${svcColor}`}>
                                         {prefix}{e.category}
                                       </div>
                                     )}
