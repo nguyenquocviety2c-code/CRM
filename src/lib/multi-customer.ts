@@ -49,6 +49,14 @@ export interface MultiCustomerNote {
    * (service i → slot i) + staff-name heuristic for extras.
    */
   serviceSlots?: number[];
+  /**
+   * Optional: per-customer-slot status. `slotStatuses[i]` = the booking status
+   * string for customer slot `i` (e.g. "confirmed", "checkin", "cancelled",
+   * "no_show"). When absent, all slots share the booking's main `status`.
+   * This enables per-customer status changes in View nhân viên while keeping
+   * the booking-level status as the "default" for un-changed slots.
+   */
+  slotStatuses?: string[];
 }
 
 /**
@@ -84,6 +92,9 @@ export function parseMultiCustomerNote(
         serviceSlots: Array.isArray(json.serviceSlots)
           ? (json.serviceSlots as number[])
           : undefined,
+        slotStatuses: Array.isArray(json.slotStatuses)
+          ? (json.slotStatuses as string[])
+          : undefined,
       };
     }
   } catch {
@@ -99,11 +110,15 @@ export function parseMultiCustomerNote(
 export function buildMultiCustomerNote(
   slots: SlotCustomer[],
   userNote: string,
-  serviceSlots?: number[]
+  serviceSlots?: number[],
+  slotStatuses?: string[]
 ): string {
   const payload: Record<string, unknown> = { slots, userNote: userNote.trim() };
   if (serviceSlots && serviceSlots.length > 0) {
     payload.serviceSlots = serviceSlots;
+  }
+  if (slotStatuses && slotStatuses.length > 0) {
+    payload.slotStatuses = slotStatuses;
   }
   return MULTI_MARKER + JSON.stringify(payload);
 }

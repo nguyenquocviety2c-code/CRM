@@ -697,21 +697,51 @@ export function BookingCustomerView({
                 {visibleColumns.status && (
                 <td className="border-r border-gray-300 px-3 py-1">
                   <div className="space-y-0.5">
-                    <div>
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(booking.status)}`}>
-                        {BookingStatusLabel[booking.status]}
-                      </span>
-                    </div>
                     {(() => {
-                      // Status change Select — ALWAYS visible with ALL 4 manual
-                      // options (Xác nhận, Checkin, Không đến, Hủy), regardless of
-                      // the booking's current status. This lets the user recover
-                      // from mistakes (e.g. accidentally checkin/checkout/cancel)
-                      // by reverting to any status. checkout is NOT a manual
-                      // option (it auto-happens via payment). The current status
-                      // is excluded so the Select doesn't offer a no-op.
-                      // NOTE: reverting to confirmed/cancelled auto-deletes the
-                      // linked invoice (handled in the bookings PATCH route).
+                      // For multi-customer "Cùng lịch" bookings with per-slot
+                      // statuses, show a COMPOSITE badge listing which customers
+                      // have which status. E.g. "Đã checkin: Khách 2, 3" when
+                      // customers 2+3 are checked in but others aren't.
+                      // When all slots share the same status (or no slotStatuses),
+                      // show the booking's main status badge as before.
+                      const parsed = parseMultiCustomerNote(booking.note);
+                      const slotStatuses = parsed?.slotStatuses;
+                      if (parsed && slotStatuses && slotStatuses.length > 0) {
+                        // Group customers by status.
+                        const statusGroups: Record<string, number[]> = {};
+                        slotStatuses.forEach((st, i) => {
+                          if (!statusGroups[st]) statusGroups[st] = [];
+                          statusGroups[st].push(i + 1); // 1-indexed customer number
+                        });
+                        return (
+                          <div className="space-y-0.5">
+                            {Object.entries(statusGroups).map(([st, customers]) => {
+                              const statusKey = st as BookingStatusType;
+                              const colors = BookingStatusBadgeColors[statusKey] || { bg: "bg-gray-100", text: "text-gray-500" };
+                              const label = BookingStatusLabel[statusKey] || st;
+                              return (
+                                <div key={st} className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colors.bg} ${colors.text}`}>
+                                  {label}: Khách {customers.join(", ")}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+                      // Single status badge (all slots same or non-multi).
+                      return (
+                        <div>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(booking.status)}`}>
+                            {BookingStatusLabel[booking.status]}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      // Status change Select — for multi-customer bookings,
+                      // changing status here sets ALL slots to the same status
+                      // (via the normal booking PATCH). For per-customer status
+                      // changes, the user goes to View nhân viên.
                       const ALL_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
                       const nextStatuses = ALL_OPTIONS.filter((st) => st !== booking.status);
                       return (

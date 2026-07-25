@@ -12,7 +12,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamTime, toVietnamDay } from "@/lib/utils";
-import { getAllSlotCustomers } from "@/lib/multi-customer";
+import { getAllSlotCustomers, parseMultiCustomerNote } from "@/lib/multi-customer";
 import {
   Select,
   SelectContent,
@@ -91,6 +91,12 @@ interface BookingStaffViewProps {
     durationMin: number,
     originalBooking: Booking
   ) => void;
+  /**
+   * Called when the user changes a single customer's status in a multi-customer
+   * "Cùng lịch" booking (per-customer status). The parent PATCHes the slot-status
+   * API. When absent or for non-multi bookings, the normal onStatusChange is used.
+   */
+  onSlotStatusChange?: (bookingId: string, slotIndex: number, status: BookingStatusType) => void;
 }
 
 interface StaffColumn {
@@ -176,6 +182,7 @@ export function BookingStaffView({
   flashBookingId,
   onSelectDay,
   onMoveBooking,
+  onSlotStatusChange,
 }: BookingStaffViewProps) {
   const { hasPermission } = useAuthStore();
   const canViewCustomerPhone = hasPermission("view_customer_phone");
@@ -973,7 +980,23 @@ export function BookingStaffView({
                           onBookingClick(seg.booking);
                         }
                       }}
-                      onStatusChange={(status) => onStatusChange?.(seg.booking.id, status)}
+                      onStatusChange={(status) => {
+                        // For multi-customer "Cùng lịch" bookings, change the
+                        // status of ONLY this customer's slot (not the whole
+                        // booking). The slotIndex is derived from the segment's
+                        // service position via serviceSlots in the note.
+                        const parsed = parseMultiCustomerNote(seg.booking.note);
+                        if (parsed && parsed.slots.length > 0 && onSlotStatusChange) {
+                          // Find the slot index for this segment.
+                          const svcSlots = parsed.serviceSlots;
+                          const slotIdx = svcSlots && seg.segmentIndex < svcSlots.length
+                            ? svcSlots[seg.segmentIndex]
+                            : seg.segmentIndex;
+                          onSlotStatusChange(seg.booking.id, slotIdx, status);
+                        } else {
+                          onStatusChange?.(seg.booking.id, status);
+                        }
+                      }}
                       onEdit={() => onEdit?.(seg.booking)}
                       onDelete={() => onDelete?.(seg.booking.id)}
                       onAssignStaff={() => onAssignStaff?.(seg.booking)}

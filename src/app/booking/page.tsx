@@ -532,6 +532,41 @@ function BookingPageContent() {
     }
   };
 
+  /**
+   * Per-customer slot status change (View nhân viên only, multi-customer
+   * "Cùng lịch" bookings). PATCHes the slot-status API which stores the
+   * per-customer status in the [[MULTI]] note's `slotStatuses` array.
+   */
+  const handleSlotStatusChange = async (
+    bookingId: string,
+    slotIndex: number,
+    status: BookingStatusType
+  ) => {
+    try {
+      const res = await fetch("/api/supabase/bookings/slot-status", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookingId,
+          slotIndex,
+          status,
+          actor_staff_id: useAuthStore.getState().user?.id,
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "Failed");
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+      toast({ title: `Đã đổi trạng thái khách #${slotIndex + 1}` });
+    } catch (e) {
+      toast({
+        title: "Lỗi",
+        description: e instanceof Error ? e.message : "Đổi trạng thái thất bại",
+        variant: "destructive",
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+    }
+  };
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -677,6 +712,7 @@ function BookingPageContent() {
             setDateRange({ from, to });
           }}
           onMoveBooking={handleMoveBooking}
+          onSlotStatusChange={handleSlotStatusChange}
         />
       )}
 
