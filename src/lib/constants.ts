@@ -106,7 +106,7 @@ export const BookingStatusBadgeColors: Record<BookingStatusType, { bg: string; t
   new: { bg: "bg-blue-100", text: "text-blue-700" },
   confirmed: { bg: "bg-blue-100", text: "text-blue-700" },
   checkin: { bg: "bg-green-100", text: "text-green-700" },
-  checkout: { bg: "bg-emerald-100", text: "text-emerald-700" },
+  checkout: { bg: "bg-yellow-100", text: "text-yellow-700" },
   no_show: { bg: "bg-red-100", text: "text-red-700" },
   cancelled: { bg: "bg-gray-100", text: "text-gray-500" },
 };

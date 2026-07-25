@@ -598,9 +598,9 @@ function SegmentCard({
   let cardBg: string;
   let timeText: string;
   if (isPaid) {
-    // Completed payment (đã Hoàn tất) → TRẮNG (white background, neutral border).
-    cardBg = "bg-white border-gray-300";
-    timeText = "text-gray-700";
+    // Completed payment (đã Hoàn tất) → VÀNG (yellow background).
+    cardBg = "bg-yellow-50 border-yellow-300";
+    timeText = "text-yellow-800";
   } else if (isCancelled) {
     cardBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
@@ -1328,8 +1328,8 @@ function CustomerGridChip({
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
-    chipBg = "bg-white border-gray-300";
-    timeText = "text-gray-700";
+    chipBg = "bg-yellow-50 border-yellow-300";
+    timeText = "text-yellow-800";
   } else if (isCancelled) {
     chipBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";

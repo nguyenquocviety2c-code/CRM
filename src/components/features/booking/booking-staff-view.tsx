@@ -160,7 +160,7 @@ function flashColorForStatus(status: BookingStatusType | string | undefined): st
     case "new": return "#dbeafe"; // bg-blue-100
     case "confirmed": return "#dbeafe"; // bg-blue-100
     case "checkin": return "#dcfce7"; // bg-green-100
-    case "checkout": return "#d1fae5"; // bg-emerald-100
+    case "checkout": return "#fef9c3"; // bg-yellow-100
     case "no_show": return "#fee2e2"; // bg-red-100
     case "cancelled": return "#f3f4f6"; // bg-gray-100
     default: return "#dbeafe";
@@ -1204,8 +1204,8 @@ function SegmentBlock({
   let blockBg: string;
   let timeText: string;
   if (isPaid) {
-    blockBg = "bg-white border-gray-300";
-    timeText = "text-gray-700";
+    blockBg = "bg-yellow-50 border-yellow-300";
+    timeText = "text-yellow-800";
   } else if (isCancelled) {
     blockBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
@@ -1892,8 +1892,8 @@ function BookingChip({
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
-    chipBg = "bg-white border-gray-300";
-    timeText = "text-gray-700";
+    chipBg = "bg-yellow-50 border-yellow-300";
+    timeText = "text-yellow-800";
   } else if (isCancelled) {
     chipBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
