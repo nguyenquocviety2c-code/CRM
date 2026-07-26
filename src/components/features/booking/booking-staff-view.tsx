@@ -54,7 +54,7 @@ interface BookingStaffViewProps {
    * (confirmed / new / checkin / cancelled / no_show) fall back to the
    * regular onBookingClick (edit dialog).
    */
-  onShowInvoice?: (booking: Booking) => void;
+  onShowInvoice?: (booking: Booking, slotIndex?: number) => void;
   /**
    * Called when the user clicks an EMPTY area of a staff column's timeline
    * (not on an existing booking block). Opens the "Create new booking" dialog
@@ -978,6 +978,38 @@ export function BookingStaffView({
                         const status = seg.booking.status;
                         const isPaid = status === "checkout";
                         const isCheckin = status === "checkin";
+                        // For multi-customer bookings, check the PER-CUSTOMER
+                        // slot status. When this segment's slot is "checkin"
+                        // AND the booking has a paid invoice (another slot is
+                        // "checkout"), open the invoice in PER-CUSTOMER mode
+                        // (pass slotIndex) so the user sees only this
+                        // customer's services + can pay for them individually.
+                        const parsed = parseMultiCustomerNote(seg.booking.note);
+                        if (parsed && parsed.slots.length > 0) {
+                          const svcSlots = parsed.serviceSlots;
+                          const slotIdx = svcSlots && seg.segmentIndex < svcSlots.length
+                            ? svcSlots[seg.segmentIndex]
+                            : seg.segmentIndex;
+                          const slotSt = parsed.slotStatuses && slotIdx < parsed.slotStatuses.length
+                            ? parsed.slotStatuses[slotIdx]
+                            : status;
+                          const hasPaidSlot = parsed.slotStatuses &&
+                            parsed.slotStatuses.some((s) => s === "checkout");
+                          if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
+                            onShowInvoice(seg.booking, slotIdx);
+                            return;
+                          }
+                          if (slotSt === "checkin" && onShowInvoice) {
+                            onShowInvoice(seg.booking);
+                            return;
+                          }
+                          if (slotSt === "checkout" && onShowInvoice) {
+                            onShowInvoice(seg.booking);
+                            return;
+                          }
+                          onBookingClick(seg.booking);
+                          return;
+                        }
                         if ((isPaid || isCheckin) && onShowInvoice) {
                           onShowInvoice(seg.booking);
                         } else {
@@ -1431,6 +1463,7 @@ function SegmentBlock({
             canCancelPayment={canCancelPayment}
             onOpenInvoice={onClick}
             onAssignStaff={onAssignStaff}
+            slotIndex={effectiveSlotIdx}
           />
         </div>
       )}
@@ -2087,6 +2120,7 @@ export function BookingHoverDetails({
   canCancelPayment,
   onOpenInvoice,
   onAssignStaff,
+  slotIndex,
 }: {
   booking: Booking;
   canViewCustomerPhone: boolean;
@@ -2101,6 +2135,11 @@ export function BookingHoverDetails({
   /** Open the booking edit dialog to assign a staff. Called by the "Xếp nhân
       viên" button shown in the services list when a service has no staff. */
   onAssignStaff?: () => void;
+  /** When set, the popover knows it's for a specific customer slot in a
+   *  multi-customer booking. Used to determine the "Xem hóa đơn" vs "Đơn hàng"
+   *  label based on the PER-CUSTOMER slot status (not the booking-level
+   *  status). */
+  slotIndex?: number;
 }) {
   // Parse date + time using the timezone-safe Vietnam helpers. Supabase
   // stores date_time normalized to +00:00 (UTC), so the raw "THH:MM" segment
@@ -2243,7 +2282,16 @@ export function BookingHoverDetails({
   //    completed invoice is unusual; the normal flow transitions the booking
   //    to `checkout` when the invoice is paid).
   const isCheckin = booking.status === "checkin";
-  const showInvoiceLabel = isPaid || isCheckin;
+  // When slotIndex is set (per-customer popover), also check the per-customer
+  // slot status — if THIS customer is "checkin" or "checkout", show "Xem hóa
+  // đơn" even when the booking-level status is something else (e.g. the
+  // booking is "checkout" because another customer paid, but this customer is
+  // still "checkin").
+  const slotNote = parseMultiCustomerNote(booking.note);
+  const slotSt = slotIndex !== undefined && slotNote?.slotStatuses && slotIndex < slotNote.slotStatuses.length
+    ? slotNote.slotStatuses[slotIndex]
+    : null;
+  const showInvoiceLabel = isPaid || isCheckin || slotSt === "checkin" || slotSt === "checkout";
   const statusLabel = BookingStatusLabel[booking.status as BookingStatusType] || booking.status;
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 

@@ -75,6 +75,11 @@ function BookingPageContent() {
   // it via the onShowInvoice callback. The list view still owns its own copy
   // for its “Hóa đơn” buttons + pencil icon when no onShowInvoice is passed.
   const [invoiceBooking, setInvoiceBooking] = useState<Booking | null>(null);
+  // When set, the InvoiceDialog opens in PER-CUSTOMER mode — showing only this
+  // customer's services and appending to the existing paid invoice on confirm.
+  // Set alongside `invoiceBooking` when the user opens the invoice from a
+  // checkin slot in a partially-paid multi-customer booking.
+  const [invoiceSlotIndex, setInvoiceSlotIndex] = useState<number | undefined>(undefined);
   // The booking whose services are being assigned a staff via the dedicated
   // "Xếp nhân viên" dialog. Set when the user clicks the "Xếp nhân viên"
   // button on a no-staff segment/popover/link. Null → dialog closed.
@@ -596,6 +601,15 @@ function BookingPageContent() {
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
     }
   };
+
+  // Wrapper for opening the invoice dialog — accepts an optional slotIndex
+  // for per-customer mode (when a checkin customer in a partially-paid
+  // multi-customer booking opens their own invoice).
+  const handleShowInvoice = (booking: Booking, slotIndex?: number) => {
+    setInvoiceBooking(booking);
+    setInvoiceSlotIndex(slotIndex);
+  };
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -723,7 +737,7 @@ function BookingPageContent() {
                 onAssignStaff={setAssignStaffBooking}
                 onDelete={handleDelete}
                 // Time-grid (Khung giờ): open the invoice dialog for checkin/checkout.
-                onShowInvoice={setInvoiceBooking}
+                onShowInvoice={handleShowInvoice}
                 // Click an empty hour row → open "Tạo mới lịch hẹn" with the
                 // slot's hour pre-filled as the start time.
                 onSlotClick={handleSlotClick}
@@ -744,7 +758,7 @@ function BookingPageContent() {
           onAssignStaff={setAssignStaffBooking}
           onDelete={handleDelete}
           // Staff view (View nhân viên): open the invoice dialog for checkin/checkout.
-          onShowInvoice={setInvoiceBooking}
+          onShowInvoice={handleShowInvoice}
           // Click an empty slot in a staff column → open "Tạo mới lịch hẹn"
           // with the slot's time + staff pre-filled.
           onSlotClick={handleSlotClick}
@@ -806,23 +820,33 @@ function BookingPageContent() {
           For PAID bookings, show the full-page PaidInvoiceView; for unpaid,
           show the InvoiceDialog. */}
       {invoiceBooking && (
-        invoiceBooking.status === "checkout" && invoiceBooking.invoice?.id ? (
+        (invoiceBooking.status === "checkout" && invoiceBooking.invoice?.id && invoiceSlotIndex === undefined) ? (
           <PaidInvoiceView
             invoiceId={invoiceBooking.invoice.id}
             customerName={invoiceBooking.customer?.name}
             customerPhone={invoiceBooking.customer?.phone}
             bookingCode={invoiceBooking.code}
-            onClose={() => setInvoiceBooking(null)}
+            onClose={() => { setInvoiceBooking(null); setInvoiceSlotIndex(undefined); }}
           />
         ) : (
           <InvoiceDialog
             booking={invoiceBooking}
-            onClose={() => setInvoiceBooking(null)}
+            slotIndex={invoiceSlotIndex}
+            onClose={() => { setInvoiceBooking(null); setInvoiceSlotIndex(undefined); }}
             onPaid={() => {
-              // Transition to checkout using the shared helper so multi-customer
-              // bookings preserve per-customer slotStatuses (only paid slots
-              // turn yellow; others keep their status color). Falls back to a
-              // direct booking.status PATCH for single-customer bookings.
+              // PER-CUSTOMER MODE: the InvoiceDialog already appended to the
+              // existing invoice + set the slot to checkout. Just refetch.
+              if (invoiceSlotIndex !== undefined) {
+                queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+                queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
+                queryClient.invalidateQueries({ queryKey: ["supabase-invoices"] });
+                queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
+                setInvoiceBooking(null);
+                setInvoiceSlotIndex(undefined);
+                return;
+              }
+              // NORMAL MODE: transition to checkout using the shared helper so
+              // multi-customer bookings preserve per-customer slotStatuses.
               transitionBookingToCheckout(
                 invoiceBooking,
                 useAuthStore.getState().user?.id
@@ -834,6 +858,7 @@ function BookingPageContent() {
                 queryClient.invalidateQueries({ queryKey: ["invoice-activities"] });
               });
               setInvoiceBooking(null);
+              setInvoiceSlotIndex(undefined);
             }}
           />
         )

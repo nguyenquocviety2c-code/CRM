@@ -93,23 +93,15 @@ export async function PATCH(request: NextRequest) {
     // from the existing paid invoice).
     const oldSlotStatus = slotStatuses[slotIndex] || (booking.status as string);
 
-    // === AUTO-PROMOTION logic ===
-    // When the user requests "checkin" for a slot AND at least one OTHER slot
-    // is already at "checkout", promote this slot to "checkout" directly. The
-    // customer's services will be appended to the existing paid invoice below.
-    // This mirrors the flow where the first customer pays: the cashier checked
-    // them out, and now a second customer arrives — instead of going through
-    // checkin → invoice dialog → pay, the cashier just picks "checkin" and the
-    // slot auto-transitions to "checkout" (services added to the same invoice).
-    let effectiveStatus = requestedStatus;
-    let autoPromoted = false;
-    if (requestedStatus === "checkin") {
-      const otherSlotsCheckout = slotStatuses.some((s, i) => i !== slotIndex && s === "checkout");
-      if (otherSlotsCheckout) {
-        effectiveStatus = "checkout";
-        autoPromoted = true;
-      }
-    }
+    // The effective status is exactly what the user requested. Auto-promotion
+    // (checkin → checkout when another slot is checkout) was REMOVED per user
+    // request: the user wants to open a per-customer invoice dialog, add
+    // services/products, and manually pay — only then does the slot transition
+    // to "checkout". The slot-status API just records the checkin; the invoice
+    // dialog's "Hoàn tất" handler calls this API again with status="checkout"
+    // AFTER appending services to the existing paid invoice.
+    const effectiveStatus = requestedStatus;
+    const autoPromoted = false;
 
     // Update the slotStatuses array with the effective status.
     slotStatuses[slotIndex] = effectiveStatus;

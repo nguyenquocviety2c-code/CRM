@@ -31,6 +31,13 @@ export interface InvoiceDialogProps {
   booking: Booking;
   onClose: () => void;
   onPaid: () => void;
+  /** When set, the dialog opens in PER-CUSTOMER mode for a multi-customer
+   *  "Cùng lịch" booking that already has a paid invoice. Only THIS customer's
+   *  services are shown; the dialog is editable even when booking.status ===
+   *  "checkout". On "Hoàn tất", the customer's services + products are
+   *  APPENDED to the existing paid invoice (not a new invoice), and the slot's
+   *  status is set to "checkout" via the slot-status API. */
+  slotIndex?: number;
 }
 
 export interface ExistingInvoice {
@@ -46,29 +53,12 @@ export interface ExistingInvoice {
   photos?: string[];
 }
 
-
-interface InvoiceDialogProps {
-  booking: Booking;
-  onClose: () => void;
-  onPaid: () => void;
-}
-
-interface ExistingInvoice {
-  id: string;
-  code: string | null;
-  status: string;
-  items: Array<{ name?: string; price?: number; staffName?: string }>;
-  tip: number;
-  promotion: AppliedPromotion | null;
-  payment_method: string;
-  final_amount: number;
-  created_at: string;
-  photos?: string[];
-}
-
-export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) {
+export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDialogProps) {
   // A booking with status "checkout" is considered already paid -> read-only view.
-  const isCheckout = booking.status === "checkout";
+  // EXCEPTION: when `slotIndex` is set (per-customer mode), the dialog is
+  // editable even if the booking is "checkout" — the user is paying for ONE
+  // more customer in an already-partially-paid multi-customer booking.
+  const isCheckout = booking.status === "checkout" && slotIndex === undefined;
 
   // "Xác nhận đơn hàng và hóa đơn cũ" permission: allows confirming payment on
   // unpaid invoices for bookings whose date has already passed. Without this
@@ -348,12 +338,20 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   });
   // Filter: only show services whose customer is checked in (or checkout/paid).
   // When no slotStatuses (non-multi or legacy), show all services.
-  const serviceRows = slotStatuses && slotStatuses.length > 0
-    ? allServiceRows.filter((s) => {
-        const st = slotStatuses[s._slotIdx] || "confirmed";
-        return st === "checkin" || st === "checkout";
-      })
-    : allServiceRows;
+  // PER-CUSTOMER MODE: when `slotIndex` is set, further filter to ONLY this
+  // customer's services (s._slotIdx === slotIndex).
+  const serviceRows = (() => {
+    let rows = slotStatuses && slotStatuses.length > 0
+      ? allServiceRows.filter((s) => {
+          const st = slotStatuses[s._slotIdx] || "confirmed";
+          return st === "checkin" || st === "checkout";
+        })
+      : allServiceRows;
+    if (slotIndex !== undefined) {
+      rows = rows.filter((s) => s._slotIdx === slotIndex);
+    }
+    return rows;
+  })();
   // Per-customer service count for numbering (1a, 1b, 2, etc.).
   const checkedInSlotCount: Record<number, number> = {};
   serviceRows.forEach((s) => {
@@ -549,6 +547,122 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
     setError("");
     setSubmitting(true);
     try {
+      // === PER-CUSTOMER MODE ===
+      // When slotIndex is set, we're paying for ONE customer in a multi-customer
+      // booking that already has a paid invoice. Instead of creating/updating an
+      // invoice, we APPEND this customer's services + products to the existing
+      // paid invoice, then set the slot to "checkout" via the slot-status API.
+      if (slotIndex !== undefined && existingInvoice) {
+        // Fetch the existing invoice's current items (from its note JSON).
+        const invRes = await fetch(
+          `/api/supabase/invoices?booking_id=${encodeURIComponent(booking.id)}&limit=1`
+        );
+        const invJson = await invRes.json();
+        const existingInv = invJson.ok && Array.isArray(invJson.data) && invJson.data.length > 0
+          ? invJson.data[0]
+          : null;
+        if (!existingInv) throw new Error("Không tìm thấy hóa đơn hiện tại");
+
+        // Parse existing items from the invoice's note JSON.
+        let existingItems: Array<Record<string, unknown>> = [];
+        let humanNote: string | null = null;
+        let tipAmount = 0;
+        let promotionMeta: unknown = null;
+        let photosList: string[] = [];
+        const rawNote = existingInv.note;
+        if (typeof rawNote === "string" && rawNote.includes('"__kind":"invoice_meta"')) {
+          try {
+            const parsedNote = JSON.parse(rawNote) as {
+              items?: unknown[]; note?: string | null; tip?: number;
+              promotion?: unknown; photos?: unknown;
+            };
+            if (Array.isArray(parsedNote.items)) existingItems = parsedNote.items as Array<Record<string, unknown>>;
+            humanNote = parsedNote.note ?? null;
+            tipAmount = Number(parsedNote.tip) || 0;
+            promotionMeta = parsedNote.promotion ?? null;
+            if (Array.isArray(parsedNote.photos)) photosList = parsedNote.photos as string[];
+          } catch { /* best-effort */ }
+        }
+
+        // Build the new items to append (this customer's services + products).
+        const newItems = [
+          ...serviceRows.map((s) => ({
+            name: s.name,
+            itemId: null,
+            type: "service",
+            quantity: 1,
+            price: s.price,
+            discount: 0,
+            discountType: "VND",
+            total: s.price,
+            staffName: s.staff,
+            _slotIdx: s._slotIdx,
+          })),
+          ...selectedProducts.map((p) => ({
+            name: p.name,
+            itemId: p.id,
+            type: "product",
+            quantity: p.quantity,
+            price: p.price,
+            discount: 0,
+            discountType: "VND",
+            total: p.price * p.quantity,
+            staffName: p.staffName || undefined,
+          })),
+        ];
+
+        // Merge: existing items + new items.
+        const allItems = [...existingItems, ...newItems];
+        const newItemsTotal = newItems.reduce(
+          (sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0
+        );
+        const oldTotalAmount = Number(existingInv.total_amount) || 0;
+        const newTotalAmount = oldTotalAmount + newItemsTotal;
+        const discount = Number(existingInv.discount) || 0;
+        const newFinalAmount = Math.max(0, newTotalAmount - discount) + tipAmount;
+
+        // Rebuild the note JSON with the merged items.
+        const newInvNote = JSON.stringify({
+          __kind: "invoice_meta",
+          items: allItems,
+          note: humanNote,
+          tip: tipAmount,
+          promotion: promotionMeta,
+          photos: photosList,
+        });
+
+        // PUT the updated invoice (items + totals).
+        const putRes = await fetch(`/api/supabase/invoices/${existingInvoice.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            note: newInvNote,
+            total_amount: newTotalAmount,
+            final_amount: newFinalAmount,
+            created_by: useAuthStore.getState().user?.id,
+          }),
+        });
+        const putJson = await putRes.json();
+        if (!putJson.ok) throw new Error(putJson.error || "Không thể cập nhật hóa đơn");
+
+        // Set this customer's slot to "checkout" via the slot-status API.
+        await fetch("/api/supabase/bookings/slot-status", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bookingId: booking.id,
+            slotIndex,
+            status: "checkout",
+            actor_staff_id: useAuthStore.getState().user?.id,
+          }),
+        });
+
+        onPaid();
+        exitReview(booking.id);
+        return;
+      }
+
+      // === NORMAL MODE (not per-customer) ===
       const finalAmount = Math.max(0, servicesTotal + productsTotal - promoDiscount) + tip;
       const promotionMeta = selectedPromo
         ? {

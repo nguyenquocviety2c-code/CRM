@@ -44,7 +44,7 @@ interface BookingTimeGridProps {
    * (confirmed / new / checkin / cancelled / no_show) fall back to the
    * regular onBookingClick (edit dialog).
    */
-  onShowInvoice?: (booking: Booking) => void;
+  onShowInvoice?: (booking: Booking, slotIndex?: number) => void;
   /**
    * Called when the user clicks an EMPTY area of an hour row (not on an
    * existing booking card). Opens the "Create new booking" dialog with the
@@ -1017,7 +1017,7 @@ interface CustomerDayRangeGridProps {
   onBookingClick?: (booking: Booking) => void;
   onEdit?: (booking: Booking) => void;
   onDelete?: (bookingId: string) => void;
-  onShowInvoice?: (booking: Booking) => void;
+  onShowInvoice?: (booking: Booking, slotIndex?: number) => void;
   onSlotClick?: (slot: { date: string; time: string }) => void;
   slotLocked: boolean;
   canViewCustomerPhone: boolean;
