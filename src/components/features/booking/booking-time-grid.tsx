@@ -1203,10 +1203,12 @@ function CustomerDayRangeGrid({
     <div ref={containerRef} className="border bg-white flex flex-col relative" style={{ maxHeight: "calc(100vh - 200px)" }}>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto time-grid-scroll" data-grid-resizable>
         <div style={needsScroll ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%" }}>
-          {/* Header: "Giờ" + day columns — sticky at top during vertical scroll */}
+          {/* Header: "Giờ" + day columns — sticky at top during vertical scroll.
+              z-60 so hover popovers (z-50) from top-row segment cards never
+              cover the header row. */}
           <div
             data-grid-header
-            className="grid border-b bg-gray-50 sticky top-0 z-10"
+            className="grid border-b bg-gray-50 sticky top-0 z-60"
             style={{
               gridTemplateColumns: needsScroll
                 ? `${CDG_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`

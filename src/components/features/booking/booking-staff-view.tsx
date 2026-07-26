@@ -649,13 +649,15 @@ export function BookingStaffView({
             "bỏ scroll lăn lên xuống ngoài cùng, chỉ giữ lại scroll trong bảng"). */}
         <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
           <div style={canResizeTable ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%", minWidth: "100%" }}>
-            {/* Header row: "Giờ" + staff names. Sticky-top + sticky-left. */}
+            {/* Header row: "Giờ" + staff names. Sticky-top + sticky-left.
+                z-60 so hovered segment blocks (zIndex 50) and their hover
+                popovers (z-50) never cover the header row. */}
             <div
-              className="grid border-b-2 border-gray-400 bg-gray-50 sticky top-0 z-20"
+              className="grid border-b-2 border-gray-400 bg-gray-50 sticky top-0 z-60"
               style={{ gridTemplateColumns: gridTemplate }}
             >
               <div
-                className="staff-grid-header-cell sticky left-0 z-30 border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
+                className="staff-grid-header-cell sticky left-0 z-[70] border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
               >
                 Giờ
                 {/* Drag handle on the right edge of the "Giờ" header — only
@@ -1412,9 +1414,11 @@ function SegmentBlock({
 
       {/* Hover popover — full booking + invoice details (services, products,
           promotion, tip, total) via BookingHoverDetails. Action buttons
-          (edit / delete) stay at the bottom. */}
+          (edit / delete) stay at the bottom. z-[55] so the popover sits above
+          sibling blocks (zIndex 50) but below the sticky header (z-60) — the
+          header row never gets covered by a popover from a top-row slot. */}
       {hovered && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-[255px] border bg-white shadow-xl">
+        <div className="absolute left-0 top-full z-[55] mt-1 w-[255px] border bg-white shadow-xl">
           <BookingHoverDetails
             booking={booking}
             canViewCustomerPhone={canViewCustomerPhone}
@@ -1726,10 +1730,12 @@ function DayRangeGrid({
               : { width: "100%" }
           }
         >
-          {/* Header: "Giờ" + day columns — sticky at top so it stays during vertical scroll */}
+          {/* Header: "Giờ" + day columns — sticky at top so it stays during
+              vertical scroll. z-60 so hover popovers (z-50) from top-row chips
+              never cover the header. */}
           <div
             data-grid-header
-            className="grid border-b bg-gray-50 sticky top-0 z-10"
+            className="grid border-b bg-gray-50 sticky top-0 z-60"
             style={{
               gridTemplateColumns: needsScroll
                 ? `${DAYGRID_TIME_COL_WIDTH}px repeat(${dayCount}, ${scrollColWidth}px)`
