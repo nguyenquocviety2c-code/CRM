@@ -955,18 +955,42 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                 <>
                   {selectedProducts.map((p, idx) => (
                     <div key={`${p.id}-${idx}`} className="text-sm rounded-md border bg-gray-50 px-3 py-2">
-                      {/* Line 1: product name (left) + price (right) + remove button.
-                          When a staff is assigned, the staff name sits in the
-                          MIDDLE of this line (between name and price). */}
+                      {/* Line 1: product name (left) + product code + [if staff:
+                          NV: name] + "Xếp nhân viên" button (only when NO staff
+                          yet) + price (right) + remove. When no staff is
+                          assigned, the button sits INLINE on this same line
+                          (per user request: "cùng dòng với tên sản phẩm"). When
+                          a staff IS assigned, the button drops to line 2
+                          directly below (tight spacing). */}
                       <div className="flex items-center justify-between gap-2">
-                        <div className="font-medium text-gray-900 truncate">
-                          {p.name}
-                          {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="font-medium text-gray-900 truncate">
+                            {p.name}
+                            {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
+                          </span>
+                          {p.code && <span className="text-xs text-gray-400 shrink-0">{p.code}</span>}
+                          {p.staffName && (
+                            <span className="text-xs text-gray-500 shrink-0">NV: {p.staffName}</span>
+                          )}
+                          {/* "Xếp nhân viên" button — INLINE on line 1 when NO
+                              staff is assigned yet. When a staff IS assigned,
+                              the button moves to line 2 (below). */}
+                          {!p.staffName && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const current = assignStaffList.find((s) => s.name === p.staffName);
+                                setReassignProductIdx(idx);
+                                setReassignProductStaffId(current?.id || "");
+                              }}
+                              title="Xếp nhân viên cho sản phẩm này"
+                              className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                            >
+                              <UserCog className="h-2.5 w-2.5" />
+                              Xếp nhân viên
+                            </button>
+                          )}
                         </div>
-                        {/* Staff name in the middle (only when a staff is assigned). */}
-                        {p.staffName && (
-                          <span className="text-xs text-gray-500 shrink-0">NV: {p.staffName}</span>
-                        )}
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="font-medium text-gray-900">{fmt(p.price * p.quantity)}đ</span>
                           <button
@@ -979,28 +1003,27 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                           </button>
                         </div>
                       </div>
-                      {/* Line 2: product code (left, when present). */}
-                      {p.code && <div className="text-xs text-gray-500 mt-0.5">{p.code}</div>}
-                      {/* Line 3: "Xếp nhân viên" button — CENTERED (per user request).
-                          Sits below the staff name (which is on line 1). When no
-                          staff is assigned yet, the button is still centered on
-                          its own line. */}
-                      <div className="flex justify-center mt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // Pre-fill with the current staff's id (lookup by name).
-                            const current = assignStaffList.find((s) => s.name === p.staffName);
-                            setReassignProductIdx(idx);
-                            setReassignProductStaffId(current?.id || "");
-                          }}
-                          title={p.staffName ? `Xếp nhân viên (hiện: ${p.staffName})` : "Xếp nhân viên cho sản phẩm này"}
-                          className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
-                        >
-                          <UserCog className="h-2.5 w-2.5" />
-                          Xếp nhân viên
-                        </button>
-                      </div>
+                      {/* Line 2: "Xếp nhân viên" button — only when a staff IS
+                          assigned. Sits DIRECTLY below the staff name (tight
+                          spacing, mt-0.5) so it doesn't feel like a separate
+                          section (per user request: "ngay dưới tên nhân viên"). */}
+                      {p.staffName && (
+                        <div className="flex mt-0.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const current = assignStaffList.find((s) => s.name === p.staffName);
+                              setReassignProductIdx(idx);
+                              setReassignProductStaffId(current?.id || "");
+                            }}
+                            title={`Xếp nhân viên (hiện: ${p.staffName})`}
+                            className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                          >
+                            <UserCog className="h-2.5 w-2.5" />
+                            Xếp nhân viên
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {/* "Thêm sản phẩm" button — opens a separate Dialog showing
