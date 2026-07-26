@@ -357,7 +357,7 @@ export function BookingCustomerView({
                         case "checkin": return { name: "text-green-700", phone: "text-green-600" };
                         case "checkout": return { name: "text-yellow-600", phone: "text-yellow-500" };
                         case "cancelled": return { name: "text-red-600", phone: "text-red-400" };
-                        case "no_show": return { name: "text-gray-400", phone: "text-gray-300" };
+                        case "no_show": return { name: "text-red-600", phone: "text-red-400" };
                         default: return { name: "text-gray-900", phone: "text-gray-500" };
                       }
                     };
@@ -507,7 +507,7 @@ export function BookingCustomerView({
                                   case "checkin": return "text-green-700";
                                   case "checkout": return "text-yellow-600";
                                   case "cancelled": return "text-red-600";
-                                  case "no_show": return "text-gray-400";
+                                  case "no_show": return "text-red-600";
                                   default: return "text-gray-900";
                                 }
                               };
