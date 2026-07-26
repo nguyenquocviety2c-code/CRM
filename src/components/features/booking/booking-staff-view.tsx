@@ -640,20 +640,22 @@ export function BookingStaffView({
           ========================================================================= */}
       {(!dateRange || !useMultiDayLayout) && (
       <div className="border bg-white">
-        {/* Horizontal-scroll container — the time column is sticky-left so it
-            stays visible while the user scrolls through the staff columns.
-            When canResizeTable is true, the grid uses pixel widths that may
-            exceed the container → horizontal scroll. When false, the grid
-            uses 1fr (fills 100%, no scroll). */}
-        <div className="overflow-x-auto">
+        {/* Scroll container — BOTH horizontal (for many staff columns) AND
+            vertical (for the tall timeline). The header row is sticky-top so
+            it stays visible during vertical scroll; the "Giờ" column is
+            sticky-left so it stays during horizontal scroll. A max-height
+            keeps the table within the viewport so the OUTER page doesn't
+            scroll — only this inner container does (per user request:
+            "bỏ scroll lăn lên xuống ngoài cùng, chỉ giữ lại scroll trong bảng"). */}
+        <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
           <div style={canResizeTable ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%", minWidth: "100%" }}>
-            {/* Header row: "Giờ" + staff names. The "Giờ" cell is sticky-left. */}
+            {/* Header row: "Giờ" + staff names. Sticky-top + sticky-left. */}
             <div
-              className="grid border-b-2 border-gray-400 bg-gray-50"
+              className="grid border-b-2 border-gray-400 bg-gray-50 sticky top-0 z-20"
               style={{ gridTemplateColumns: gridTemplate }}
             >
               <div
-                className="staff-grid-header-cell sticky left-0 z-20 border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
+                className="staff-grid-header-cell sticky left-0 z-30 border-r border-gray-300 bg-gray-50 p-3 text-center text-xs font-semibold text-gray-600"
               >
                 Giờ
                 {/* Drag handle on the right edge of the "Giờ" header — only
@@ -1206,12 +1208,10 @@ function SegmentBlock({
   if (isPaid) {
     blockBg = "bg-yellow-50 border-yellow-300";
     timeText = "text-yellow-800";
-  } else if (isCancelled) {
+  } else if (isCancelled || isNoShow) {
+    // Cancelled + No-show → ĐỎ (red) — same color, per user request.
     blockBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
-  } else if (isNoShow) {
-    blockBg = "bg-amber-50 border-amber-300";
-    timeText = "text-amber-700";
   } else if (isCheckin && isReviewing) {
     blockBg = "bg-purple-300 border-purple-600";
     timeText = "text-purple-900";
@@ -1224,22 +1224,33 @@ function SegmentBlock({
   }
 
   // Status change options — ALL 4 manual options (Xác nhận, Checkin, Không đến,
-  // Hủy) are ALWAYS available regardless of the booking's current status.
-  // checkout is NOT a manual option (it auto-happens via payment).
+  // Hủy) are normally available. checkout is NOT a manual option (it auto-
+  // happens via payment).
+  //
+  // SPECIAL CASE: when this customer's effective status is "checkout" (Đã
+  // thanh toán), "checkin" is ALSO excluded — the customer has already paid,
+  // so reverting them to "checkin" (đang phục vụ) makes no sense. Only
+  // "confirmed" / "cancelled" / "no_show" are offered. Per user request:
+  // "khi trạng thái của khách là Đã thanh toán hoàn tất rồi thì nếu bấm đổi
+  // trạng thái sẽ đổi thành Đã xác nhận hoặc Đã hủy hoặc Không đến".
   //
   // For multi-customer bookings with per-customer slotStatuses:
   // - If ALL slots share the SAME status → exclude that one status (no-op).
-  // - If slots have DIFFERENT statuses → show ALL 4 options (the booking has
-  //   mixed states, so any status change is meaningful).
+  // - If slots have DIFFERENT statuses → show all applicable options (the
+  //   booking has mixed states, so any status change is meaningful).
   // For non-multi bookings → exclude booking.status.
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
   const allSlotsSameStatus = slotStatuses && slotStatuses.length > 0
     ? slotStatuses.every((s) => s === slotStatuses[0])
     : true;
   const statusToExclude = allSlotsSameStatus ? effectiveStatus : null;
-  let statusOptions: BookingStatusType[] = statusToExclude
-    ? ALL_STATUS_OPTIONS.filter((st) => st !== statusToExclude)
-    : ALL_STATUS_OPTIONS;
+  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => {
+    // Exclude the current status (no-op) when all slots share it.
+    if (statusToExclude && st === statusToExclude) return false;
+    // When this customer is already "checkout", exclude "checkin" too.
+    if (effectiveStatus === "checkout" && st === "checkin") return false;
+    return true;
+  });
 
   // z-index by booking-status priority so UNPAID bookings always stack ON TOP
   // of cancelled/no_show ones when their segments overlap (mirrors the segment
@@ -1890,7 +1901,10 @@ function BookingChip({
   // Status-change Select state (hover popover). Mirrors the SegmentBlock's
   // statusOptions logic:
   // - All slots same status → exclude that status (no-op).
-  // - Slots have different statuses → show ALL 4 options.
+  // - Slots have different statuses → show all applicable options.
+  // - When the booking's status is "checkout", also exclude "checkin" (a
+  //   paid booking reverting to "đang phục vụ" makes no sense — per user
+  //   request, only confirmed/cancelled/no_show are offered).
   const [selectOpen, setSelectOpen] = useState(false);
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
   const chipParsedMulti = parseMultiCustomerNote(booking.note);
@@ -1900,23 +1914,24 @@ function BookingChip({
     : true;
   const chipStatusToExclude = chipAllSame ? booking.status : null;
   const chipStatusOptions = onStatusChange
-    ? (chipStatusToExclude
-        ? ALL_STATUS_OPTIONS.filter((st) => st !== chipStatusToExclude)
-        : ALL_STATUS_OPTIONS)
+    ? ALL_STATUS_OPTIONS.filter((st) => {
+        if (chipStatusToExclude && st === chipStatusToExclude) return false;
+        if (booking.status === "checkout" && st === "checkin") return false;
+        return true;
+      })
     : [];
   // SAME scheme as SegmentBlock above (user's color spec):
-  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → white.
+  // confirmed → blue, checkin (chưa bấm TT) → green, checkin + đang review (đã bấm TT) → darker purple, checkout → yellow.
+  // no_show + cancelled → red (same color, per user request).
   let chipBg: string;
   let timeText: string;
   if (isPaid) {
     chipBg = "bg-yellow-50 border-yellow-300";
     timeText = "text-yellow-800";
-  } else if (isCancelled) {
+  } else if (isCancelled || isNoShow) {
+    // Cancelled + No-show → ĐỎ (red) — same color, per user request.
     chipBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
-  } else if (isNoShow) {
-    chipBg = "bg-amber-50 border-amber-300";
-    timeText = "text-amber-700";
   } else if (isCheckin && isReviewing) {
     chipBg = "bg-purple-300 border-purple-600";
     timeText = "text-purple-900";
@@ -2130,22 +2145,18 @@ export function BookingHoverDetails({
 
   // Booking's own services (always available, even without an invoice).
   const bookingServices = (booking.services as BookingServiceRow[]) || [];
-  // Invoice items — split services vs products.
-  const invoiceItems = invoiceData?.items || [];
-  const serviceItems = invoiceItems.filter((it) => it.type === "service");
-  const productItems = invoiceItems.filter((it) => it.type === "product" || (it.type && it.type !== "service"));
-  // Build a name→duration map from the booking's own services so invoice
-  // service items can also show their duration (the invoice item itself only
-  // carries price/quantity, not duration).
-  const durationByName = new Map<string, number>();
-  for (const s of bookingServices) {
-    if (s.service?.name && s.service?.duration) {
-      durationByName.set(s.service.name, s.service.duration);
-    }
-  }
-  // Fallback to booking services when invoice has no service items yet.
-  // Sort by sort_order so the numbering matches the multi-customer slot
-  // customer order (slots[i] ↔ services[i] in sort_order).
+  // Multi-customer per-customer statuses — parsed EARLY so the
+  // `displayServices` computation below can use `hoverSvcSlots` to map each
+  // service → its customer slot (for per-customer status coloring).
+  const hoverParsedMulti = parseMultiCustomerNote(booking.note);
+  const hoverSlotStatuses = hoverParsedMulti?.slotStatuses;
+  const hoverSvcSlots = hoverParsedMulti?.serviceSlots;
+  // Always use the BOOKING's own services (sorted by sort_order) for the
+  // tooltip display — NOT the invoice items. This way each service can be
+  // mapped to its customer slot (via serviceSlots) for per-customer status
+  // coloring. The invoice data (tip, promotion, final_amount) is still used
+  // for the totals section below. The `_slotIdx` field carries the customer
+  // slot index so the render can look up the per-customer status color.
   const displayServices: Array<{
     name?: string;
     type?: string;
@@ -2155,15 +2166,15 @@ export function BookingHoverDetails({
     total?: number;
     staffName?: string;
     duration?: number;
-  }> = serviceItems.length > 0
-    ? serviceItems.map((it) => ({
-        ...it,
-        duration: (it.name && durationByName.get(it.name)) ?? undefined,
-      }))
-    : bookingServices
-        .slice()
-        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-        .map((s) => ({
+    _slotIdx: number;
+  }> = bookingServices
+      .slice()
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((s, idx) => {
+        const slotIdx = hoverSvcSlots && idx < hoverSvcSlots.length
+          ? hoverSvcSlots[idx]
+          : idx;
+        return {
           name: s.service?.name || "Dịch vụ",
           type: "service",
           quantity: 1,
@@ -2172,7 +2183,9 @@ export function BookingHoverDetails({
           total: Number(s.service?.price) || 0,
           staffName: s.staff?.name,
           duration: s.service?.duration,
-        }));
+          _slotIdx: slotIdx,
+        };
+      });
 
   const fmt = (n: number | string | null | undefined) => {
     const v = Number(n) || 0;
@@ -2187,6 +2200,31 @@ export function BookingHoverDetails({
   // Multi-customer "Cùng lịch" booking — detected via the [[MULTI]] note marker.
   // Used to add customer/service numbering in the hover tooltip.
   const isMulti = !!getAllSlotCustomers(booking.note);
+  // Review state (shared via payment-review store) — when the cashier has
+  // pressed "Thanh toán" but not yet "Hoàn tất", a checkin booking shows as
+  // purple instead of green. Per-customer: only affects customers whose slot
+  // status is "checkin".
+  const isReviewing = useIsReviewing(booking.id);
+  // Text color for a given status (+ review state). Mirrors the slot face's
+  // timeText colors so the tooltip text matches the slot's visual color.
+  // confirmed/new → blue, checkin → green (purple when reviewing),
+  // checkout → yellow, cancelled + no_show → red (same color, per user request).
+  const statusTextColor = (st: string): string => {
+    switch (st) {
+      case "confirmed":
+      case "new":
+        return "text-blue-700";
+      case "checkin":
+        return isReviewing ? "text-purple-700" : "text-green-700";
+      case "checkout":
+        return "text-yellow-600";
+      case "cancelled":
+      case "no_show":
+        return "text-red-600";
+      default:
+        return "text-gray-900";
+    }
+  };
   // When the booking has been checked in (customer is being served), the
   // "Đơn hàng" link becomes "Xem hóa đơn" — clicking it opens the invoice
   // dialog so the cashier can review/add items and proceed to payment.
@@ -2211,31 +2249,43 @@ export function BookingHoverDetails({
       {(() => {
         const slotCustomers = getAllSlotCustomers(booking.note);
         if (slotCustomers && slotCustomers.length > 0) {
+          // Multi-customer: color each customer's name by their own slot
+          // status (per user request: "của khách màu gì thì tên và dịch vụ
+          // đồng bộ màu đấy"). Falls back to booking.status when no
+          // slotStatuses. Font size + line spacing reduced (per user request)
+          // so the name list stays compact when there are 3+ customers.
           return (
-            <div className="space-y-1 border-b pb-1">
-              {slotCustomers.map((sc, i) => (
-                <div key={i} className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold text-gray-900">
-                    <span className="text-emerald-600">{i + 1}.</span>{" "}
-                    {sc.walkin ? <span className="text-gray-500">Khách vãng lai</span> : (sc.name || "Khách")}
-                  </span>
-                  {!sc.walkin && sc.phone && (
-                    <span className="shrink-0 text-xs text-gray-500">
-                      {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+            <div className="space-y-0.5 border-b pb-1">
+              {slotCustomers.map((sc, i) => {
+                const slotSt = hoverSlotStatuses && i < hoverSlotStatuses.length
+                  ? hoverSlotStatuses[i]
+                  : booking.status;
+                const custColor = statusTextColor(slotSt);
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2 leading-tight">
+                    <span className={`truncate text-xs font-semibold ${custColor}`}>
+                      {i + 1}. {sc.walkin ? "Khách vãng lai" : (sc.name || "Khách")}
                     </span>
-                  )}
-                </div>
-              ))}
+                    {!sc.walkin && sc.phone && (
+                      <span className="shrink-0 text-[10px] text-gray-500">
+                        {canViewCustomerPhone ? sc.phone : maskPhone(sc.phone)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         }
+        // Single-customer: color by booking.status.
+        const singleColor = statusTextColor(booking.status);
         return (
-          <div className="flex items-center justify-between gap-2 border-b pb-1">
-            <span className="truncate text-sm font-semibold text-gray-900">
+          <div className="flex items-center justify-between gap-2 border-b pb-1 leading-tight">
+            <span className={`truncate text-xs font-semibold ${singleColor}`}>
               {booking.customer?.name || "Khách"}
             </span>
             {booking.customer?.phone && (
-              <span className="shrink-0 text-xs text-gray-500">
+              <span className="shrink-0 text-[10px] text-gray-500">
                 {canViewCustomerPhone ? booking.customer.phone : maskPhone(booking.customer.phone)}
               </span>
             )}
@@ -2286,30 +2336,68 @@ export function BookingHoverDetails({
           face). */}
       {displayServices.length > 0 && (
         <div className="space-y-1 border-t pt-1">
-          {displayServices.map((s, i) => (
-            <div key={i} className="space-y-0.5">
-              <div className="text-xs text-gray-900">
-                {isMulti && <span className="text-emerald-600">{i + 1}.</span>}{" "}
-                {s.name || "Dịch vụ"}
-                {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
-              </div>
-              {s.staffName ? (
-                <div className="text-[11px] font-medium text-gray-900">{s.staffName}</div>
-              ) : onAssignStaff ? (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAssignStaff();
-                  }}
-                  className="inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
-                  title="Xếp nhân viên cho dịch vụ này"
-                >
-                  Xếp nhân viên
-                </button>
-              ) : null}
-            </div>
-          ))}
+          {(() => {
+            // Per-customer service count — used to decide whether to add a
+            // letter suffix (1a, 1b, ...) vs just a number (1.). A customer
+            // with 1 service → "1." ; 2+ services → "1a.", "1b.", ... The
+            // letters follow the alphabet (a=1, b=2, c=3, d=4, ...) and are
+            // assigned in service order (sort_order). This mirrors the
+            // View khách hàng Danh sách numbering.
+            const customerServiceCount: Record<number, number> = {};
+            displayServices.forEach((s) => {
+              const si = s._slotIdx;
+              customerServiceCount[si] = (customerServiceCount[si] || 0) + 1;
+            });
+            const customerLetterIdx: Record<number, number> = {};
+            return displayServices.map((s, i) => {
+              // Resolve this service's owner-customer slot status for coloring.
+              // Multi-customer: use slotStatuses[_slotIdx]; single-customer:
+              // use booking.status. The color matches the slot's color (per
+              // user request: "của khách màu gì thì tên và dịch vụ đồng bộ
+              // màu đấy").
+              const slotSt = hoverSlotStatuses && s._slotIdx >= 0 && s._slotIdx < hoverSlotStatuses.length
+                ? hoverSlotStatuses[s._slotIdx]
+                : booking.status;
+              const svcColor = statusTextColor(slotSt);
+              // Build the prefix: multi-customer only. Single-customer has
+              // no number prefix (just the service name).
+              let prefix = "";
+              if (isMulti) {
+                const total = customerServiceCount[s._slotIdx] || 1;
+                if (total <= 1) {
+                  prefix = `${s._slotIdx + 1}. `;
+                } else {
+                  customerLetterIdx[s._slotIdx] = (customerLetterIdx[s._slotIdx] || 0) + 1;
+                  const letter = String.fromCharCode(96 + customerLetterIdx[s._slotIdx]); // 97 = 'a'
+                  prefix = `${s._slotIdx + 1}${letter}. `;
+                }
+              }
+              return (
+                <div key={i} className="space-y-0.5">
+                  <div className={`text-xs ${svcColor}`}>
+                    {prefix}
+                    {s.name || "Dịch vụ"}
+                    {s.duration ? <span className="ml-1 text-gray-500">({s.duration})</span> : null}
+                  </div>
+                  {s.staffName ? (
+                    <div className="text-[11px] font-medium text-gray-900">{s.staffName}</div>
+                  ) : onAssignStaff ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAssignStaff();
+                      }}
+                      className="inline-flex items-center rounded border border-blue-400 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 hover:border-blue-500 hover:bg-blue-100 hover:text-blue-700"
+                      title="Xếp nhân viên cho dịch vụ này"
+                    >
+                      Xếp nhân viên
+                    </button>
+                  ) : null}
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
 

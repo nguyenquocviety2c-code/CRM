@@ -787,7 +787,11 @@ export function BookingCustomerView({
                       // (via the normal booking PATCH). For per-customer status
                       // changes, the user goes to View nhân viên.
                       // Options logic: if all slots share the same status →
-                      // exclude it (no-op). If slots differ → show ALL 4.
+                      // exclude it (no-op). If slots differ → show all applicable.
+                      // SPECIAL CASE: when the booking's status is "checkout",
+                      // "checkin" is also excluded (a paid booking reverting to
+                      // "đang phục vụ" makes no sense — per user request, only
+                      // confirmed/cancelled/no_show are offered).
                       const ALL_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
                       const parsedForStatus = parseMultiCustomerNote(booking.note);
                       const ss = parsedForStatus?.slotStatuses;
@@ -795,9 +799,11 @@ export function BookingCustomerView({
                         ? ss.every((s) => s === ss[0])
                         : true;
                       const toExclude = allSame ? booking.status : null;
-                      const nextStatuses = toExclude
-                        ? ALL_OPTIONS.filter((st) => st !== toExclude)
-                        : ALL_OPTIONS;
+                      const nextStatuses = ALL_OPTIONS.filter((st) => {
+                        if (toExclude && st === toExclude) return false;
+                        if (booking.status === "checkout" && st === "checkin") return false;
+                        return true;
+                      });
                       return (
                         <Select value="" onValueChange={(value) => onStatusChange(booking.id, value as BookingStatusType)}>
                           <SelectTrigger className="h-6 w-full min-w-0 text-[11px] border-gray-300 gap-1 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate">

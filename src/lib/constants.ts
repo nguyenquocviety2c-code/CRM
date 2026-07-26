@@ -97,7 +97,7 @@ export const BookingStatusLabel: Record<BookingStatusType, string> = {
   new: "Mới",
   confirmed: "Đã xác nhận",
   checkin: "Đã checkin",
-  checkout: "Đã checkout",
+  checkout: "Đã thanh toán",
   no_show: "Không đến",
   cancelled: "Đã hủy",
 };

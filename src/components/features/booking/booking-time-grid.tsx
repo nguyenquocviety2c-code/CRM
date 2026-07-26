@@ -26,6 +26,7 @@ import {
   HoverCardContent,
 } from "@/components/ui/hover-card";
 import { BookingHoverDetails } from "@/components/features/booking/booking-staff-view";
+import { parseMultiCustomerNote } from "@/lib/multi-customer";
 
 interface BookingTimeGridProps {
   bookings: Booking[];
@@ -573,14 +574,21 @@ function SegmentCard({
   // invoice and shows all services with durations.
   const dateLabel = getBookingDateLabel(booking);
 
-  // Card background color — based on booking status + payment-review state
+  // Card background color — based on the EFFECTIVE status for this segment's
+  // customer slot (multi-customer "Cùng lịch" bookings have per-customer
+  // slotStatuses; single-customer bookings use booking.status).
   // (per user's color spec for View khách hàng > Khung giờ & View nhân viên):
   // - confirmed / new → XANH DƯƠNG (blue)
   // - checkin, chưa bấm Thanh toán → XANH (green)
   // - checkin + đã bấm Thanh toán (đang ở chế độ review, chưa Hoàn tất) → TÍM ĐẬM (darker purple)
-  // - no_show → yellow
-  // - cancelled → red
-  // - checkout (đã Hoàn tất) → TRẮNG (white)
+  // - no_show → ĐỎ (red — same as cancelled, per user request)
+  // - cancelled → ĐỎ (red)
+  // - checkout (đã Hoàn tất) → VÀNG (yellow)
+  //
+  // For multi-customer bookings, each segment's color is driven by the
+  // PER-CUSTOMER slot status (from slotStatuses in the [[MULTI]] note),
+  // NOT the booking-level status. This way, if customer #2 is checked in but
+  // customer #1 is still confirmed, only customer #2's slots turn green.
   //
   // IMPORTANT: "đã bấm Thanh toán" is tracked by the shared payment-review
   // store (useIsReviewing), which is set when the cashier presses "Thanh toán"
@@ -589,10 +597,24 @@ function SegmentCard({
   // checkin), so pending-status alone cannot distinguish "chưa bấm Thanh toán"
   // from "đã bấm Thanh toán". The review flag (persisted to sessionStorage,
   // shared across Booking + Cashier) is the only reliable signal.
-  const isPaid = booking.status === "checkout";
-  const isCancelled = booking.status === "cancelled";
-  const isNoShow = booking.status === "no_show";
-  const isCheckin = booking.status === "checkin";
+  const parsedMulti = parseMultiCustomerNote(booking.note);
+  const slotStatuses = parsedMulti?.slotStatuses;
+  const svcSlots = parsedMulti?.serviceSlots;
+  // Resolve the effective status for THIS segment:
+  // 1. If multi-customer + has slotStatuses + this segment's slot has a
+  //    per-customer status → use that.
+  // 2. Otherwise → use the booking-level status.
+  const effectiveSlotIdx = svcSlots && segment.segmentIndex < svcSlots.length
+    ? svcSlots[segment.segmentIndex]
+    : segment.segmentIndex;
+  const effectiveStatus = (slotStatuses && effectiveSlotIdx < slotStatuses.length)
+    ? slotStatuses[effectiveSlotIdx]
+    : booking.status;
+
+  const isPaid = effectiveStatus === "checkout";
+  const isCancelled = effectiveStatus === "cancelled";
+  const isNoShow = effectiveStatus === "no_show";
+  const isCheckin = effectiveStatus === "checkin";
   const isReviewing = useIsReviewing(booking.id);
 
   let cardBg: string;
@@ -601,12 +623,10 @@ function SegmentCard({
     // Completed payment (đã Hoàn tất) → VÀNG (yellow background).
     cardBg = "bg-yellow-50 border-yellow-300";
     timeText = "text-yellow-800";
-  } else if (isCancelled) {
+  } else if (isCancelled || isNoShow) {
+    // Cancelled + No-show → ĐỎ (red) — same color, per user request.
     cardBg = "bg-red-50 border-red-200";
     timeText = "text-red-700";
-  } else if (isNoShow) {
-    cardBg = "bg-amber-50 border-amber-300";
-    timeText = "text-amber-700";
   } else if (isCheckin && isReviewing) {
     // Payment started but not completed (đã bấm Thanh toán, đang review) → TÍM ĐẬM (darker purple).
     cardBg = "bg-purple-300 border-purple-600";
@@ -629,8 +649,17 @@ function SegmentCard({
   // list view (View khách hàng) + View nhân viên logic. NOTE: reverting to
   // confirmed/cancelled auto-deletes the linked invoice (handled in the
   // bookings PATCH route).
+  //
+  // SPECIAL CASE: when this segment's effective status is "checkout" (Đã
+  // thanh toán), "checkin" is ALSO excluded — the customer has already paid,
+  // so reverting them to "checkin" (đang phục vụ) makes no sense. Only
+  // "confirmed" / "cancelled" / "no_show" are offered. Per user request.
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
-  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => st !== booking.status);
+  let statusOptions: BookingStatusType[] = ALL_STATUS_OPTIONS.filter((st) => {
+    if (st === effectiveStatus) return false; // exclude current (no-op)
+    if (effectiveStatus === "checkout" && st === "checkin") return false; // exclude checkin when paid
+    return true;
+  });
 
   return (
     <div
@@ -1358,12 +1387,19 @@ function CustomerGridChip({
   const statusColors = BookingStatusBadgeColors[booking.status as BookingStatusType] || { bg: "bg-gray-100", text: "text-gray-700" };
 
   // Status-change Select state (hover popover). All 4 manual options are
-  // always available (minus the current status) so the user can revert from
+  // normally available (minus the current status) so the user can revert from
   // any status. Mirrors the single-day SegmentCard + View nhân viên logic.
+  // SPECIAL CASE: when the booking's status is "checkout", "checkin" is also
+  // excluded (a paid booking reverting to "đang phục vụ" makes no sense — per
+  // user request, only confirmed/cancelled/no_show are offered).
   const [selectOpen, setSelectOpen] = useState(false);
   const ALL_STATUS_OPTIONS: BookingStatusType[] = ["confirmed", "checkin", "no_show", "cancelled"];
   const chipStatusOptions = onStatusChange
-    ? ALL_STATUS_OPTIONS.filter((st) => st !== booking.status)
+    ? ALL_STATUS_OPTIONS.filter((st) => {
+        if (st === booking.status) return false;
+        if (booking.status === "checkout" && st === "checkin") return false;
+        return true;
+      })
     : [];
 
   return (

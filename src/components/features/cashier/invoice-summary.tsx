@@ -1760,7 +1760,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             </p>
             <p className="mt-0.5 text-emerald-700">
               {paidSuccess.syncedBooking
-                ? `Đơn hàng ${paidSuccess.bookingCode || ""} đã được thanh toán. Cột "Thanh toán" → Đã thanh toán, cột "Trạng thái" → Đã Checkout.`
+                ? `Đơn hàng ${paidSuccess.bookingCode || ""} đã được thanh toán. Cột "Thanh toán" → Đã thanh toán, cột "Trạng thái" → Đã thanh toán.`
                 : "Hóa đơn đã được lưu vào Lịch sử đơn hàng."}
             </p>
             <p className="mt-0.5 text-xs text-emerald-600">
