@@ -33,11 +33,22 @@ export async function GET(request: NextRequest) {
 
     // Enrich each activity with the creator's name (invoice_activities has no
     // FK to staff, so we fetch staff names separately and merge them in).
+    //
+    // IMPORTANT: the staff table's `id` column is a UUID. Some legacy activity
+    // rows may have a non-UUID `created_by` (e.g. a username string from older
+    // code paths or manual API testing). If we pass a non-UUID string to
+    // PostgREST's `.in("id", [...])`, the ENTIRE query fails with a UUID cast
+    // error — so even the VALID UUIDs in the same batch return no results,
+    // making EVERY activity show "—" for the performer. To prevent this, we
+    // filter `staffIds` to only include valid UUID strings before the query.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const staffIds = Array.from(
       new Set(
         (data ?? [])
           .map((a: { created_by?: string | null }) => a.created_by)
-          .filter((id): id is string => typeof id === "string" && !!id.trim())
+          .filter((id): id is string =>
+            typeof id === "string" && !!id.trim() && UUID_RE.test(id.trim())
+          )
       )
     );
     let staffMap: Record<string, { name: string; username?: string | null }> = {};

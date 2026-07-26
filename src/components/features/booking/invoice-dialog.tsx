@@ -18,7 +18,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { X, PlusCircle, Package, ChevronLeft, Minus, Plus } from "lucide-react";
+import { X, PlusCircle, Package, ChevronLeft, Minus, Plus, UserCog, Loader2 } from "lucide-react";
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { Booking } from "@/stores/booking-store";
 import { useAuthStore } from "@/stores/auth-store";
@@ -154,6 +154,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
     price: number;
     code: string | null;
     quantity: number;
+    staffName?: string | null;
   }>>([]);
   const [productPickerOpen, setProductPickerOpen] = useState(false);
   // Two-step picker: "groups" = list of product categories; "products" = the
@@ -199,6 +200,115 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
     return () => { cancelled = true; };
   }, [effectivelyReadOnly]);
 
+  // === Service picker dialog state ===
+  // Opened by the "+" button next to "DỊCH VỤ". Two-step picker (like the
+  // product picker): "groups" = service categories; "services" = the services
+  // in the chosen category, each with a staff Select. On confirm, the picked
+  // service + staff is appended to the booking via PUT /api/supabase/bookings/:id
+  // (services array). The booking is then refetched so the new service appears
+  // in the Dịch vụ list.
+  const [servicePickerOpen, setServicePickerOpen] = useState(false);
+  const [servicePickerStep, setServicePickerStep] = useState<"groups" | "services">("groups");
+  const [selectedServiceGroup, setSelectedServiceGroup] = useState<string | null>(null);
+  const [serviceCategories, setServiceCategories] = useState<Array<{ id: string; name: string }>>([]);
+  const [servicesList, setServicesList] = useState<Array<{
+    id: string;
+    name: string;
+    price: number;
+    duration?: number;
+    categoryId?: string | null;
+  }>>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  // The picked service (from the services step) + the staff for it.
+  const [pickedService, setPickedService] = useState<{
+    id: string;
+    name: string;
+    price: number;
+    duration?: number;
+  } | null>(null);
+  const [pickedServiceStaffId, setPickedServiceStaffId] = useState<string>("");
+  const [servicePickerError, setServicePickerError] = useState("");
+  const [addingService, setAddingService] = useState(false);
+  // Staff list for the service picker's staff Select (active staff at the
+  // booking's branch). Also reused by the per-service "Xếp nhân viên" buttons.
+  const [assignStaffList, setAssignStaffList] = useState<Array<{ id: string; name: string }>>([]);
+
+  // Fetch service categories + services + branch staff (editable mode only).
+  // Loaded once when the dialog first opens; reused by both the service picker
+  // and the per-service "Xếp nhân viên" buttons.
+  useEffect(() => {
+    if (effectivelyReadOnly) return;
+    let cancelled = false;
+    // Service categories.
+    fetch("/api/supabase/service-categories?active=true")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        if (json.ok && Array.isArray(json.data)) {
+          setServiceCategories(
+            (json.data as Array<{ id: string; name: string }>).map((c) => ({ id: c.id, name: c.name }))
+          );
+        }
+      })
+      .catch(() => { /* best-effort */ });
+    // Services.
+    setServicesLoading(true);
+    fetch("/api/supabase/services?active=true&limit=200")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        if (json.ok && Array.isArray(json.data)) {
+          setServicesList(
+            (json.data as Array<Record<string, unknown>>).map((s) => ({
+              id: String(s.id ?? ""),
+              name: String(s.name ?? ""),
+              price: Number(s.price ?? 0),
+              duration: s.duration ? Number(s.duration) : undefined,
+              categoryId: (s.category as { id?: string } | null)?.id || null,
+            }))
+          );
+        }
+      })
+      .catch(() => { /* best-effort */ })
+      .finally(() => { if (!cancelled) setServicesLoading(false); });
+    // Branch staff (for the staff Select in the service picker + "Xếp nhân viên").
+    const branchId = booking.branchId || (booking.branch as { id?: string } | null)?.id || null;
+    if (branchId) {
+      fetch(`/api/supabase/staff?branch_id=${encodeURIComponent(branchId)}&active=true&limit=200`)
+        .then((r) => r.json())
+        .then((json) => {
+          if (cancelled) return;
+          if (json.ok && Array.isArray(json.data)) {
+            setAssignStaffList(
+              (json.data as Array<{ id: string; name: string }>).map((s) => ({ id: s.id, name: s.name }))
+            );
+          }
+        })
+        .catch(() => { /* best-effort */ });
+    }
+    return () => { cancelled = true; };
+  }, [effectivelyReadOnly, booking.branchId, booking.branch]);
+
+  // === Per-service "Xếp nhân viên" dialog state ===
+  // Opened by the yellow "Xếp nhân viên" button next to each service's staff
+  // name. Lets the user reassign the staff for ONE service. Includes a staff
+  // conflict check: if the picked staff is already booked at this service's
+  // date/time (excluding this booking itself), the save is BLOCKED with a
+  // detailed conflict message.
+  const [reassignStaffServiceId, setReassignStaffServiceId] = useState<string | null>(null);
+  const [reassignStaffPickStaffId, setReassignStaffPickStaffId] = useState<string>("");
+  const [reassignStaffError, setReassignStaffError] = useState("");
+  const [reassignStaffChecking, setReassignStaffChecking] = useState(false);
+  const [reassignStaffSaving, setReassignStaffSaving] = useState(false);
+
+  // === Per-product "Xếp nhân viên" dialog state ===
+  // Opened by the "Xếp nhân viên" button in each product row. Products don't
+  // have a staff in the booking_services sense (they're retail items), so this
+  // just records the staff who sold/advised on the product — stored in the
+  // selectedProducts entry's new `staffName` field (used only for display).
+  const [reassignProductIdx, setReassignProductIdx] = useState<number | null>(null);
+  const [reassignProductStaffId, setReassignProductStaffId] = useState<string>("");
+
   // Build invoice line items from booking services (nested Supabase shape).
   // For multi-customer "Cùng lịch" bookings, attach each service's own
   // customer (parsed from the booking note's [[MULTI]] block) so the services
@@ -210,8 +320,8 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
   const slotStatuses = multiCustomer?.slotStatuses;
   const serviceSlotsMap = multiCustomer?.serviceSlots;
   const allServiceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
-    const svc = s.service as { name?: string; price?: number; duration?: number } | null;
-    const stf = s.staff as { name?: string } | null;
+    const svc = s.service as { id?: string; name?: string; price?: number; duration?: number } | null;
+    const stf = s.staff as { id?: string; name?: string } | null;
     const cat = s.category as { name?: string } | null;
     // Use serviceSlots to find the correct customer slot for this service.
     const slotIdx = serviceSlotsMap && idx < serviceSlotsMap.length
@@ -219,8 +329,13 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
       : idx;
     const sc = multiCustomer?.slots[slotIdx];
     return {
+      bookingServiceId: String(s.id ?? ""),
+      serviceId: svc?.id || (s.service_id as string) || "",
+      staffId: stf?.id || (s.staff_id as string) || "",
+      staffName: stf?.name || null,
       name: svc?.name || "Dịch vụ",
       price: Number(svc?.price) || 0,
+      duration: svc?.duration,
       staff: stf?.name || null,
       category: cat?.name || null,
       customer: sc
@@ -467,7 +582,7 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
           price: p.price,
           discount: 0,
           total: p.price * p.quantity,
-          staffName: undefined,
+          staffName: p.staffName || undefined,
         })),
       ];
       const subtotal = servicesTotal + productsTotal;
@@ -618,8 +733,31 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
 
           {/* Services + Tip + Total (all inside one box; tip sits under the services) */}
           <div className="rounded-lg border p-2.5">
-            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
-              Dịch vụ
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Dịch vụ
+              </div>
+              {/* "+" button — opens the service picker dialog (group → service →
+                  staff). Only shown in editable mode. The square yellow button
+                  matches the cashier module's "Xếp nhân viên" styling so the
+                  two modules stay visually consistent. */}
+              {!effectivelyReadOnly && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setServicePickerStep("groups");
+                    setSelectedServiceGroup(null);
+                    setPickedService(null);
+                    setPickedServiceStaffId("");
+                    setServicePickerError("");
+                    setServicePickerOpen(true);
+                  }}
+                  title="Thêm dịch vụ"
+                  className="flex h-6 w-6 items-center justify-center rounded border border-emerald-400 bg-emerald-400 text-emerald-800 hover:border-emerald-500 hover:bg-emerald-500 hover:text-emerald-900"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
             <div className="space-y-1.5">
               {effectivelyReadOnly && loadingInvoice ? (
@@ -627,25 +765,57 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
               ) : displayItems.length === 0 ? (
                 <div className="text-sm text-gray-400">Chưa có dịch vụ</div>
               ) : (
-                displayItems.map((s, idx) => (
+                displayItems.map((s, idx) => {
+                  // Find the matching serviceRow (by index in displayItems ↔
+                  // serviceRows) to get the bookingServiceId + staffId for the
+                  // "Xếp nhân viên" reassign button. displayItems is built from
+                  // serviceRows in the editable branch, so the index matches.
+                  const srvRow = !effectivelyReadOnly ? serviceRows[idx] : null;
+                  return (
                   <div key={idx} className="flex items-start justify-between text-sm">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       {/* Multi-customer (Cashier module): 3-line layout —
                           line 1: customer (name+phone or "Khách vãng lai")
                           line 2: service name
-                          line 3: staff name
+                          line 3: staff name + yellow "Xếp nhân viên" button
                           Regular bookings keep the 2-line layout (service + staff). */}
                       {(s as { customer?: string }).customer && (
                         <div className="text-xs text-gray-600">{(s as { customer?: string }).customer}</div>
                       )}
                       <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
-                      {s.staffName && <div className="text-xs text-gray-500">NV: {s.staffName}</div>}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* Yellow "Xếp nhân viên" button — placed to the LEFT of
+                            the staff name (per user request). Opens the per-
+                            service reassign dialog. Mirrors the cashier module's
+                            button (h-5, text-[10px], yellow bg). Includes a
+                            staff conflict check on confirm. Only shown in
+                            editable mode (a paid invoice's services can't be
+                            reassigned). */}
+                        {!effectivelyReadOnly && srvRow && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReassignStaffServiceId(srvRow.bookingServiceId);
+                              setReassignStaffPickStaffId(srvRow.staffId || "");
+                              setReassignStaffError("");
+                              setReassignStaffChecking(false);
+                            }}
+                            title={srvRow.staffName ? `Xếp nhân viên (hiện: ${srvRow.staffName})` : "Xếp nhân viên cho dịch vụ này"}
+                            className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                          >
+                            <UserCog className="h-2.5 w-2.5" />
+                            Xếp nhân viên
+                          </button>
+                        )}
+                        {s.staffName && <span className="text-xs text-gray-500">NV: {s.staffName}</span>}
+                      </div>
                     </div>
-                    <div className="font-medium text-gray-900">
+                    <div className="font-medium text-gray-900 shrink-0 ml-2">
                       {fmt(Number(s.price) || 0)}đ
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
 
@@ -784,23 +954,51 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
               ) : (
                 <>
                   {selectedProducts.map((p, idx) => (
-                    <div key={`${p.id}-${idx}`} className="flex items-center justify-between text-sm rounded-md border bg-gray-50 px-3 py-2">
-                      <div className="min-w-0 flex-1">
+                    <div key={`${p.id}-${idx}`} className="text-sm rounded-md border bg-gray-50 px-3 py-2">
+                      {/* Line 1: product name (left) + price (right) + remove button.
+                          When a staff is assigned, the staff name sits in the
+                          MIDDLE of this line (between name and price). */}
+                      <div className="flex items-center justify-between gap-2">
                         <div className="font-medium text-gray-900 truncate">
                           {p.name}
                           {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
                         </div>
-                        {p.code && <div className="text-xs text-gray-500">{p.code}</div>}
+                        {/* Staff name in the middle (only when a staff is assigned). */}
+                        {p.staffName && (
+                          <span className="text-xs text-gray-500 shrink-0">NV: {p.staffName}</span>
+                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-medium text-gray-900">{fmt(p.price * p.quantity)}đ</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProducts((prev) => prev.filter((_, i) => i !== idx))}
+                            className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                            aria-label="Xóa sản phẩm"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0 ml-2">
-                        <span className="font-medium text-gray-900">{fmt(p.price * p.quantity)}đ</span>
+                      {/* Line 2: product code (left, when present). */}
+                      {p.code && <div className="text-xs text-gray-500 mt-0.5">{p.code}</div>}
+                      {/* Line 3: "Xếp nhân viên" button — CENTERED (per user request).
+                          Sits below the staff name (which is on line 1). When no
+                          staff is assigned yet, the button is still centered on
+                          its own line. */}
+                      <div className="flex justify-center mt-1">
                         <button
                           type="button"
-                          onClick={() => setSelectedProducts((prev) => prev.filter((_, i) => i !== idx))}
-                          className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-500"
-                          aria-label="Xóa sản phẩm"
+                          onClick={() => {
+                            // Pre-fill with the current staff's id (lookup by name).
+                            const current = assignStaffList.find((s) => s.name === p.staffName);
+                            setReassignProductIdx(idx);
+                            setReassignProductStaffId(current?.id || "");
+                          }}
+                          title={p.staffName ? `Xếp nhân viên (hiện: ${p.staffName})` : "Xếp nhân viên cho sản phẩm này"}
+                          className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          <UserCog className="h-2.5 w-2.5" />
+                          Xếp nhân viên
                         </button>
                       </div>
                     </div>
@@ -1183,6 +1381,574 @@ export function InvoiceDialog({ booking, onClose, onPaid }: InvoiceDialogProps) 
                   : "Thêm vào đơn"}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* === Service picker dialog ===
+          Opened by the "+" button next to "DỊCH VỤ". Two-step picker:
+          step 1 = service GROUPS (categories); step 2 = the services in the
+          chosen category, each with a staff Select. On confirm, the picked
+          service + staff is appended to the booking via PUT
+          /api/supabase/bookings/:id (services array). Includes a staff conflict
+          check: if the picked staff is already booked at this booking's
+          date/time (excluding this booking itself), the save is BLOCKED with a
+          detailed conflict message (mirrors the AssignStaffDialog check). */}
+      <Dialog
+        open={servicePickerOpen}
+        onOpenChange={(v) => {
+          setServicePickerOpen(v);
+          if (!v) {
+            setServicePickerStep("groups");
+            setSelectedServiceGroup(null);
+            setPickedService(null);
+            setPickedServiceStaffId("");
+            setServicePickerError("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md sm:max-w-md p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+              {servicePickerStep === "services" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setServicePickerStep("groups");
+                    setSelectedServiceGroup(null);
+                    setPickedService(null);
+                    setPickedServiceStaffId("");
+                    setServicePickerError("");
+                  }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                  aria-label="Quay lại danh sách nhóm"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              )}
+              {servicePickerStep === "groups"
+                ? "Chọn nhóm dịch vụ"
+                : selectedServiceGroup || "Chọn dịch vụ"}
+            </DialogTitle>
+          </DialogHeader>
+
+          {servicePickerStep === "groups" ? (
+            <div className="grid grid-cols-2 gap-2 max-h-[60vh] overflow-y-auto pr-0.5">
+              {servicesLoading ? (
+                <div className="col-span-2 px-3 py-6 text-center text-sm text-gray-400">Đang tải...</div>
+              ) : serviceCategories.length === 0 ? (
+                <div className="col-span-2 px-3 py-6 text-center text-sm text-gray-400">Chưa có nhóm dịch vụ</div>
+              ) : (
+                serviceCategories.map((c) => {
+                  const count = servicesList.filter((s) => s.categoryId === c.id).length;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedServiceGroup(c.name);
+                        setPickedService(null);
+                        setPickedServiceStaffId("");
+                        setServicePickerError("");
+                        setServicePickerStep("services");
+                      }}
+                      className="rounded-lg border p-3 text-left hover:bg-emerald-50 hover:border-emerald-300 transition-colors"
+                    >
+                      <Package className="h-5 w-5 text-emerald-600 mb-1" />
+                      <div className="font-medium text-sm text-gray-900 truncate">{c.name}</div>
+                      <div className="text-xs text-gray-500">{count} dịch vụ</div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-0.5">
+              {(() => {
+                const cat = serviceCategories.find((c) => c.name === selectedServiceGroup);
+                const servicesInGroup = cat
+                  ? servicesList.filter((s) => s.categoryId === cat.id)
+                  : [];
+                if (servicesInGroup.length === 0) {
+                  return <div className="px-3 py-6 text-center text-sm text-gray-400">Không có dịch vụ trong nhóm này</div>;
+                }
+                return servicesInGroup.map((s) => {
+                  const isPicked = pickedService?.id === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setPickedService({ id: s.id, name: s.name, price: s.price, duration: s.duration });
+                        setPickedServiceStaffId("");
+                        setServicePickerError("");
+                      }}
+                      className={`flex w-full items-center justify-between border rounded-md p-2 text-left transition-colors ${
+                        isPicked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200 hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0 mr-2">
+                        <div className="font-medium text-sm text-gray-900 truncate">{s.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {fmt(s.price)}đ{s.duration ? ` · ${s.duration}'` : ""}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+          )}
+
+          {/* Staff Select — only shown when a service is picked. */}
+          {servicePickerStep === "services" && pickedService && (
+            <div className="space-y-1 border-t pt-2">
+              <label className="text-[11px] text-gray-600">
+                Nhân viên thực hiện
+              </label>
+              <Select
+                value={pickedServiceStaffId}
+                onValueChange={(v) => {
+                  setPickedServiceStaffId(v);
+                  setServicePickerError("");
+                }}
+              >
+                <SelectTrigger className="w-full h-8 text-xs" size="sm">
+                  <SelectValue placeholder="Chọn nhân viên" />
+                </SelectTrigger>
+                <SelectContent>
+                  {assignStaffList.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-gray-500">Không có nhân viên ở cửa hàng này</div>
+                  ) : (
+                    assignStaffList.map((st) => (
+                      <SelectItem key={st.id} value={st.id} className="text-xs">
+                        {st.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              {!pickedServiceStaffId && (
+                <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+              )}
+            </div>
+          )}
+
+          {servicePickerError && (
+            <div className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+              {servicePickerError}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setServicePickerOpen(false);
+                setServicePickerStep("groups");
+                setSelectedServiceGroup(null);
+                setPickedService(null);
+                setPickedServiceStaffId("");
+                setServicePickerError("");
+              }}
+              disabled={addingService}
+            >
+              Hủy
+            </Button>
+            {servicePickerStep === "services" && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={!pickedService || !pickedServiceStaffId || addingService}
+                onClick={async () => {
+                  if (!pickedService || !pickedServiceStaffId) return;
+                  setServicePickerError("");
+                  setAddingService(true);
+                  try {
+                    // === Staff conflict check ===
+                    // Fetch all bookings for the same day + branch, then verify
+                    // the picked staff isn't already booked at this booking's
+                    // time window (excluding this booking itself). Mirrors the
+                    // AssignStaffDialog check. If a conflict is found, block
+                    // the add with a detailed message.
+                    const bookingStartMs = booking.date_time ? new Date(booking.date_time).getTime() : 0;
+                    if (bookingStartMs && booking.date_time) {
+                      const params = new URLSearchParams({ page: "1", limit: "200" });
+                      const d = new Date(booking.date_time);
+                      const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                      params.set("date_from", `${isoDay}T00:00:00+07:00`);
+                      params.set("date_to", `${isoDay}T23:59:59+07:00`);
+                      const branchId = booking.branchId || (booking.branch as { id?: string } | null)?.id || null;
+                      if (branchId) params.set("branch_id", branchId);
+                      const cfRes = await fetch(`/api/supabase/bookings?${params.toString()}`);
+                      const cfJson = await cfRes.json();
+                      if (cfJson.ok) {
+                        const exList = (cfJson.data?.items || cfJson.data || []) as Array<{
+                          id: string;
+                          code?: string | null;
+                          status?: string | null;
+                          date_time?: string | null;
+                          customer?: { name?: string } | null;
+                          services?: Array<{
+                            staff_id?: string | null;
+                            staff?: { name?: string } | null;
+                            service?: { name?: string; duration?: number } | null;
+                          }>;
+                        }>;
+                        const dur = (Number(pickedService.duration) || 60) * 60 * 1000;
+                        const newEnd = bookingStartMs + dur;
+                        for (const ex of exList) {
+                          if (ex.id === booking.id) continue;
+                          if (ex.status === "cancelled" || ex.status === "no_show") continue;
+                          const exStart = new Date(String(ex.date_time || "")).getTime();
+                          if (isNaN(exStart)) continue;
+                          for (const exSvc of ex.services || []) {
+                            if (exSvc.staff_id !== pickedServiceStaffId) continue;
+                            const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+                            const exEnd = exStart + exDur;
+                            if (bookingStartMs < exEnd && exStart < newEnd) {
+                              const staffName = exSvc.staff?.name ||
+                                assignStaffList.find((s) => s.id === pickedServiceStaffId)?.name ||
+                                "nhân viên";
+                              const svcName = exSvc.service?.name || "Dịch vụ";
+                              const exCode = ex.code || "";
+                              const exCust = ex.customer?.name || "Khách";
+                              const fmtTime = (ms: number) => {
+                                const dt = new Date(ms);
+                                return `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+                              };
+                              setServicePickerError(
+                                `Không thể thêm dịch vụ vì trùng thời gian với lịch đã có.\n` +
+                                `${exCode ? `Lịch ${exCode}` : "Một lịch"}:\n` +
+                                `• Khách: ${exCust}\n` +
+                                `• Thợ: ${staffName}\n` +
+                                `• Dịch vụ: ${svcName}\n` +
+                                `• Thời gian: ${fmtTime(exStart)}–${fmtTime(exEnd)}\n` +
+                                `→ Trùng với dịch vụ mới (${fmtTime(bookingStartMs)}–${fmtTime(newEnd)}). Vui lòng chọn nhân viên khác.`
+                              );
+                              setAddingService(false);
+                              return;
+                            }
+                          }
+                        }
+                      }
+                    }
+
+                    // === No conflict → append the service to the booking ===
+                    // Build the updated services array: existing services + the
+                    // new one. The booking's existing services (with their staff)
+                    // are preserved; the new service gets the picked staff.
+                    const existingServices = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+                      service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || "",
+                      service_category_id: (s.service_category_id as string) || null,
+                      staff_id: (s.staff_id as string) || null,
+                    }));
+                    const newServiceEntry = {
+                      service_id: pickedService.id,
+                      service_category_id: serviceCategories.find((c) => c.name === selectedServiceGroup)?.id || null,
+                      staff_id: pickedServiceStaffId,
+                    };
+                    const updatedServices = [...existingServices, newServiceEntry];
+                    const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ services: updatedServices }),
+                    });
+                    const json = await res.json();
+                    if (!json.ok) throw new Error(json.error || "Không thể thêm dịch vụ");
+                    // Refresh the bookings list so the dialog re-renders with
+                    // the new service. The parent page owns the refetch.
+                    window.dispatchEvent(new Event("booking-updated"));
+                    setServicePickerOpen(false);
+                    setServicePickerStep("groups");
+                    setSelectedServiceGroup(null);
+                    setPickedService(null);
+                    setPickedServiceStaffId("");
+                  } catch (e) {
+                    setServicePickerError(e instanceof Error ? e.message : "Lỗi không xác định");
+                  } finally {
+                    setAddingService(false);
+                  }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                {addingService ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Đang lưu…
+                  </>
+                ) : (
+                  "Thêm dịch vụ"
+                )}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* === Per-service "Xếp nhân viên" reassign dialog ===
+          Opened by the yellow "Xếp nhân viên" button next to each service's
+          staff name. Lets the user reassign the staff for ONE service. Includes
+          a staff conflict check: if the picked staff is already booked at this
+          service's date/time (excluding this booking itself), the save is
+          BLOCKED with a detailed conflict message. On confirm, the booking's
+          services array is PUT-updated with the new staff_id for this one
+          service (others unchanged). */}
+      <Dialog
+        open={!!reassignStaffServiceId}
+        onOpenChange={(v) => {
+          if (!v) {
+            setReassignStaffServiceId(null);
+            setReassignStaffPickStaffId("");
+            setReassignStaffError("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm sm:max-w-sm p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm font-semibold">Xếp nhân viên</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1">
+            <p className="text-[11px] text-gray-500">
+              Chọn nhân viên thực hiện dịch vụ này. Bắt buộc.
+            </p>
+            <Select
+              value={reassignStaffPickStaffId}
+              onValueChange={(v) => {
+                setReassignStaffPickStaffId(v);
+                setReassignStaffError("");
+              }}
+            >
+              <SelectTrigger className="w-full h-8 text-xs" size="sm">
+                <SelectValue placeholder="Chọn nhân viên" />
+              </SelectTrigger>
+              <SelectContent>
+                {assignStaffList.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-500">Không có nhân viên ở cửa hàng này</div>
+                ) : (
+                  assignStaffList.map((st) => (
+                    <SelectItem key={st.id} value={st.id} className="text-xs">
+                      {st.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {!reassignStaffPickStaffId && (
+              <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
+            )}
+            {reassignStaffError && (
+              <div className="whitespace-pre-line mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                {reassignStaffError}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setReassignStaffServiceId(null);
+                setReassignStaffPickStaffId("");
+                setReassignStaffError("");
+              }}
+              disabled={reassignStaffSaving}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!reassignStaffPickStaffId || reassignStaffSaving}
+              onClick={async () => {
+                if (!reassignStaffServiceId || !reassignStaffPickStaffId) return;
+                setReassignStaffError("");
+                setReassignStaffSaving(true);
+                try {
+                  // === Staff conflict check ===
+                  // Find the service being reassigned to get its duration.
+                  const targetService = (booking.services as unknown as Array<Record<string, unknown>>)
+                    .find((s) => String(s.id ?? "") === reassignStaffServiceId);
+                  const duration = Number(
+                    (targetService?.service as { duration?: number } | null)?.duration || 60
+                  );
+                  const bookingStartMs = booking.date_time ? new Date(booking.date_time).getTime() : 0;
+                  if (bookingStartMs && booking.date_time) {
+                    const params = new URLSearchParams({ page: "1", limit: "200" });
+                    const d = new Date(booking.date_time);
+                    const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                    params.set("date_from", `${isoDay}T00:00:00+07:00`);
+                    params.set("date_to", `${isoDay}T23:59:59+07:00`);
+                    const branchId = booking.branchId || (booking.branch as { id?: string } | null)?.id || null;
+                    if (branchId) params.set("branch_id", branchId);
+                    const cfRes = await fetch(`/api/supabase/bookings?${params.toString()}`);
+                    const cfJson = await cfRes.json();
+                    if (cfJson.ok) {
+                      const exList = (cfJson.data?.items || cfJson.data || []) as Array<{
+                        id: string;
+                        code?: string | null;
+                        status?: string | null;
+                        date_time?: string | null;
+                        customer?: { name?: string } | null;
+                        services?: Array<{
+                          staff_id?: string | null;
+                          staff?: { name?: string } | null;
+                          service?: { name?: string; duration?: number } | null;
+                        }>;
+                      }>;
+                      const newEnd = bookingStartMs + duration * 60 * 1000;
+                      for (const ex of exList) {
+                        if (ex.id === booking.id) continue;
+                        if (ex.status === "cancelled" || ex.status === "no_show") continue;
+                        const exStart = new Date(String(ex.date_time || "")).getTime();
+                        if (isNaN(exStart)) continue;
+                        for (const exSvc of ex.services || []) {
+                          if (exSvc.staff_id !== reassignStaffPickStaffId) continue;
+                          const exDur = (Number(exSvc.service?.duration) || 60) * 60 * 1000;
+                          const exEnd = exStart + exDur;
+                          if (bookingStartMs < exEnd && exStart < newEnd) {
+                            const staffName = exSvc.staff?.name ||
+                              assignStaffList.find((s) => s.id === reassignStaffPickStaffId)?.name ||
+                              "nhân viên";
+                            const svcName = exSvc.service?.name || "Dịch vụ";
+                            const exCode = ex.code || "";
+                            const exCust = ex.customer?.name || "Khách";
+                            const fmtTime = (ms: number) => {
+                              const dt = new Date(ms);
+                              return `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+                            };
+                            setReassignStaffError(
+                              `Không thể xếp nhân viên vì trùng thời gian với lịch đã có.\n` +
+                              `${exCode ? `Lịch ${exCode}` : "Một lịch"}:\n` +
+                              `• Khách: ${exCust}\n` +
+                              `• Thợ: ${staffName}\n` +
+                              `• Dịch vụ: ${svcName}\n` +
+                              `• Thời gian: ${fmtTime(exStart)}–${fmtTime(exEnd)}\n` +
+                              `→ Trùng với dịch vụ này (${fmtTime(bookingStartMs)}–${fmtTime(newEnd)}). Vui lòng chọn nhân viên khác.`
+                            );
+                            setReassignStaffSaving(false);
+                            return;
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // === No conflict → PUT the updated services array ===
+                  // Replace ONLY this service's staff_id; keep all others.
+                  const updatedServices = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+                    service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || "",
+                    service_category_id: (s.service_category_id as string) || null,
+                    staff_id: String(s.id ?? "") === reassignStaffServiceId
+                      ? reassignStaffPickStaffId
+                      : (s.staff_id as string) || null,
+                  }));
+                  const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ services: updatedServices }),
+                  });
+                  const json = await res.json();
+                  if (!json.ok) throw new Error(json.error || "Không thể cập nhật nhân viên");
+                  window.dispatchEvent(new Event("booking-updated"));
+                  setReassignStaffServiceId(null);
+                  setReassignStaffPickStaffId("");
+                  setReassignStaffError("");
+                } catch (e) {
+                  setReassignStaffError(e instanceof Error ? e.message : "Lỗi không xác định");
+                } finally {
+                  setReassignStaffSaving(false);
+                }
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {reassignStaffSaving ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Đang lưu…
+                </>
+              ) : (
+                "Lưu"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* === Per-product "Xếp nhân viên" dialog ===
+          Opened by the "Xếp nhân viên" button in each product row. Products
+          don't have a staff in the booking_services sense — this just records
+          the staff who sold/advised on the product (stored in the
+          selectedProducts entry's `staffName` field, used only for display +
+          sent as staffName in the invoice item on confirm). No conflict check
+          (products have no time slot). */}
+      <Dialog
+        open={reassignProductIdx !== null}
+        onOpenChange={(v) => {
+          if (!v) {
+            setReassignProductIdx(null);
+            setReassignProductStaffId("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-sm sm:max-w-sm p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm font-semibold">Xếp nhân viên</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1">
+            <p className="text-[11px] text-gray-500">
+              Chọn nhân viên tư vấn/bán sản phẩm này.
+            </p>
+            <Select
+              value={reassignProductStaffId}
+              onValueChange={setReassignProductStaffId}
+            >
+              <SelectTrigger className="w-full h-8 text-xs" size="sm">
+                <SelectValue placeholder="Chọn nhân viên" />
+              </SelectTrigger>
+              <SelectContent>
+                {assignStaffList.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-500">Không có nhân viên ở cửa hàng này</div>
+                ) : (
+                  assignStaffList.map((st) => (
+                    <SelectItem key={st.id} value={st.id} className="text-xs">
+                      {st.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setReassignProductIdx(null);
+                setReassignProductStaffId("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!reassignProductStaffId}
+              onClick={() => {
+                if (reassignProductIdx === null) return;
+                const staffName = assignStaffList.find((s) => s.id === reassignProductStaffId)?.name || null;
+                setSelectedProducts((prev) => prev.map((p, i) =>
+                  i === reassignProductIdx ? { ...p, staffName } : p
+                ));
+                setReassignProductIdx(null);
+                setReassignProductStaffId("");
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              Lưu
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -29,8 +29,16 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const { bookingId, slotIndex, status: requestedStatus } = body;
-    const actorStaffId = getCurrentStaffId(request) ||
-      (typeof body.actor_staff_id === "string" && body.actor_staff_id.trim() ? body.actor_staff_id.trim() : null);
+    // Validate actor_staff_id as a UUID — the staff table's `id` column is a
+    // UUID, so a non-UUID value (e.g. a username string) would poison the
+    // activity-history staff lookup (PostgREST's .in("id", [...]) fails when
+    // any value can't be cast to UUID). The auth cookie always contains the
+    // UUID; the body fallback should too, but we validate defensively.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const bodyActorStaffId = typeof body.actor_staff_id === "string" && UUID_RE.test(body.actor_staff_id.trim())
+      ? body.actor_staff_id.trim()
+      : null;
+    const actorStaffId = getCurrentStaffId(request) || bodyActorStaffId;
 
     if (!bookingId || typeof slotIndex !== "number" || !requestedStatus) {
       return NextResponse.json(

@@ -259,6 +259,28 @@ function BookingPageContent() {
     return ta - tb;
   });
 
+  // Listen for "booking-updated" events dispatched by the InvoiceDialog when a
+  // service is added or a staff is reassigned (the dialog PUT-updates the
+  // booking's services array directly). On this event, refetch the bookings
+  // list AND update the `invoiceBooking` state so the dialog re-renders with
+  // the fresh booking data (new service list, updated staff names).
+  useEffect(() => {
+    const onBookingUpdated = () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+    };
+    window.addEventListener("booking-updated", onBookingUpdated);
+    return () => window.removeEventListener("booking-updated", onBookingUpdated);
+  }, [queryClient]);
+  // When the bookings list refetches, sync the `invoiceBooking` state with the
+  // fresh booking object (so the InvoiceDialog sees the updated services/staff).
+  useEffect(() => {
+    if (!invoiceBooking) return;
+    const fresh = allBookings.find((b) => b.id === invoiceBooking.id);
+    if (fresh && fresh !== invoiceBooking) {
+      setInvoiceBooking(fresh);
+    }
+  }, [allBookings, invoiceBooking]);
+
   // Filter bookings by selected staff — if a staff is selected, only show
   // bookings that have at least one service assigned to that staff.
   const staffFiltered: Booking[] = filterStaffId
