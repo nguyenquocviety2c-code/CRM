@@ -75,12 +75,13 @@ export function InvoiceActivityTable({ invoiceId }: InvoiceActivityTableProps) {
   return (
     <div className="space-y-2">
       <div className="text-sm font-semibold text-gray-900">Lịch sử thao tác</div>
-      {/* Plain <table> (not the shadcn <Table> wrapper) to avoid the
-          overflow-x-auto container that adds an unnecessary horizontal
-          scrollbar on this compact 3-column table. */}
-      <div className="overflow-hidden rounded-lg border border-gray-200">
+      {/* Table wrapper with max-height + overflow-y-auto so the activity
+          history scrolls internally when there are many rows (e.g. a
+          multi-customer booking with 10+ checkin/checkout/revert actions).
+          The header row is sticky-top so it stays visible during scroll. */}
+      <div className="rounded-lg border border-gray-200 max-h-60 overflow-y-auto">
         <table className="w-full caption-bottom text-sm table-fixed">
-          <thead>
+          <thead className="sticky top-0 z-10">
             <tr className="bg-gray-50 border-b">
               <th className="h-9 px-3 text-left text-xs font-semibold text-gray-700 w-[32%]">
                 Hành động
