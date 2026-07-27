@@ -349,7 +349,7 @@ function DialogContent({
         data-slot="dialog-content"
         data-minimized={minimized ? "true" : undefined}
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed z-[100] grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed z-[100] flex flex-col w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg overflow-hidden",
           minimized
             ? "bottom-4 left-[50%] top-auto translate-x-[-50%] translate-y-0"
             : "top-[50%] left-[50%] translate-x-[-50%] translate-y-[-50%]",
@@ -369,7 +369,13 @@ function DialogContent({
         onPointerDown={onPointerDown}
         {...props}
       >
-        {children}
+        {/* Content wrapper — flex-1 + overflow-y-auto so when the dialog is
+            resized smaller (vertically), the content scrolls instead of being
+            clipped. This is the key fix: previously `grid` layout with no
+            overflow meant content below the fold was permanently hidden. */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {children}
+        </div>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

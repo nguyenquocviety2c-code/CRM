@@ -769,8 +769,8 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         review → the invoice dialog re-appears below. */}
     {!showReview && (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="order-dialog-dense !max-w-[747px] p-0 overflow-hidden">
-        <DialogHeader className="px-5 pt-4 pb-1.5">
+      <DialogContent className="order-dialog-dense !max-w-[560px] p-0 overflow-hidden">
+        <DialogHeader className="px-4 pt-3 pb-1.5">
           <DialogTitle className="text-lg font-semibold">
             Hóa đơn
             {isCheckout && existingInvoice?.code ? ` · ${existingInvoice.code}` : ""}
@@ -786,8 +786,11 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         {/* Single-column layout: the photo attachment section that used to
             live on the right was removed per request — the dialog is now one
             scrollable column with customer info → services → products →
-            payment method → actions. */}
-        <div className="px-5 pb-4 space-y-2 max-h-[60vh] overflow-y-auto">
+            payment method → actions. The outer DialogContent wrapper already
+            provides flex-1 + overflow-y-auto, so this inner div just needs
+            padding + spacing (no max-h — the dialog's own resize controls the
+            scroll area). */}
+        <div className="px-4 pb-4 space-y-2">
 
           {/* Customer info */}
           <div className="rounded-lg border bg-gray-50 p-2.5 space-y-0 text-sm">
