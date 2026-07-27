@@ -1201,7 +1201,7 @@ function CustomerDayRangeGrid({
 
   return (
     <div ref={containerRef} className="border bg-white flex flex-col relative" style={{ maxHeight: "calc(100vh - 200px)" }}>
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto time-grid-scroll" data-grid-resizable>
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto isolate time-grid-scroll" data-grid-resizable>
         <div style={needsScroll ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%" }}>
           {/* Header: "Giờ" + day columns — sticky at top during vertical scroll.
               z-60 so hover popovers (z-50) from top-row segment cards never

@@ -647,7 +647,7 @@ export function BookingStaffView({
             keeps the table within the viewport so the OUTER page doesn't
             scroll — only this inner container does (per user request:
             "bỏ scroll lăn lên xuống ngoài cùng, chỉ giữ lại scroll trong bảng"). */}
-        <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 220px)" }}>
+        <div className="overflow-auto isolate" style={{ maxHeight: "calc(100vh - 220px)" }}>
           <div style={canResizeTable ? { width: `${totalWidth}px`, minWidth: `${totalWidth}px` } : { width: "100%", minWidth: "100%" }}>
             {/* Header row: "Giờ" + staff names. Sticky-top + sticky-left.
                 z-60 so hovered segment blocks (zIndex 50) and their hover
@@ -1755,7 +1755,7 @@ function DayRangeGrid({
 
   return (
     <div className="border bg-white flex flex-col" ref={containerRef} style={{ maxHeight: "calc(100vh - 200px)" }}>
-      <div className="flex-1 min-h-0 overflow-auto" data-grid-resizable>
+      <div className="flex-1 min-h-0 overflow-auto isolate" data-grid-resizable>
         <div
           style={
             needsScroll
