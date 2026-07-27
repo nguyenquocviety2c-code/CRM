@@ -188,13 +188,41 @@ export function BookingTimeGrid({
       segment={segment}
       fullWidth
       onClick={() => {
-        // checkout (paid) → full paid invoice view; checkin (being served) →
-        // invoice/payment dialog; otherwise → edit booking dialog. Mirrors
-        // the staff-view (View nhân viên) click logic so both views behave
-        // identically when a checkin booking is clicked.
+        // For multi-customer bookings, check the PER-CUSTOMER slot status.
+        // When this segment's slot is "checkin" AND the booking has a paid
+        // invoice (another slot is "checkout"), open the invoice in PER-
+        // CUSTOMER mode (pass slotIndex) so the user sees only this customer's
+        // services + can pay for them individually. Mirrors the View nhân viên
+        // SegmentBlock logic.
         const status = segment.booking.status;
         const isPaid = status === "checkout";
         const isCheckin = status === "checkin";
+        const parsed = parseMultiCustomerNote(segment.booking.note);
+        if (parsed && parsed.slots.length > 0) {
+          const svcSlots = parsed.serviceSlots;
+          const slotIdx = svcSlots && segment.segmentIndex < svcSlots.length
+            ? svcSlots[segment.segmentIndex]
+            : segment.segmentIndex;
+          const slotSt = parsed.slotStatuses && slotIdx < parsed.slotStatuses.length
+            ? parsed.slotStatuses[slotIdx]
+            : status;
+          const hasPaidSlot = parsed.slotStatuses &&
+            parsed.slotStatuses.some((s) => s === "checkout");
+          if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
+            onShowInvoice(segment.booking, slotIdx);
+            return;
+          }
+          if (slotSt === "checkin" && onShowInvoice) {
+            onShowInvoice(segment.booking);
+            return;
+          }
+          if (slotSt === "checkout" && onShowInvoice) {
+            onShowInvoice(segment.booking);
+            return;
+          }
+          onBookingClick?.(segment.booking);
+          return;
+        }
         if ((isPaid || isCheckin) && onShowInvoice) onShowInvoice(segment.booking);
         else onBookingClick?.(segment.booking);
       }}
