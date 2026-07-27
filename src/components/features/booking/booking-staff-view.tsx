@@ -978,12 +978,6 @@ export function BookingStaffView({
                         const status = seg.booking.status;
                         const isPaid = status === "checkout";
                         const isCheckin = status === "checkin";
-                        // For multi-customer bookings, check the PER-CUSTOMER
-                        // slot status. When this segment's slot is "checkin"
-                        // AND the booking has a paid invoice (another slot is
-                        // "checkout"), open the invoice in PER-CUSTOMER mode
-                        // (pass slotIndex) so the user sees only this
-                        // customer's services + can pay for them individually.
                         const parsed = parseMultiCustomerNote(seg.booking.note);
                         if (parsed && parsed.slots.length > 0) {
                           const svcSlots = parsed.serviceSlots;
@@ -993,8 +987,17 @@ export function BookingStaffView({
                           const slotSt = parsed.slotStatuses && slotIdx < parsed.slotStatuses.length
                             ? parsed.slotStatuses[slotIdx]
                             : status;
-                          const hasPaidSlot = parsed.slotStatuses &&
-                            parsed.slotStatuses.some((s) => s === "checkout");
+                          // A "paid invoice exists" when EITHER:
+                          // 1. Another slot is already "checkout" in slotStatuses, OR
+                          // 2. booking.status === "checkout" (the booking-level status
+                          //    was set to checkout when the first customer paid — this
+                          //    happens even when slotStatuses don't all show "checkout"
+                          //    because the invoices API sets booking.status directly).
+                          // 3. booking.invoice?.id exists (an invoice is linked).
+                          const hasPaidSlot = (parsed.slotStatuses &&
+                            parsed.slotStatuses.some((s) => s === "checkout")) ||
+                            isPaid ||
+                            !!seg.booking.invoice?.id;
                           if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
                             onShowInvoice(seg.booking, slotIdx);
                             return;

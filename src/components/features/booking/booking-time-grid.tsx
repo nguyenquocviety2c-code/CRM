@@ -206,8 +206,10 @@ export function BookingTimeGrid({
           const slotSt = parsed.slotStatuses && slotIdx < parsed.slotStatuses.length
             ? parsed.slotStatuses[slotIdx]
             : status;
-          const hasPaidSlot = parsed.slotStatuses &&
-            parsed.slotStatuses.some((s) => s === "checkout");
+          const hasPaidSlot = (parsed.slotStatuses &&
+            parsed.slotStatuses.some((s) => s === "checkout")) ||
+            isPaid ||
+            !!segment.booking.invoice?.id;
           if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
             onShowInvoice(segment.booking, slotIdx);
             return;
