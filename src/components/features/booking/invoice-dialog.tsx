@@ -769,7 +769,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         review → the invoice dialog re-appears below. */}
     {!showReview && (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="order-dialog-dense !max-w-[560px] p-0 overflow-hidden">
+      <DialogContent className="order-dialog-dense !max-w-[560px] p-0 overflow-hidden" storageKey="invoice">
         <DialogHeader className="px-4 pt-3 pb-1.5">
           <DialogTitle className="text-lg font-semibold">
             Hóa đơn
@@ -1247,7 +1247,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
           dialog again). "Hủy" exits review → the invoice dialog re-appears.
           "Hoàn tất" performs the checkout. */}
       <Dialog open={showReview} onOpenChange={(v) => { if (!v) onClose(); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" storageKey="invoice-review">
           <DialogHeader>
             <DialogTitle>Thanh toán</DialogTitle>
           </DialogHeader>

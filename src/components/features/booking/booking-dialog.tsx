@@ -2408,6 +2408,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           ? "!max-w-[280px] !w-[280px] !min-w-0 p-0 overflow-hidden"
           : "!max-w-[780px] w-full !min-w-[600px] !max-h-[min(480px,calc(100vh-2rem))] p-0 overflow-hidden flex flex-col"}
         minimized={minimized}
+        storageKey="booking"
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => e.preventDefault()}

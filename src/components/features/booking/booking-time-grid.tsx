@@ -189,11 +189,10 @@ export function BookingTimeGrid({
       fullWidth
       onClick={() => {
         // For multi-customer bookings, check the PER-CUSTOMER slot status.
-        // When this segment's slot is "checkin" AND the booking has a paid
-        // invoice (another slot is "checkout"), open the invoice in PER-
-        // CUSTOMER mode (pass slotIndex) so the user sees only this customer's
-        // services + can pay for them individually. Mirrors the View nhân viên
-        // SegmentBlock logic.
+        // When this segment's slot is "checkin" AND only 1 customer is checked
+        // in + booking has a paid invoice → open per-customer dialog (slotIndex).
+        // When 2+ customers are checked in → open combined dialog (no slotIndex,
+        // shows ALL checkin/checkout services). Mirrors View nhân viên logic.
         const status = segment.booking.status;
         const isPaid = status === "checkout";
         const isCheckin = status === "checkin";
@@ -210,7 +209,10 @@ export function BookingTimeGrid({
             parsed.slotStatuses.some((s) => s === "checkout")) ||
             isPaid ||
             !!segment.booking.invoice?.id;
-          if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
+          const checkinCount = parsed.slotStatuses
+            ? parsed.slotStatuses.filter((s) => s === "checkin").length
+            : 0;
+          if (slotSt === "checkin" && hasPaidSlot && checkinCount === 1 && onShowInvoice) {
             onShowInvoice(segment.booking, slotIdx);
             return;
           }

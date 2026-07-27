@@ -138,17 +138,27 @@ function useDraggable(minimized: boolean) {
  *
  * `contentRef` is shared with the drag hook (both target the same content el).
  */
-function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
+function useResizable(contentRef: React.RefObject<HTMLDivElement | null>, storageKey?: string) {
   // `resize_table` permission gate. read once; permission changes are rare and
   // a re-mount (after refreshSession) picks up new values.
   const canResize = useAuthStore((s) => s.hasPermission("resize_table"))
   // Base width captured on first resize (the dialog's natural CSS width, BEFORE
   // any zoom is applied — used as the denominator for zoom factor calculation).
   const baseSizeRef = React.useRef<{ w: number; h: number } | null>(null)
-  const [size, setSize] = React.useState<{ width: number | null; height: number | null; zoom: number }>({
-    width: null,
-    height: null,
-    zoom: 1,
+  // Initialize size from localStorage so the dialog opens at the last-saved
+  // size. The key is per-dialog-type (passed via the `storageKey` prop on
+  // DialogContent). When no saved size exists, defaults to null (natural CSS).
+  const storageId = storageKey ? `crm-dialog-size-${storageKey}` : null
+  const [size, setSize] = React.useState<{ width: number | null; height: number | null; zoom: number }>(() => {
+    if (!storageId || typeof window === "undefined") return { width: null, height: null, zoom: 1 }
+    try {
+      const saved = localStorage.getItem(storageId)
+      if (saved) {
+        const parsed = JSON.parse(saved) as { width: number; height: number; zoom: number }
+        if (parsed.width && parsed.height) return parsed
+      }
+    } catch { /* best-effort */ }
+    return { width: null, height: null, zoom: 1 }
   })
   const resizeRef = React.useRef<{
     startX: number;
@@ -216,6 +226,10 @@ function useResizable(contentRef: React.RefObject<HTMLDivElement | null>) {
       const h = parseFloat(el.style.height) || r.baseH
       const zoom = base && base.w > 0 ? w / base.w : 1
       setSize({ width: w, height: h, zoom })
+      // Persist to localStorage so the dialog reopens at this size.
+      if (storageId) {
+        try { localStorage.setItem(storageId, JSON.stringify({ width: w, height: h, zoom })); } catch { /* best-effort */ }
+      }
     }
     resizeRef.current = null
     const el2 = contentRef.current
@@ -327,6 +341,7 @@ function DialogContent({
   children,
   showCloseButton = true,
   minimized = false,
+  storageKey,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -334,11 +349,15 @@ function DialogContent({
    *  (used by the Booking dialog's minimize feature). Drag is disabled and
    *  the offset resets. */
   minimized?: boolean
+  /** When set, the dialog's resized {width,height,zoom} is persisted to
+   *  localStorage under this key so the dialog reopens at the same size next
+   *  time. Use a unique string per dialog TYPE (e.g. "invoice", "booking"). */
+  storageKey?: string
 }) {
   const { offset, contentRef, onPointerDown } = useDraggable(minimized)
   // Resize is only enabled for non-minimized dialogs AND when the staff has
   // the "resize_table" permission (checked inside the hook).
-  const { canResize, size, startResize } = useResizable(contentRef)
+  const { canResize, size, startResize } = useResizable(contentRef, storageKey)
   const showResizeHandles = canResize && !minimized
 
   return (

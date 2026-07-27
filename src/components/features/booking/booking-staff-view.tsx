@@ -998,11 +998,23 @@ export function BookingStaffView({
                             parsed.slotStatuses.some((s) => s === "checkout")) ||
                             isPaid ||
                             !!seg.booking.invoice?.id;
-                          if (slotSt === "checkin" && hasPaidSlot && onShowInvoice) {
+                          // Count how many slots are currently "checkin". When 2+
+                          // customers are checked in, open the invoice in COMBINED
+                          // mode (no slotIndex) so ALL their services show together.
+                          // When only 1 customer is checked in + booking has a paid
+                          // invoice, open in per-customer mode (slotIndex) so only
+                          // that customer's services show.
+                          const checkinCount = parsed.slotStatuses
+                            ? parsed.slotStatuses.filter((s) => s === "checkin").length
+                            : 0;
+                          if (slotSt === "checkin" && hasPaidSlot && checkinCount === 1 && onShowInvoice) {
+                            // Single checkin customer + paid invoice → per-customer dialog
                             onShowInvoice(seg.booking, slotIdx);
                             return;
                           }
                           if (slotSt === "checkin" && onShowInvoice) {
+                            // 2+ checkin customers OR no paid invoice → combined dialog
+                            // (shows all checkin/checkout services)
                             onShowInvoice(seg.booking);
                             return;
                           }
