@@ -847,6 +847,7 @@ function BookingPageContent() {
         return showFullPaidView ? (
           <PaidInvoiceView
             invoiceId={invoiceBooking.invoice.id}
+            bookingId={invoiceBooking.id}
             customerName={invoiceBooking.customer?.name}
             customerPhone={invoiceBooking.customer?.phone}
             bookingCode={invoiceBooking.code}

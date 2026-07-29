@@ -52,6 +52,13 @@ interface PaidInvoiceViewProps {
   customerPhone?: string;
   bookingCode?: string | null;
   onClose: () => void;
+  /** When set, the view fetches ALL completed invoices for this booking_id
+   *  and MERGES their items into a single receipt. Used for multi-customer
+   *  "Cùng lịch" bookings where each customer paid separately (each payment
+   *  creates/updates an invoice). When omitted, only the single `invoiceId`
+   *  is shown (single-customer bookings, or bookings where all customers paid
+   *  in one invoice). */
+  bookingId?: string;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -68,7 +75,10 @@ export function PaidInvoiceView({
   customerPhone,
   bookingCode,
   onClose,
+  bookingId,
 }: PaidInvoiceViewProps) {
+  // Fetch the primary invoice (always — used for the header code, photos,
+  // activity history, etc.).
   const { data: invoice, isLoading } = useQuery<SavedInvoice>({
     queryKey: ["paid-invoice-view", invoiceId],
     queryFn: async () => {
@@ -78,19 +88,72 @@ export function PaidInvoiceView({
     },
   });
 
+  // When `bookingId` is set, ALSO fetch ALL completed invoices for this
+  // booking so we can merge their items into a single receipt. This handles
+  // multi-customer "Cùng lịch" bookings where each customer paid separately
+  // (per-customer mode appends to the same invoice, but if the booking was
+  // edited/re-paid, or invoices were created independently, multiple invoices
+  // may exist). We merge items + sum totals + collect all photos.
+  const { data: allInvoices } = useQuery<SavedInvoice[]>({
+    queryKey: ["paid-invoice-view-all-by-booking", bookingId],
+    queryFn: async () => {
+      if (!bookingId) return [];
+      const res = await fetch(`/api/supabase/invoices?booking_id=${encodeURIComponent(bookingId)}&limit=100`);
+      const json = await res.json();
+      const list = (json.ok && Array.isArray(json.data) ? json.data : []) as SavedInvoice[];
+      // Only keep COMPLETED (paid) invoices — pending ones belong to the
+      // editable InvoiceDialog, not this read-only paid view.
+      return list.filter((inv) => inv.status === "completed");
+    },
+    enabled: !!bookingId,
+  });
+
   const fmt = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
 
-  const items = invoice?.items || [];
+  // === Merge items from all invoices (when bookingId is set) ===
+  // Each invoice's items come from its note JSON (parsed by the invoices API
+  // into the `items` field). We concatenate them in invoice order (oldest
+  // first by created_at) so the receipt reads chronologically.
+  const mergedInvoices = bookingId && allInvoices && allInvoices.length > 0
+    ? [...allInvoices].sort((a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      )
+    : invoice ? [invoice] : [];
+
+  const items = mergedInvoices.flatMap((inv) => inv.items || []);
   const subtotal = items.reduce(
     (s, it) => s + (Number(it.total ?? it.price) || 0),
     0
   );
-  const discount = Number(invoice?.discount) || 0;
-  const tip = Number(invoice?.tip) || 0;
-  const finalAmount = Number(invoice?.final_amount) || 0;
-  const paidTime = invoice?.created_at
-    ? format(new Date(invoice.created_at), "HH:mm dd/MM/yyyy", { locale: vi })
+  const discount = mergedInvoices.reduce((s, inv) => s + (Number(inv.discount) || 0), 0);
+  const tip = mergedInvoices.reduce((s, inv) => s + (Number(inv.tip) || 0), 0);
+  const finalAmount = mergedInvoices.reduce((s, inv) => s + (Number(inv.final_amount) || 0), 0);
+  // Cash vs transfer totals across all merged invoices. Each invoice's
+  // final_amount is attributed to its payment_method. When multiple invoices
+  // have different methods, both columns show their respective sums.
+  const cashTotal = mergedInvoices
+    .filter((inv) => inv.payment_method === "cash")
+    .reduce((s, inv) => s + (Number(inv.final_amount) || 0), 0);
+  const transferTotal = mergedInvoices
+    .filter((inv) => inv.payment_method === "transfer")
+    .reduce((s, inv) => s + (Number(inv.final_amount) || 0), 0);
+  // Photos: merge from all invoices (deduplicated by URL).
+  const allPhotos = Array.from(new Set(mergedInvoices.flatMap((inv) => inv.photos || [])));
+  // Use the EARLIEST paid invoice's created_at as the "paid time" (first
+  // payment), so the receipt shows when the first customer paid.
+  const paidTimeInvoice = mergedInvoices[0];
+  const paidTime = paidTimeInvoice?.created_at
+    ? format(new Date(paidTimeInvoice.created_at), "HH:mm dd/MM/yyyy", { locale: vi })
     : "";
+  // Display the primary invoice's code in the header (or fall back to the
+  // booking code). When multiple invoices exist, show "Mã HD1, HD2, ..." so
+  // the cashier knows there are multiple receipts.
+  const invoiceCodes = mergedInvoices
+    .map((inv) => inv.code)
+    .filter(Boolean) as string[];
+  const headerCode = invoiceCodes.length > 0
+    ? (invoiceCodes.length === 1 ? invoiceCodes[0] : invoiceCodes.join(", "))
+    : (bookingCode || "—");
 
   const [selectedPhotoIndices, setSelectedPhotoIndices] = useState<number[]>([]);
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
@@ -98,10 +161,13 @@ export function PaidInvoiceView({
 
   return (
     <div className="fixed top-14 right-0 bottom-0 z-50 overflow-y-auto bg-white shadow-2xl" style={{ left: "12rem" }}>
-      {/* Top bar — title + invoice code + close button on same line */}
+      {/* Top bar — title + invoice code(s) + close button on same line.
+          When bookingId is set and multiple invoices exist, the header shows
+          ALL invoice codes joined by ", " so the cashier knows there are
+          multiple receipts merged into this view. */}
       <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-8 py-2 border-b">
         <h1 className="text-lg font-bold text-gray-900">
-          Hóa đơn #{invoice?.code || bookingCode || "—"}
+          Hóa đơn #{headerCode}
         </h1>
         <button
           onClick={onClose}
@@ -116,7 +182,7 @@ export function PaidInvoiceView({
       <div className="px-8 py-3">
         {isLoading ? (
           <div className="py-20 text-center text-gray-400">Đang tải...</div>
-        ) : !invoice ? (
+        ) : mergedInvoices.length === 0 ? (
           <div className="py-20 text-center text-gray-400">
             Không tìm thấy hóa đơn
           </div>
@@ -134,6 +200,11 @@ export function PaidInvoiceView({
               <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-0.5 text-xs font-semibold text-green-700">
                 Đã thanh toán
               </span>
+              {mergedInvoices.length > 1 && (
+                <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-0.5 text-xs font-medium text-blue-700">
+                  Gộp {mergedInvoices.length} hóa đơn
+                </span>
+              )}
             </div>
 
             {/* Items table */}
@@ -166,19 +237,22 @@ export function PaidInvoiceView({
 
             {/* 4-column summary: KM + Thưởng + Phương thức + Thành tiền */}
             <div className="mb-3 grid grid-cols-4 gap-3">
-              {/* Col 1: Chương trình khuyến mãi */}
+              {/* Col 1: Chương trình khuyến mãi — show the FIRST invoice's
+                  promotion (if any). When multiple invoices each have their
+                  own promotion, only the first is shown for simplicity; the
+                  total discount is already summed in `discount`. */}
               <div className="rounded-lg bg-blue-50 px-3 py-1.5 text-[13px] leading-tight">
                 <div className="mb-0.5 font-semibold text-gray-700">Chương trình khuyến mãi</div>
-                {invoice.promotion ? (
+                {mergedInvoices[0]?.promotion ? (
                   <div className="text-gray-900">
                     <div className="font-medium">
-                      {invoice.promotion.name}
-                      <span className="ml-1 text-gray-500">({invoice.promotion.discountValue}%)</span>
+                      {mergedInvoices[0].promotion.name}
+                      <span className="ml-1 text-gray-500">({mergedInvoices[0].promotion.discountValue}%)</span>
                     </div>
-                    <div className="text-gray-600">Giảm: {fmt(invoice.promotion.discountAmount || discount)}</div>
+                    <div className="text-gray-600">Giảm: {fmt(discount)}</div>
                   </div>
                 ) : (
-                  <div className="text-gray-400">Không áp dụng</div>
+                  <div className="text-gray-400">{discount > 0 ? `Giảm: ${fmt(discount)}` : "Không áp dụng"}</div>
                 )}
               </div>
 
@@ -188,20 +262,22 @@ export function PaidInvoiceView({
                 <div className="text-gray-900">{tip > 0 ? `+${fmt(tip)}` : "0"}</div>
               </div>
 
-              {/* Col 3: Phương thức thanh toán */}
+              {/* Col 3: Phương thức thanh toán — when multiple invoices,
+                  sum the cash vs transfer amounts across all invoices so the
+                  cashier sees the total paid in each method. */}
               <div className="rounded-lg bg-blue-50 px-3 py-1.5 text-[13px] leading-tight">
                 <div className="mb-0.5 font-semibold text-gray-700">Phương thức thanh toán</div>
                 <div className="space-y-0 text-gray-900">
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Tiền mặt:</span>
-                    <span className={invoice.payment_method === "cash" ? "font-medium" : "text-gray-400"}>
-                      {invoice.payment_method === "cash" ? fmt(finalAmount) : "0"}
+                    <span className={cashTotal > 0 ? "font-medium" : "text-gray-400"}>
+                      {fmt(cashTotal)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Chuyển khoản:</span>
-                    <span className={invoice.payment_method === "transfer" ? "font-medium" : "text-gray-400"}>
-                      {invoice.payment_method === "transfer" ? fmt(finalAmount) : "0"}
+                    <span className={transferTotal > 0 ? "font-medium" : "text-gray-400"}>
+                      {fmt(transferTotal)}
                     </span>
                   </div>
                 </div>
@@ -260,9 +336,14 @@ export function PaidInvoiceView({
                               })
                           )
                         );
-                        const existing = invoice.photos || [];
+                        const existing = allPhotos;
                         const updated = [...existing, ...readFiles];
-                        const res = await fetch(`/api/supabase/invoices/${invoice.id}`, {
+                        // Upload to the PRIMARY invoice (first merged invoice).
+                        // When multiple invoices exist, photos are attributed to
+                        // the primary one for simplicity.
+                        const primaryInv = mergedInvoices[0];
+                        if (!primaryInv) return;
+                        const res = await fetch(`/api/supabase/invoices/${primaryInv.id}`, {
                           method: "PUT",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ photos: updated }),
@@ -277,6 +358,7 @@ export function PaidInvoiceView({
                           );
                           // Invalidate for background refetch + cross-tab sync.
                           queryClient.invalidateQueries({ queryKey: ["paid-invoice-view", invoiceId] });
+                          queryClient.invalidateQueries({ queryKey: ["paid-invoice-view-all-by-booking", bookingId] });
                           queryClient.invalidateQueries({ queryKey: ["customer-info-invoices"] });
                         }
                       } catch {
@@ -289,9 +371,8 @@ export function PaidInvoiceView({
                 </label>
                 <button
                   onClick={() => {
-                    const allPhotos = invoice.photos || [];
-                    const allSelected = selectedPhotoIndices.length === allPhotos.length && allPhotos.length > 0;
-                    setSelectedPhotoIndices(allSelected ? [] : allPhotos.map((_, i) => i));
+                    const allSel = selectedPhotoIndices.length === allPhotos.length && allPhotos.length > 0;
+                    setSelectedPhotoIndices(allSel ? [] : allPhotos.map((_, i) => i));
                   }}
                   className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50"
                 >
@@ -301,8 +382,10 @@ export function PaidInvoiceView({
                 <button
                   onClick={async () => {
                     if (selectedPhotoIndices.length === 0) return;
-                    const remaining = (invoice.photos || []).filter((_, idx) => !selectedPhotoIndices.includes(idx));
-                    await fetch(`/api/supabase/invoices/${invoice.id}`, {
+                    const remaining = allPhotos.filter((_, idx) => !selectedPhotoIndices.includes(idx));
+                    const primaryInv = mergedInvoices[0];
+                    if (!primaryInv) return;
+                    await fetch(`/api/supabase/invoices/${primaryInv.id}`, {
                       method: "PUT",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ photos: remaining }),
@@ -316,6 +399,7 @@ export function PaidInvoiceView({
                       (old) => (old ? { ...old, photos: remaining } : old)
                     );
                     queryClient.invalidateQueries({ queryKey: ["paid-invoice-view", invoiceId] });
+                    queryClient.invalidateQueries({ queryKey: ["paid-invoice-view-all-by-booking", bookingId] });
                     queryClient.invalidateQueries({ queryKey: ["customer-info-invoices"] });
                   }}
                   disabled={selectedPhotoIndices.length === 0}
@@ -330,9 +414,9 @@ export function PaidInvoiceView({
                   Xóa{selectedPhotoIndices.length > 0 ? ` (${selectedPhotoIndices.length})` : ""}
                 </button>
               </div>
-              {invoice.photos && invoice.photos.length > 0 && (
+              {allPhotos.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {invoice.photos.map((src, idx) => (
+                  {allPhotos.map((src, idx) => (
                     <div key={idx} className="relative h-20 w-20 overflow-hidden rounded-lg border">
                       <input
                         type="checkbox"
@@ -358,9 +442,20 @@ export function PaidInvoiceView({
               )}
             </div>
 
-            {/* Activity history — at the bottom */}
-            <div className="border-t pt-2">
-              <InvoiceActivityTable invoiceId={invoice.id} />
+            {/* Activity history — at the bottom. When multiple invoices
+                are merged, show the activity table for EACH invoice so the
+                cashier sees the full timeline across all payments. */}
+            <div className="border-t pt-2 space-y-3">
+              {mergedInvoices.map((inv, invIdx) => (
+                <div key={inv.id}>
+                  {mergedInvoices.length > 1 && (
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Lịch sử thao tác — Hóa đơn {inv.code || `#${invIdx + 1}`}
+                    </div>
+                  )}
+                  <InvoiceActivityTable invoiceId={inv.id} />
+                </div>
+              ))}
             </div>
 
             {/* Action buttons bar */}
