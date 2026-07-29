@@ -1313,58 +1313,15 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                 <>
                   {selectedProducts.map((p, idx) => (
                     <div key={`${p.id}-${idx}`} className="text-sm rounded-md border bg-gray-50 px-3 py-2">
-                      {/* Line 1 (MAIN LINE — everything centered between name + price):
-                          - Product name (LEFT, truncate)
-                          - [center area] When NO staff: "Xếp nhân viên" button CENTERED.
-                            When staff IS assigned: "NV: <name>" + "Xếp nhân viên" button,
-                            both CENTERED together.
-                          - Price (RIGHT) + remove button.
-                          Per user request: staff name + button must be on the SAME LINE
-                          as the product name + price (not below). The center area uses
-                          flex-1 + justify-center so the staff/button group sits in the
-                          true middle of the row. */}
+                      {/* Line 1 (MAIN LINE): Product name (LEFT, truncate) + Price (RIGHT) + remove.
+                          The product name takes the full available width on the left (flex-1 +
+                          truncate) so long names are cut with an ellipsis instead of overlapping
+                          with the staff info (which now sits on Line 2, below). */}
                       <div className="flex items-center gap-2">
-                        {/* Product name (LEFT) */}
-                        <span className="font-medium text-gray-900 truncate shrink-0 max-w-[40%]">
+                        <span className="font-medium text-gray-900 truncate flex-1 min-w-0">
                           {p.name}
                           {p.quantity > 1 && <span className="ml-1 text-xs text-gray-500">×{p.quantity}</span>}
                         </span>
-                        {/* Center area (flex-1 → fills the middle, content centered) */}
-                        <div className="flex-1 flex items-center justify-center gap-1.5 min-w-0">
-                          {p.staffName ? (
-                            <>
-                              <span className="text-xs text-gray-500 shrink-0">NV: {p.staffName}</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const current = assignStaffList.find((s) => s.name === p.staffName);
-                                  setReassignProductIdx(idx);
-                                  setReassignProductStaffId(current?.id || "");
-                                }}
-                                title={`Xếp nhân viên (hiện: ${p.staffName})`}
-                                className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
-                              >
-                                <UserCog className="h-2.5 w-2.5" />
-                                Xếp nhân viên
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const current = assignStaffList.find((s) => s.name === p.staffName);
-                                setReassignProductIdx(idx);
-                                setReassignProductStaffId(current?.id || "");
-                              }}
-                              title="Xếp nhân viên cho sản phẩm này"
-                              className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
-                            >
-                              <UserCog className="h-2.5 w-2.5" />
-                              Xếp nhân viên
-                            </button>
-                          )}
-                        </div>
-                        {/* Price (RIGHT) + remove button */}
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="font-medium text-gray-900">{fmt(p.price * p.quantity)}đ</span>
                           <button
@@ -1377,7 +1334,30 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                           </button>
                         </div>
                       </div>
-                      {/* Line 2: product code (LEFT, under the product name, when present) */}
+                      {/* Line 2: staff name + "Xếp nhân viên" button (BELOW the product name,
+                          not on the same line). When staff is assigned, show "NV: <name>" first,
+                          then the yellow "Xếp nhân viên" button directly below it. When no staff,
+                          show only the button. Per the user's request: "nút Xếp nhân viên tự động
+                          đặt ở dưới tên nhân viên chứ không phải cùng dòng". */}
+                      <div className="mt-1 flex flex-col items-start gap-1">
+                        {p.staffName && (
+                          <span className="text-xs text-gray-500">NV: {p.staffName}</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const current = assignStaffList.find((s) => s.name === p.staffName);
+                            setReassignProductIdx(idx);
+                            setReassignProductStaffId(current?.id || "");
+                          }}
+                          title={p.staffName ? `Xếp nhân viên (hiện: ${p.staffName})` : "Xếp nhân viên cho sản phẩm này"}
+                          className="flex h-5 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                        >
+                          <UserCog className="h-2.5 w-2.5" />
+                          Xếp nhân viên
+                        </button>
+                      </div>
+                      {/* Line 3: product code (under the staff/button, when present) */}
                       {p.code && (
                         <div className="text-xs text-gray-400 mt-0.5">{p.code}</div>
                       )}
