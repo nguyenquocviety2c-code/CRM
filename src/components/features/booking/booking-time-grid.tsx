@@ -712,6 +712,11 @@ function SegmentCard({
   return (
     <div
       className="relative h-full"
+      // When hovered, raise zIndex ABOVE the sticky header row (z-60) so the
+      // popover (a child with z-[75]) can overlap the header. z-index is
+      // scoped to the parent stacking context, so the card itself must be
+      // on a high z-index for the popover to visually cover the header.
+      style={{ zIndex: hovered ? 80 : undefined }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         // Don't close the popover while the status select dropdown is open —

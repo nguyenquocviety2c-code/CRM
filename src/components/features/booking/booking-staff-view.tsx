@@ -1354,7 +1354,13 @@ function SegmentBlock({
     checkin: 30,
   };
   const baseZ = SEG_Z[booking.status] ?? 20;
-  const zIndex = hovered ? 50 : baseZ;
+  // When hovered, raise the SegmentBlock's zIndex ABOVE the sticky header
+  // row (z-60) and the "Giờ" cell (z-[70]). The popover is a child of this
+  // block with z-[75], but z-index is scoped to the parent stacking context
+  // — so the block itself must be on a high z-index for the popover to
+  // visually overlap the header row. Using 80 (above the popover's 75) so
+  // the popover (a child) still stacks correctly within this block.
+  const zIndex = hovered ? 80 : baseZ;
 
   return (
     <div
