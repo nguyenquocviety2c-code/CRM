@@ -603,10 +603,13 @@ function SegmentCard({
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
   // Popover placement: auto-flips to right/top/left when there's not enough
-  // space below the slot. Priority: bottom → right → top → left. Also
-  // re-measures when the popover's content loads (ResizeObserver) so a
-  // popover that starts short (loading) then grows tall gets re-evaluated.
-  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass, horizontalShift: hoverHorizontalShift } = usePopoverPlacement(hovered);
+  // space below the slot. Priority: bottom → right → top → left. When the
+  // slot is in the lower half of the viewport, prefers "top" so the popover
+  // connects to the slot's top edge (per user request). Also re-measures
+  // when the popover's content loads (ResizeObserver) and caps the popover's
+  // max-height to the available space so it scrolls internally instead of
+  // overflowing the viewport.
+  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass, horizontalShift: hoverHorizontalShift, maxHeight: hoverMaxHeight } = usePopoverPlacement(hovered);
 
   // Segment-specific service info — the popover shows ONLY this slot's
   // service(s) (the segment's), not the full booking's. A multi-service booking
@@ -813,15 +816,24 @@ function SegmentCard({
           with duration + staff in blue, "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn"
           link, edit + trash buttons.
 
-          Placement: auto-flips via usePopoverPlacement. When there's not
-          enough space below, the popover moves to left → right → top. The
-          popover sits flush against the slot edge (no margin gap — per user
-          request: "không còn khoảng cách này nữa"). */}
+          Placement: auto-flips via usePopoverPlacement. When the slot is in
+          the lower half of the viewport, the popover is placed ABOVE the slot
+          (its bottom edge connects to the slot's top edge — per user request:
+          "popover sẽ hiển thị nối với thanh ngang bên trên của slot"). The
+          popover's max-height is capped to the available space so it scrolls
+          internally instead of overflowing the viewport.
+
+          z-[75] so the popover sits ABOVE the sticky header (z-60) — per
+          user request, the popover should overlap the "Giờ / ngày" header
+          row when needed. */}
       {hovered && (
         <div
           ref={hoverPopoverRef}
-          className={`absolute ${hoverPlacementClass} z-50 w-[255px] border bg-white shadow-xl max-h-[80vh] overflow-y-auto`}
-          style={{ transform: hoverHorizontalShift !== 0 ? `translateX(${hoverHorizontalShift}px)` : undefined }}
+          className={`absolute ${hoverPlacementClass} z-[75] w-[255px] border bg-white shadow-xl overflow-y-auto`}
+          style={{
+            transform: hoverHorizontalShift !== 0 ? `translateX(${hoverHorizontalShift}px)` : undefined,
+            maxHeight: hoverMaxHeight !== undefined ? `${hoverMaxHeight}px` : "80vh",
+          }}
         >
           <BookingHoverDetails
             booking={booking}
