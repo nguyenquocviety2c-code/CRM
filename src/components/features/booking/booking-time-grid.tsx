@@ -212,15 +212,22 @@ export function BookingTimeGrid({
           const checkinCount = parsed.slotStatuses
             ? parsed.slotStatuses.filter((s) => s === "checkin").length
             : 0;
-          if (slotSt === "checkin" && hasPaidSlot && checkinCount === 1 && onShowInvoice) {
-            onShowInvoice(segment.booking, slotIdx);
-            return;
-          }
           if (slotSt === "checkin" && onShowInvoice) {
             onShowInvoice(segment.booking);
             return;
           }
           if (slotSt === "checkout" && onShowInvoice) {
+            onShowInvoice(segment.booking);
+            return;
+          }
+          // === Slot is "confirmed" / "cancelled" / "no_show" ===
+          // When AT LEAST ONE other customer in this booking has paid
+          // (hasPaidSlot === true), clicking any of these slots opens the
+          // FULL PAID INVOICE VIEW. Per the user's requirement: "nút xem hóa
+          // đơn của các slot khách khác ở các trạng thái Đã xác nhận, Đã hủy,
+          // Không đến khi bấm vào sẽ ra trang full Hóa đơn".
+          // When NO customer has paid yet → edit dialog (legacy behavior).
+          if (hasPaidSlot && onShowInvoice) {
             onShowInvoice(segment.booking);
             return;
           }

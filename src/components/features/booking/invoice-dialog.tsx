@@ -25,7 +25,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
-import { parseMultiCustomerNote } from "@/lib/multi-customer";
+import { parseMultiCustomerNote, buildMultiCustomerNote } from "@/lib/multi-customer";
 
 export interface InvoiceDialogProps {
   booking: Booking;
@@ -193,10 +193,16 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   // === Service picker dialog state ===
   // Opened by the "+" button next to "DỊCH VỤ". Two-step picker (like the
   // product picker): "groups" = service categories; "services" = the services
-  // in the chosen category, each with a staff Select. On confirm, the picked
-  // service + staff is appended to the booking via PUT /api/supabase/bookings/:id
-  // (services array). The booking is then refetched so the new service appears
-  // in the Dịch vụ list.
+  // in the chosen category. Each service row has a +/- quantity stepper on the
+  // right (mirrors the product picker UX). Multiple services can be picked at
+  // once. Staff is OPTIONAL — a single staff Select applies to all picked
+  // services; if left blank, services are added with staff_id = null.
+  // On confirm, ALL picked services (qty × each) are appended to the booking
+  // via PUT /api/supabase/bookings/:id (services array). The booking is then
+  // REFETCHED directly inside the dialog (not relying on the parent page's
+  // "booking-updated" listener, which only exists on /booking) so the new
+  // services appear immediately in the Dịch vụ list — works regardless of
+  // which page opened the dialog (booking, cashier/activity, cashier/invoices).
   const [servicePickerOpen, setServicePickerOpen] = useState(false);
   const [servicePickerStep, setServicePickerStep] = useState<"groups" | "services">("groups");
   const [selectedServiceGroup, setSelectedServiceGroup] = useState<string | null>(null);
@@ -209,16 +215,18 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
     categoryId?: string | null;
   }>>([]);
   const [servicesLoading, setServicesLoading] = useState(false);
-  // The picked service (from the services step) + the staff for it.
-  const [pickedService, setPickedService] = useState<{
-    id: string;
-    name: string;
-    price: number;
-    duration?: number;
-  } | null>(null);
+  // Multi-pick quantity per service id (mirrors productQuantities).
+  const [serviceQuantities, setServiceQuantities] = useState<Record<string, number>>({});
+  // OPTIONAL staff — applied to ALL picked services. Empty = no staff.
   const [pickedServiceStaffId, setPickedServiceStaffId] = useState<string>("");
   const [servicePickerError, setServicePickerError] = useState("");
   const [addingService, setAddingService] = useState(false);
+  // When the service picker is opened from a per-customer "+" button (multi-
+  // customer mode), this holds the customer's slot index. New services get
+  // this slot appended to the [[MULTI]] note's serviceSlots array so they're
+  // attributed to the correct customer. Undefined = global add (legacy mode
+  // for single-customer bookings or for the section header "+" button).
+  const [servicePickerTargetSlot, setServicePickerTargetSlot] = useState<number | undefined>(undefined);
   // Staff list for the service picker's staff Select (active staff at the
   // booking's branch). Also reused by the per-service "Xếp nhân viên" buttons.
   const [assignStaffList, setAssignStaffList] = useState<Array<{ id: string; name: string }>>([]);
@@ -279,6 +287,17 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
     return () => { cancelled = true; };
   }, [effectivelyReadOnly, booking.branchId, booking.branch]);
 
+  // === Local booking override ===
+  // After the service picker PUT-updates the booking, we REFETCH the booking
+  // directly here and store it in `localBooking`. This makes the new services
+  // appear in the Dịch vụ list IMMEDIATELY — without relying on the parent
+  // page's "booking-updated" event listener (which only exists on /booking;
+  // cashier/activity and cashier/invoices pages don't listen for it, so the
+  // dialog would otherwise never refresh and the user would think the add
+  // silently failed). `currentBooking` is what every render reads from.
+  const [localBooking, setLocalBooking] = useState<Booking | null>(null);
+  const currentBooking: Booking = localBooking ?? booking;
+
   // === Per-service "Xếp nhân viên" dialog state ===
   // Opened by the yellow "Xếp nhân viên" button next to each service's staff
   // name. Lets the user reassign the staff for ONE service. Includes a staff
@@ -306,10 +325,12 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   // Also FILTER services by per-customer slotStatuses: only services whose
   // customer is "checkin" or "checkout" are included. Services of customers
   // who are still "confirmed", "cancelled", or "no_show" are excluded.
-  const multiCustomer = parseMultiCustomerNote(booking.note);
+  // Uses `currentBooking` (which is `localBooking ?? booking`) so newly-added
+  // services show up immediately after the service picker saves.
+  const multiCustomer = parseMultiCustomerNote(currentBooking.note);
   const slotStatuses = multiCustomer?.slotStatuses;
   const serviceSlotsMap = multiCustomer?.serviceSlots;
-  const allServiceRows = (booking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
+  const allServiceRows = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
     const svc = s.service as { id?: string; name?: string; price?: number; duration?: number } | null;
     const stf = s.staff as { id?: string; name?: string } | null;
     const cat = s.category as { name?: string } | null;
@@ -336,15 +357,21 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
       _slotIdx: slotIdx,
     };
   });
-  // Filter: only show services whose customer is checked in (or checkout/paid).
-  // When no slotStatuses (non-multi or legacy), show all services.
+  // Filter: only show services whose customer is CHECKED IN (status "checkin").
+  // EXCLUDES "checkout" (paid customers — their services/products are already
+  // merged into the PaidInvoiceView full-page receipt, so they shouldn't appear
+  // in this editable invoice dialog) and "cancelled" / "no_show" (per the user's
+  // requirement: "dialog Hóa đơn không bao gồm dịch vụ, sản phẩm của khách đã
+  // thanh toán hoàn tất và khách đã hủy hoặc không đến").
+  // When no slotStatuses (non-multi or legacy), show all services (single-
+  // customer booking — the slot status IS the booking status).
   // PER-CUSTOMER MODE: when `slotIndex` is set, further filter to ONLY this
   // customer's services (s._slotIdx === slotIndex).
   const serviceRows = (() => {
     let rows = slotStatuses && slotStatuses.length > 0
       ? allServiceRows.filter((s) => {
           const st = slotStatuses[s._slotIdx] || "confirmed";
-          return st === "checkin" || st === "checkout";
+          return st === "checkin";
         })
       : allServiceRows;
     if (slotIndex !== undefined) {
@@ -398,6 +425,14 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   // "Thêm N sản phẩm vào đơn" button label + enabled state.
   const productsToAddCount = productsInGroup.reduce(
     (n, p) => n + ((productQuantities[p.id] || 0) > 0 ? 1 : 0),
+    0
+  );
+
+  // Total service entries to add: sum of quantities across all picked services
+  // in the current group. Drives the "Thêm dịch vụ (N)" button label + enabled
+  // state in the service picker.
+  const servicesToAddCount = servicesList.reduce(
+    (n, s) => n + (serviceQuantities[s.id] || 0),
     0
   );
 
@@ -482,7 +517,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   const promoDiscount = (() => {
     if (!selectedPromo) return 0;
     const serviceIdsMatch = getPromotionServiceIds(selectedPromo);
-    const services = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+    const services = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
       service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || null,
       // The booking's nested service carries its category id — needed so
       // "Nhóm dịch vụ" (service_category) promotions match the right services.
@@ -514,6 +549,36 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         (it) => (it as { type?: string }).type !== "product"
       )
     : serviceRows.map((s) => ({ name: s.name, price: s.price, staffName: s.staff ?? undefined, customer: s.customer ?? undefined }));
+
+  // === Multi-customer service grouping ===
+  // For multi-customer "Cùng lịch" bookings, group services by customer so the
+  // UI can render each customer as a sub-section with their own yellow "+"
+  // button (per the user's request: "+" on same line as customer name, price
+  // on same line as service name). When there's only 1 customer (or the
+  // booking is not multi-customer), this returns null and the legacy flat
+  // layout is used.
+  //
+  // Only applies to EDITABLE mode (read-only invoices show items[] without
+  // per-customer grouping since the saved invoice's items don't carry the
+  // customer slot info reliably).
+  const serviceGroupsByCustomer = (() => {
+    if (effectivelyReadOnly) return null;
+    if (!multiCustomer || multiCustomer.slots.length < 2) return null;
+    // Group serviceRows by _slotIdx. Preserve slot order so customers appear
+    // in the same order as in the booking's [[MULTI]] note.
+    const groupsMap = new Map<number, typeof serviceRows>();
+    for (const row of serviceRows) {
+      const arr = groupsMap.get(row._slotIdx) || [];
+      arr.push(row);
+      groupsMap.set(row._slotIdx, arr);
+    }
+    // Only include slots that have at least one checked-in/checkout service.
+    // (Slots that are still "confirmed"/"cancelled"/"no_show" are filtered
+    // out of serviceRows already, so they won't appear in groupsMap.)
+    return multiCustomer.slots
+      .map((slot, idx) => ({ slot, idx, services: groupsMap.get(idx) || [] }))
+      .filter((g) => g.services.length > 0);
+  })();
 
   // Display photos: when there's an existing invoice, the source of truth is
   // the invoice's photos (kept up to date via PUT). Otherwise (editable, no
@@ -855,22 +920,25 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                 Dịch vụ
               </div>
               {/* "+" button — opens the service picker dialog (group → service →
-                  staff). Only shown in editable mode. The square yellow button
-                  matches the cashier module's "Xếp nhân viên" styling so the
-                  two modules stay visually consistent. */}
-              {!effectivelyReadOnly && (
+                  staff). Only shown in editable mode for SINGLE-CUSTOMER
+                  bookings (or non-multi bookings). For multi-customer bookings,
+                  the "+" button is rendered per-customer next to each customer
+                  name (see serviceGroupsByCustomer branch below). The button is
+                  yellow per the user's request. */}
+              {!effectivelyReadOnly && !serviceGroupsByCustomer && (
                 <button
                   type="button"
                   onClick={() => {
                     setServicePickerStep("groups");
                     setSelectedServiceGroup(null);
-                    setPickedService(null);
+                    setServiceQuantities({});
                     setPickedServiceStaffId("");
                     setServicePickerError("");
+                    setServicePickerTargetSlot(slotIndex);
                     setServicePickerOpen(true);
                   }}
                   title="Thêm dịch vụ"
-                  className="flex h-6 w-6 items-center justify-center rounded border border-emerald-400 bg-emerald-400 text-emerald-800 hover:border-emerald-500 hover:bg-emerald-500 hover:text-emerald-900"
+                  className="flex h-6 w-6 items-center justify-center rounded border border-yellow-400 bg-yellow-400 text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
@@ -879,9 +947,86 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
             <div className="space-y-1.5">
               {effectivelyReadOnly && loadingInvoice ? (
                 <div className="text-sm text-gray-400">Đang tải...</div>
+              ) : serviceGroupsByCustomer ? (
+                // === MULTI-CUSTOMER layout ===
+                // Each customer is a sub-section: customer name + yellow "+"
+                // button on the same line, then their services below (service
+                // name + price on the same line, staff + "Xếp nhân viên"
+                // button below). New services added via the "+" button are
+                // attributed to that customer (slot index).
+                serviceGroupsByCustomer.map((group) => (
+                  <div key={group.idx} className="rounded-md border border-gray-200 p-1.5">
+                    {/* Customer name + yellow "+" button on the same line */}
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-xs font-medium text-gray-700 truncate">
+                        {group.slot.walkin ? "Khách vãng lai" : group.slot.name}
+                        {group.slot.phone && (
+                          <span className="ml-1 text-gray-500">· {group.slot.phone}</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setServicePickerStep("groups");
+                          setSelectedServiceGroup(null);
+                          setServiceQuantities({});
+                          setPickedServiceStaffId("");
+                          setServicePickerError("");
+                          setServicePickerTargetSlot(group.idx);
+                          setServicePickerOpen(true);
+                        }}
+                        title={`Thêm dịch vụ cho ${group.slot.walkin ? "khách vãng lai" : group.slot.name}`}
+                        className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-yellow-400 bg-yellow-400 text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                    </div>
+                    {/* Services for this customer (name + price on same line) */}
+                    <div className="space-y-1">
+                      {group.services.map((s, sIdx) => {
+                        // Find the matching serviceRow index in the flat
+                        // serviceRows array so we can get the bookingServiceId
+                        // + staffId for the "Xếp nhân viên" reassign button.
+                        const flatIdx = serviceRows.findIndex((r) => r === s);
+                        const srvRow = flatIdx >= 0 ? serviceRows[flatIdx] : null;
+                        return (
+                          <div key={sIdx} className="flex items-start justify-between text-sm">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-medium text-gray-900">{s.name || "Dịch vụ"}</div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {!effectivelyReadOnly && srvRow && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReassignStaffServiceId(srvRow.bookingServiceId);
+                                      setReassignStaffPickStaffId(srvRow.staffId || "");
+                                      setReassignStaffError("");
+                                      setReassignStaffChecking(false);
+                                    }}
+                                    title={srvRow.staffName ? `Xếp nhân viên (hiện: ${srvRow.staffName})` : "Xếp nhân viên cho dịch vụ này"}
+                                    className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                                  >
+                                    <UserCog className="h-2.5 w-2.5" />
+                                    Xếp nhân viên
+                                  </button>
+                                )}
+                                {s.staff && <span className="text-xs text-gray-500">NV: {s.staff}</span>}
+                              </div>
+                            </div>
+                            {/* Price on the same line as the service name */}
+                            <div className="font-medium text-gray-900 shrink-0 ml-2">
+                              {fmt(Number(s.price) || 0)}đ
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
               ) : displayItems.length === 0 ? (
                 <div className="text-sm text-gray-400">Chưa có dịch vụ</div>
               ) : (
+                // === SINGLE-CUSTOMER / READ-ONLY layout (legacy) ===
                 displayItems.map((s, idx) => {
                   // Find the matching serviceRow (by index in displayItems ↔
                   // serviceRows) to get the bookingServiceId + staffId for the
@@ -962,7 +1107,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                         // the user and don't select it.
                         const p = promotions.find((x) => x.id === id);
                         const ids = p ? getPromotionServiceIds(p) : null;
-                        const svcs = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+                        const svcs = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
                           service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || null,
                           category_id:
                             (s.service_category_id as string) ||
@@ -1540,7 +1685,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
           if (!v) {
             setServicePickerStep("groups");
             setSelectedServiceGroup(null);
-            setPickedService(null);
+            setServiceQuantities({});
             setPickedServiceStaffId("");
             setServicePickerError("");
           }
@@ -1555,7 +1700,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                   onClick={() => {
                     setServicePickerStep("groups");
                     setSelectedServiceGroup(null);
-                    setPickedService(null);
+                    setServiceQuantities({});
                     setPickedServiceStaffId("");
                     setServicePickerError("");
                   }}
@@ -1586,7 +1731,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                       type="button"
                       onClick={() => {
                         setSelectedServiceGroup(c.name);
-                        setPickedService(null);
+                        setServiceQuantities({});
                         setPickedServiceStaffId("");
                         setServicePickerError("");
                         setServicePickerStep("services");
@@ -1612,18 +1757,13 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                   return <div className="px-3 py-6 text-center text-sm text-gray-400">Không có dịch vụ trong nhóm này</div>;
                 }
                 return servicesInGroup.map((s) => {
-                  const isPicked = pickedService?.id === s.id;
+                  const qty = serviceQuantities[s.id] || 0;
+                  const isPicked = qty > 0;
                   return (
-                    <button
+                    <div
                       key={s.id}
-                      type="button"
-                      onClick={() => {
-                        setPickedService({ id: s.id, name: s.name, price: s.price, duration: s.duration });
-                        setPickedServiceStaffId("");
-                        setServicePickerError("");
-                      }}
-                      className={`flex w-full items-center justify-between border rounded-md p-2 text-left transition-colors ${
-                        isPicked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200 hover:bg-gray-50"
+                      className={`flex items-center justify-between border rounded-md p-2 transition-colors ${
+                        isPicked ? "border-emerald-300 bg-emerald-50/50" : "border-gray-200"
                       }`}
                     >
                       <div className="flex-1 min-w-0 mr-2">
@@ -1632,18 +1772,50 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                           {fmt(s.price)}đ{s.duration ? ` · ${s.duration}'` : ""}
                         </div>
                       </div>
-                    </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setServiceQuantities((prev) => ({
+                              ...prev,
+                              [s.id]: Math.max(0, (prev[s.id] || 0) - 1),
+                            }))
+                          }
+                          disabled={qty === 0}
+                          className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                          aria-label="Giảm số lượng"
+                        >
+                          <Minus className="h-3.5 w-3.5" />
+                        </button>
+                        <span className="w-8 text-center text-sm font-medium">{qty}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setServiceQuantities((prev) => ({
+                              ...prev,
+                              [s.id]: Math.min(99, (prev[s.id] || 0) + 1),
+                            }))
+                          }
+                          className="flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                          aria-label="Tăng số lượng"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   );
                 });
               })()}
             </div>
           )}
 
-          {/* Staff Select — only shown when a service is picked. */}
-          {servicePickerStep === "services" && pickedService && (
+          {/* Optional staff Select — shown in the services step. NOT required:
+              if left blank, picked services are added with staff_id = null.
+              A single staff applies to ALL picked services. */}
+          {servicePickerStep === "services" && (
             <div className="space-y-1 border-t pt-2">
               <label className="text-[11px] text-gray-600">
-                Nhân viên thực hiện
+                Nhân viên thực hiện (không bắt buộc)
               </label>
               <Select
                 value={pickedServiceStaffId}
@@ -1653,7 +1825,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                 }}
               >
                 <SelectTrigger className="w-full h-8 text-xs" size="sm">
-                  <SelectValue placeholder="Chọn nhân viên" />
+                  <SelectValue placeholder="Chọn nhân viên (nếu có)" />
                 </SelectTrigger>
                 <SelectContent>
                   {assignStaffList.length === 0 ? (
@@ -1667,9 +1839,6 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                   )}
                 </SelectContent>
               </Select>
-              {!pickedServiceStaffId && (
-                <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
-              )}
             </div>
           )}
 
@@ -1688,7 +1857,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                 setServicePickerOpen(false);
                 setServicePickerStep("groups");
                 setSelectedServiceGroup(null);
-                setPickedService(null);
+                setServiceQuantities({});
                 setPickedServiceStaffId("");
                 setServicePickerError("");
               }}
@@ -1700,20 +1869,51 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
               <Button
                 type="button"
                 size="sm"
-                disabled={!pickedService || !pickedServiceStaffId || addingService}
+                disabled={servicesToAddCount === 0 || addingService}
                 onClick={async () => {
-                  if (!pickedService || !pickedServiceStaffId) return;
+                  if (servicesToAddCount === 0) return;
                   setServicePickerError("");
                   setAddingService(true);
                   try {
-                    // === Staff conflict check ===
-                    // Fetch all bookings for the same day + branch, then verify
-                    // the picked staff isn't already booked at this booking's
-                    // time window (excluding this booking itself). Mirrors the
-                    // AssignStaffDialog check. If a conflict is found, block
-                    // the add with a detailed message.
+                    // === Build the list of new service entries ===
+                    // Each picked service with qty N produces N entries.
+                    // staff_id is set ONLY when the optional staff was picked;
+                    // otherwise null (assigned later via "Xếp nhân viên").
+                    const cat = serviceCategories.find((c) => c.name === selectedServiceGroup);
+                    const newEntries: Array<{ service_id: string; service_category_id: string | null; staff_id: string | null }> = [];
+                    for (const s of servicesList) {
+                      const q = serviceQuantities[s.id] || 0;
+                      if (q <= 0) continue;
+                      for (let i = 0; i < q; i++) {
+                        newEntries.push({
+                          service_id: s.id,
+                          service_category_id: cat?.id || null,
+                          staff_id: pickedServiceStaffId || null,
+                        });
+                      }
+                    }
+                    if (newEntries.length === 0) {
+                      setAddingService(false);
+                      return;
+                    }
+
+                    // === Staff conflict check (ONLY when staff is picked) ===
+                    // If no staff, skip the conflict check entirely — the
+                    // service is added unassigned and the user can use
+                    // "Xếp nhân viên" later.
+                    const pickedDur = (() => {
+                      // Use the longest duration among picked services for
+                      // the conflict window (worst-case).
+                      let max = 0;
+                      for (const s of servicesList) {
+                        if ((serviceQuantities[s.id] || 0) > 0 && s.duration && s.duration > max) {
+                          max = s.duration;
+                        }
+                      }
+                      return max || 60;
+                    })();
                     const bookingStartMs = booking.date_time ? new Date(booking.date_time).getTime() : 0;
-                    if (bookingStartMs && booking.date_time) {
+                    if (pickedServiceStaffId && bookingStartMs && booking.date_time) {
                       const params = new URLSearchParams({ page: "1", limit: "200" });
                       const d = new Date(booking.date_time);
                       const isoDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1736,7 +1936,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                             service?: { name?: string; duration?: number } | null;
                           }>;
                         }>;
-                        const dur = (Number(pickedService.duration) || 60) * 60 * 1000;
+                        const dur = pickedDur * 60 * 1000;
                         const newEnd = bookingStartMs + dur;
                         for (const ex of exList) {
                           if (ex.id === booking.id) continue;
@@ -1765,7 +1965,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                                 `• Thợ: ${staffName}\n` +
                                 `• Dịch vụ: ${svcName}\n` +
                                 `• Thời gian: ${fmtTime(exStart)}–${fmtTime(exEnd)}\n` +
-                                `→ Trùng với dịch vụ mới (${fmtTime(bookingStartMs)}–${fmtTime(newEnd)}). Vui lòng chọn nhân viên khác.`
+                                `→ Trùng với dịch vụ mới (${fmtTime(bookingStartMs)}–${fmtTime(newEnd)}). Vui lòng chọn nhân viên khác hoặc bỏ trống để thêm sau.`
                               );
                               setAddingService(false);
                               return;
@@ -1775,36 +1975,79 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                       }
                     }
 
-                    // === No conflict → append the service to the booking ===
-                    // Build the updated services array: existing services + the
-                    // new one. The booking's existing services (with their staff)
-                    // are preserved; the new service gets the picked staff.
-                    const existingServices = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+                    // === No conflict (or no staff) → append to the booking ===
+                    // Preserve existing services (use currentBooking so any
+                    // services added earlier in this dialog session are kept),
+                    // then append the new entries.
+                    const existingServices = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
                       service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || "",
                       service_category_id: (s.service_category_id as string) || null,
                       staff_id: (s.staff_id as string) || null,
                     }));
-                    const newServiceEntry = {
-                      service_id: pickedService.id,
-                      service_category_id: serviceCategories.find((c) => c.name === selectedServiceGroup)?.id || null,
-                      staff_id: pickedServiceStaffId,
-                    };
-                    const updatedServices = [...existingServices, newServiceEntry];
+                    const updatedServices = [...existingServices, ...newEntries];
+
+                    // === Multi-customer: update the [[MULTI]] note's serviceSlots ===
+                    // When `servicePickerTargetSlot` is set (the "+" button was
+                    // clicked next to a specific customer's name), the new
+                    // services must be attributed to that customer. The
+                    // booking_services table has no customer_id column — the
+                    // per-customer mapping lives in the booking's [[MULTI]] note
+                    // as a `serviceSlots` array (serviceSlots[serviceIndex] =
+                    // customer slot index). Append the target slot index for
+                    // each new service so display sites (Cashier, Staff View,
+                    // this dialog) correctly show the new services under that
+                    // customer.
+                    //
+                    // Also handle the case where serviceSlots is missing
+                    // (legacy bookings) — if so, build it from scratch so the
+                    // existing services keep their slot mapping (1:1 by index)
+                    // and the new services get the target slot.
+                    let updatedNote: string | null | undefined = undefined;
+                    const parsed = parseMultiCustomerNote(currentBooking.note);
+                    if (parsed && servicePickerTargetSlot !== undefined) {
+                      const existingSlots = parsed.serviceSlots
+                        ? [...parsed.serviceSlots]
+                        : existingServices.map((_, i) => i);
+                      // For each new service, append the target slot index.
+                      for (let i = 0; i < newEntries.length; i++) {
+                        existingSlots.push(servicePickerTargetSlot);
+                      }
+                      updatedNote = buildMultiCustomerNote(
+                        parsed.slots,
+                        parsed.userNote,
+                        existingSlots,
+                        parsed.slotStatuses
+                      );
+                    }
+
+                    const putBody: Record<string, unknown> = { services: updatedServices };
+                    if (updatedNote !== undefined) putBody.note = updatedNote;
                     const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
                       method: "PUT",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ services: updatedServices }),
+                      body: JSON.stringify(putBody),
                     });
                     const json = await res.json();
                     if (!json.ok) throw new Error(json.error || "Không thể thêm dịch vụ");
-                    // Refresh the bookings list so the dialog re-renders with
-                    // the new service. The parent page owns the refetch.
+                    // Refetch the booking directly so the dialog re-renders
+                    // with the new services IMMEDIATELY — works regardless of
+                    // which page opened the dialog (booking/cashier/etc.).
+                    try {
+                      const refRes = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`);
+                      const refJson = await refRes.json();
+                      if (refJson.ok && refJson.data) {
+                        setLocalBooking(refJson.data as Booking);
+                      }
+                    } catch { /* best-effort */ }
+                    // Legacy event — keeps the parent /booking page in sync
+                    // (its own listener will also refetch + update invoiceBooking).
                     window.dispatchEvent(new Event("booking-updated"));
                     setServicePickerOpen(false);
                     setServicePickerStep("groups");
                     setSelectedServiceGroup(null);
-                    setPickedService(null);
+                    setServiceQuantities({});
                     setPickedServiceStaffId("");
+                    setServicePickerTargetSlot(undefined);
                   } catch (e) {
                     setServicePickerError(e instanceof Error ? e.message : "Lỗi không xác định");
                   } finally {
@@ -1818,7 +2061,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Đang lưu…
                   </>
                 ) : (
-                  "Thêm dịch vụ"
+                  `Thêm dịch vụ${servicesToAddCount > 0 ? ` (${servicesToAddCount})` : ""}`
                 )}
               </Button>
             )}
@@ -1908,7 +2151,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                 try {
                   // === Staff conflict check ===
                   // Find the service being reassigned to get its duration.
-                  const targetService = (booking.services as unknown as Array<Record<string, unknown>>)
+                  const targetService = (currentBooking.services as unknown as Array<Record<string, unknown>>)
                     .find((s) => String(s.id ?? "") === reassignStaffServiceId);
                   const duration = Number(
                     (targetService?.service as { duration?: number } | null)?.duration || 60
@@ -1977,7 +2220,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
 
                   // === No conflict → PUT the updated services array ===
                   // Replace ONLY this service's staff_id; keep all others.
-                  const updatedServices = (booking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
+                  const updatedServices = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s) => ({
                     service_id: (s.service_id as string) || (s.service as { id?: string } | null)?.id || "",
                     service_category_id: (s.service_category_id as string) || null,
                     staff_id: String(s.id ?? "") === reassignStaffServiceId
@@ -1991,6 +2234,17 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                   });
                   const json = await res.json();
                   if (!json.ok) throw new Error(json.error || "Không thể cập nhật nhân viên");
+                  // Refetch the booking directly so the dialog re-renders with
+                  // the updated staff assignment, regardless of which page
+                  // opened the dialog. Also dispatch the legacy event so any
+                  // parent page that listens (e.g. /booking) refreshes too.
+                  try {
+                    const refRes = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`);
+                    const refJson = await refRes.json();
+                    if (refJson.ok && refJson.data) {
+                      setLocalBooking(refJson.data as Booking);
+                    }
+                  } catch { /* best-effort */ }
                   window.dispatchEvent(new Event("booking-updated"));
                   setReassignStaffServiceId(null);
                   setReassignStaffPickStaffId("");

@@ -5,11 +5,13 @@ import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 /**
  * GET /api/supabase/bookings/check-new-customer-cut?phone=...&excludeBookingId=...
  *
- * Checks whether the given phone number already has a NON-cancelled booking
- * containing a service in the "Dành cho khách hàng mới - DV Cắt" category.
- * That category is a one-time-only offer per phone: a customer who already
- * booked it cannot book it again on a different day (they must edit/cancel
- * the existing booking or contact CSKH).
+ * Checks whether the given phone number has a COMPLETED (paid) invoice whose
+ * booking contained a service in the "Dành cho khách hàng mới - DV Cắt"
+ * category. That category is a one-time-only offer PER PAID INVOICE: a
+ * customer who has already PAID for this offer cannot book it again without
+ * confirmation — but if the previous booking is unpaid (pending/confirmed/
+ * checkin without a completed invoice), they can book it as many times as
+ * they want.
  *
  * Returns:
  *   { ok: true, data: { exists: boolean, existingDate?: "dd/mm/yyyy",
@@ -76,10 +78,10 @@ export async function GET(request: NextRequest) {
     if (validBookings.length === 0) {
       return NextResponse.json({ ok: true, data: { exists: false } });
     }
-    // Find the first booking that contains a service in the new-customer-cut
-    // category. We inspect the joined booking_services rows directly (no need
-    // for a separate query now that the select includes the join).
-    let existingBooking: {
+    // Find ALL bookings that contain a service in the new-customer-cut
+    // category (excluding the one being edited). We inspect the joined
+    // booking_services rows directly.
+    const candidateBookings: Array<{
       id: string;
       date_time: string;
       status: string;
@@ -90,26 +92,53 @@ export async function GET(request: NextRequest) {
         category?: { name?: string } | null;
         staff_id?: string | null;
       }> | null;
-    } | null = null;
-    let existingServiceRow: {
-      service?: { name?: string } | null;
-      category?: { name?: string } | null;
-      staff_id?: string | null;
-    } | null = null;
+    }> = [];
     for (const b of validBookings) {
       if (excludeBookingId && b.id === excludeBookingId) continue;
       const match = (b.services || []).find(
         (s) => s.service_category_id === NEW_CUSTOMER_CUT_CATEGORY_ID
       );
       if (match) {
-        existingBooking = b;
-        existingServiceRow = match;
-        break;
+        candidateBookings.push(b);
       }
     }
-    if (!existingBooking || !existingServiceRow) {
+    if (candidateBookings.length === 0) {
       return NextResponse.json({ ok: true, data: { exists: false } });
     }
+
+    // 3. CRITICAL — only treat the offer as "used" if at least ONE of the
+    //    candidate bookings has a COMPLETED (paid) invoice. Unpaid bookings
+    //    (pending/confirmed/checkin) do NOT count: the customer can still
+    //    book the new-customer-cut offer again until they've actually PAID
+    //    for it. This matches the user's rule: "khách chưa có hóa đơn hoàn
+    //    tất thanh toán thì có thể đặt bao nhiêu ưu đãi cũng được".
+    const bookingIds = candidateBookings.map((b) => b.id);
+    const { data: paidInvoices, error: invErr } = await supabaseAdmin
+      .from("invoices")
+      .select("id, booking_id, status")
+      .eq("customer_id", customerId)
+      .eq("status", "completed")
+      .in("booking_id", bookingIds);
+    if (invErr) {
+      return NextResponse.json({ ok: false, error: invErr.message }, { status: 500 });
+    }
+    // Set of booking_ids that have a completed invoice.
+    const paidBookingIds = new Set(
+      ((paidInvoices || []) as Array<{ booking_id?: string | null }>)
+        .map((i) => i.booking_id || "")
+        .filter((id): id is string => !!id)
+    );
+    // Pick the first PAID candidate booking (most recent, since we ordered
+    // by created_at desc above).
+    const existingBooking = candidateBookings.find((b) => paidBookingIds.has(b.id)) || null;
+    if (!existingBooking) {
+      // Customer has unpaid new-customer-cut bookings but no PAID one → the
+      // offer is not yet "used". Allow re-booking without a prompt.
+      return NextResponse.json({ ok: true, data: { exists: false } });
+    }
+    const existingServiceRow = (existingBooking.services || []).find(
+      (s) => s.service_category_id === NEW_CUSTOMER_CUT_CATEGORY_ID
+    ) || null;
 
     // 3. Fetch the staff name for the matching service (booking_services
     //    doesn't join staff in the select above, so we look it up directly).

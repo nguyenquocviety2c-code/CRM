@@ -141,6 +141,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       setConflictMessage("");
       setPendingExistingBookings([]);
       setSkipExistingCheck(false);
+      setPendingNewCustomerConflict(null);
+      setSkipNewCustomerCheck(false);
       setLastValidatedData(null);
     }
   }, [open]);
@@ -1585,6 +1587,77 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   >([]);
   const [skipExistingCheck, setSkipExistingCheck] = useState(false);
   const [lastValidatedData, setLastValidatedData] = useState<BookingFormValues | null>(null);
+  // New-customer-cut offer confirmation: when the customer (by phone) has
+  // already PAID for a "Dành cho khách hàng mới - DV Cắt" booking (status
+  // "completed" invoice), show a confirmation prompt listing the prior paid
+  // booking before allowing another one. `pendingNewCustomerConflict` holds
+  // the prior booking's details; `skipNewCustomerCheck` is set true after the
+  // user confirms so the re-submit skips the check. Mirrors the
+  // pendingExistingBookings / skipExistingCheck pattern.
+  const [pendingNewCustomerConflict, setPendingNewCustomerConflict] = useState<{
+    existingCustomerName: string;
+    existingServiceName: string;
+    existingStaffName: string;
+    existingDate: string;
+    existingTime: string;
+    existingBranchName: string;
+    existingStatus: string;
+  } | null>(null);
+  const [skipNewCustomerCheck, setSkipNewCustomerCheck] = useState(false);
+
+  /**
+   * Check whether the customer (by phone) has already PAID for the
+   * "Dành cho khách hàng mới - DV Cắt" offer. If they have, return the
+   * prior booking's details so the caller can show a CONFIRMATION dialog.
+   * Returns null if no prior PAID booking with this offer exists (the
+   * customer can book again without a prompt).
+   *
+   * The "one-time" rule now keys on PAID INVOICES, not on bookings: a
+   * customer who booked the offer but hasn't paid yet can still book it
+   * again (e.g. they want to change the date/time but didn't cancel first,
+   * or they want a second appointment before paying). Only a PAID invoice
+   * "uses up" the one-time offer — and even then, the staff can override
+   * via the OK button in the confirmation dialog.
+   */
+  const checkNewCustomerCutOffer = async (data: BookingFormValues): Promise<{
+    existingCustomerName: string;
+    existingServiceName: string;
+    existingStaffName: string;
+    existingDate: string;
+    existingTime: string;
+    existingBranchName: string;
+    existingStatus: string;
+  } | null> => {
+    const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
+    const hasNewCustomerCut = data.services.some(
+      (s) => s.serviceCategoryId === newCustomerCutCategoryId
+    );
+    if (!hasNewCustomerCut) return null;
+    const phone = phoneSearch.trim();
+    if (!phone) return null;
+    try {
+      const excludeParam = booking ? `&excludeBookingId=${encodeURIComponent(booking.id)}` : "";
+      const checkRes = await fetch(
+        `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(phone)}${excludeParam}`
+      );
+      const checkJson = await checkRes.json();
+      if (checkJson.ok && checkJson.data?.exists) {
+        const d = checkJson.data;
+        return {
+          existingCustomerName: d.existingCustomerName || "(khách không rõ)",
+          existingServiceName: d.existingServiceName || "Dành cho khách hàng mới - DV Cắt",
+          existingStaffName: d.existingStaffName || "(chưa phân thợ)",
+          existingDate: d.existingDate || "—",
+          existingTime: d.existingTime || "—",
+          existingBranchName: d.existingBranchName || "",
+          existingStatus: d.existingStatus || "",
+        };
+      }
+    } catch {
+      /* best-effort — don't block on network errors */
+    }
+    return null;
+  };
 
   /**
    * Validate the booking before submitting:
@@ -1597,69 +1670,26 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
    *    with another service entry in THIS same form (same staff, same day).
    *
    * Returns an error message string, or "" if everything is valid.
+   *
+   * `skipExistingConflict`: when true, step 2b (overlap with existing
+   *   bookings in Supabase) is SKIPPED. This is set after the user confirms
+   *   the "customer has previous appointments" prompt — they've explicitly
+   *   agreed to book anyway, so we no longer block on time-overlap with the
+   *   customer's own (or any other) existing booking. Steps 1 and 2a
+   *   (within-form staff uniqueness, past-date) still run.
+   *
+   * NOTE: The new-customer-cut offer check (former step 0) was moved OUT of
+   *   this function and into `checkNewCustomerCutOffer` below. It now opens
+   *   a CONFIRMATION dialog (OK/Hủy) instead of returning a blocking error,
+   *   so the user can override and book again even if they've paid for the
+   *   offer before.
    */
-  const validateBooking = async (data: BookingFormValues): Promise<string> => {
+  const validateBooking = async (data: BookingFormValues, skipExistingConflict = false): Promise<string> => {
     const now = Date.now();
     if (!data.date || !data.time) {
       return "Vui lòng chọn ngày và giờ bắt đầu";
     }
     const entries = data.services.filter((s) => s.serviceId && s.staffId);
-
-    // 0. One-time offer check: "Dành cho khách hàng mới - DV Cắt" can only be
-    //    booked ONCE per phone. If any service entry's category is the new-
-    //    customer cut, check the customer's phone against existing bookings.
-    //    Skip when editing the same booking (excludeBookingId) so editing the
-    //    existing cut booking (e.g. change time) doesn't block itself.
-    const newCustomerCutCategoryId = "4cb10a73-cc13-496a-baf2-e060ebfa02f8";
-    const hasNewCustomerCut = entries.some(
-      (e) => e.serviceCategoryId === newCustomerCutCategoryId
-    );
-    const phone = phoneSearch.trim();
-    if (hasNewCustomerCut && phone) {
-      try {
-        const excludeParam = booking ? `&excludeBookingId=${encodeURIComponent(booking.id)}` : "";
-        const checkRes = await fetch(
-          `/api/supabase/bookings/check-new-customer-cut?phone=${encodeURIComponent(phone)}${excludeParam}`
-        );
-        const checkJson = await checkRes.json();
-        if (checkJson.ok && checkJson.data?.exists) {
-          const d = checkJson.data;
-          // Build a detailed "cannot book" message that identifies the
-          // blocking booking precisely: which customer, which service, which
-          // staff, exact date + time, branch, and status. Without these the
-          // staff cannot tell which existing appointment is blocking the new
-          // one (especially when the existing booking is already "checkout"
-          // — paid/done — so it no longer shows in the active booking list).
-          const custName = d.existingCustomerName || "(khách không rõ)";
-          const svcName = d.existingServiceName || "Dành cho khách hàng mới - DV Cắt";
-          const staffName = d.existingStaffName || "(chưa phân thợ)";
-          const dateStr = d.existingDate || "—";
-          const timeStr = d.existingTime || "—";
-          const branchStr = d.existingBranchName ? `\n• Chi nhánh: ${d.existingBranchName}` : "";
-          // Translate the raw booking status into a human-readable VN label so
-          // the staff understands whether the existing booking is pending,
-          // confirmed, or already paid/checkout.
-          const statusLabel: Record<string, string> = {
-            pending: "Chờ xác nhận",
-            confirmed: "Đã xác nhận",
-            checkout: "Đã thanh toán",
-            cancelled: "Đã huỷ",
-            no_show: "Không đến",
-          };
-          const statusStr = d.existingStatus
-            ? `\n• Trạng thái: ${statusLabel[d.existingStatus] || d.existingStatus}`
-            : "";
-          return (
-            `Không thể đặt lịch vì khách hàng "${custName}" đã có một lịch "${svcName}" đã đặt trước đó.\n` +
-            `• Thợ: ${staffName}\n` +
-            `• Ngày giờ: ${dateStr} lúc ${timeStr}${branchStr}${statusStr}\n` +
-            `Lưu ý: ưu đãi "Dành cho khách hàng mới" chỉ được đặt 1 lần. Vui lòng huỷ/chỉnh sửa lịch cũ hoặc chọn nhóm dịch vụ khác.`
-          );
-        }
-      } catch {
-        /* best-effort — don't block on network errors */
-      }
-    }
 
     // Parse the booking-level start (dd/MM/yyyy + HH:mm) into ms (UTC).
     const startM = data.date.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -1745,6 +1775,22 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     }
 
     // 2b. Conflict with existing bookings in Supabase.
+    // SKIPPED when:
+    //   - `skipExistingConflict` is true (user confirmed the "customer has
+    //     previous appointments" prompt), OR
+    //   - We're EDITING an existing booking (`booking` prop is set). Editing a
+    //     booking is NOT creating a new one — the user is changing the existing
+    //     appointment's time/services/staff. Blocking the save with "trùng lịch
+    //     với một lịch đã đặt trước đó" makes no sense in edit mode: the only
+    //     "existing" booking for this customer at this time IS the one being
+    //     edited. Even when the customer has OTHER bookings on the same day,
+    //     the staff is explicitly choosing to modify THIS one — they should be
+    //     able to save without a self-conflict false positive. Server-side
+    //     validation in the PUT endpoint will still reject genuine staff
+    //     double-bookings (same staff, overlapping time, different booking).
+    if (skipExistingConflict || booking) {
+      return "";
+    }
     // All services share the booking-level date, so fetch that one day.
     const isoDay = `${startM[3]}-${startM[2]}-${startM[1]}`;
     const params = new URLSearchParams();
@@ -1998,6 +2044,11 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   //     and that slot's resolved customer_id. All N bookings share the
   //     same date_time + branch_id + status. Failures are reported but
   //     already-created bookings stay.
+  //
+  // EDIT mode: multi-customer bookings can ALSO be edited. In edit mode the
+  // validation step is skipped entirely — the user is modifying an existing
+  // appointment, not creating a new one, so the existing-booking conflict
+  // check would just compare the booking against itself.
   // ------------------------------------------------------------------
   const handleMultiCustomerSubmit = async (data: BookingFormValues) => {
     setIsMultiSubmitting(true);
@@ -2019,12 +2070,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
         resolvedIds.push(result.customerId);
       }
 
-      // 2. Validate the booking (conflict check). Works for both modes —
-      //    within-form staff uniqueness + existing-booking overlap.
-      const error = await validateBooking(data);
-      if (error) {
-        setConflictMessage(error);
-        return;
+      // 2. Validate the booking (conflict check). SKIP in edit mode — the
+      //    booking being edited can never conflict with itself, and the
+      //    user is modifying an existing appointment, not creating a new one.
+      //    `validateBooking` also internally skips step 2b when `booking` is
+      //    set, but we pass `true` explicitly for clarity + safety.
+      if (!booking) {
+        const error = await validateBooking(data);
+        if (error) {
+          setConflictMessage(error);
+          return;
+        }
       }
 
       // 3. Build the shared date_time + booking-level fields.
@@ -2032,7 +2088,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       const dateTime = `${firstDate}T${data.time}:00+07:00`;
 
       if (scheduleMode === "same") {
-        // --- Cùng lịch: 1 POST with all services ---
+        // --- Cùng lịch: 1 POST (create) OR 1 PUT (edit) with all services ---
         // The booking API stores only ONE customer_id per booking (slot 0's
         // resolved id). To preserve the per-slot customer mapping so display
         // sites (Staff View, Cashier) can show each service's own customer,
@@ -2081,7 +2137,8 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           status: data.status,
           note: combinedNote,
           branch_id: selectedBranchId || null,
-          created_by: user?.id || null,
+          // Only set created_by on CREATE — preserve the original creator on edit.
+          ...(booking ? {} : { created_by: user?.id || null }),
           services: [
             // Main services (one per customer slot).
             ...slotEntries.map((g) => ({
@@ -2102,14 +2159,25 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           ],
         };
         try {
-          const res = await fetch("/api/supabase/bookings", {
-            method: "POST",
+          // EDIT mode: PUT to /api/supabase/bookings/:id (updates the existing
+          // booking — server-side conflict check skips the booking itself).
+          // CREATE mode: POST to /api/supabase/bookings (creates a new booking).
+          // Previously this ALWAYS used POST, even in edit mode — which caused
+          // the server to create a DUPLICATE booking and then fail the conflict
+          // check because the original booking (which still existed) was seen
+          // as a conflict with the "new" one. Now edit mode properly PUTs.
+          const url = booking
+            ? `/api/supabase/bookings/${encodeURIComponent(booking.id)}`
+            : "/api/supabase/bookings";
+          const method = booking ? "PUT" : "POST";
+          const res = await fetch(url, {
+            method,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
           const json = await res.json();
           if (!json.ok) {
-            setConflictMessage(json.error || "Không thể tạo lịch hẹn");
+            setConflictMessage(json.error || (booking ? "Không thể cập nhật lịch hẹn" : "Không thể tạo lịch hẹn"));
             return;
           }
           queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
@@ -2121,11 +2189,15 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
           onClose();
         } catch (e) {
           setConflictMessage(
-            e instanceof Error ? e.message : "Không thể tạo lịch hẹn"
+            e instanceof Error ? e.message : (booking ? "Không thể cập nhật lịch hẹn" : "Không thể tạo lịch hẹn")
           );
         }
       } else {
-        // --- Khác lịch: N separate POSTs, 1 service each ---
+        // --- Khác lịch: N separate POSTs (create) OR PUTs (edit), 1 service each ---
+        // EDIT mode for "Khác lịch": each slot's booking is updated via PUT.
+        // We rely on booking.id as the SINGLE booking being edited (the
+        // multi-customer "Khác lịch" create produces N separate bookings, so
+        // editing one of them edits just that one — the other N-1 stay as-is).
         const results: Array<{ slot: number; ok: boolean; error?: string }> = [];
         for (let i = 0; i < data.services.length; i++) {
           const svc = data.services[i];
@@ -2138,7 +2210,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             status: data.status,
             note: data.note || null,
             branch_id: selectedBranchId || null,
-            created_by: user?.id || null,
+            ...(booking ? {} : { created_by: user?.id || null }),
             services: [
               {
                 service_id: svc.serviceId,
@@ -2156,8 +2228,18 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             ],
           };
           try {
-            const res = await fetch("/api/supabase/bookings", {
-              method: "POST",
+            // EDIT: PUT to /api/supabase/bookings/:id; CREATE: POST.
+            // For multi-customer "Khác lịch" edit, only the booking prop's id
+            // is known (the others would need a separate lookup). For now,
+            // single-slot edit uses PUT; multi-slot "Khác lịch" edit falls
+            // back to POST (the user would typically edit each booking
+            // individually).
+            const url = (booking && i === 0)
+              ? `/api/supabase/bookings/${encodeURIComponent(booking.id)}`
+              : "/api/supabase/bookings";
+            const method = (booking && i === 0) ? "PUT" : "POST";
+            const res = await fetch(url, {
+              method,
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
             });
@@ -2186,7 +2268,7 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             .map((f) => `Khách #${f.slot + 1}: ${f.error}`)
             .join("\n");
           setConflictMessage(
-            `Đã tạo ${successCount}/${results.length} lịch hẹn. ` +
+            `Đã ${booking ? "cập nhật" : "tạo"} ${successCount}/${results.length} lịch hẹn. ` +
               (successCount > 0
                 ? "Các lịch còn lại lỗi:\n"
                 : "Tất cả đều lỗi:\n") +
@@ -2342,21 +2424,22 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       }
       } // end else (typedPhone || typedName)
     }
-    const error = await validateBooking(data);
-    if (error) {
-      setConflictMessage(error);
-      return;
-    }
     // Existing-booking confirmation: if the customer (by phone) already has
     // non-cancelled bookings (excluding the one being edited), show a
-    // confirmation prompt listing them. Only proceed when the user confirms.
-    // Skipped on the re-submit after confirmation (skipExistingCheck).
+    // confirmation prompt listing them. Only proceed to validation + submit
+    // when the user confirms. Skipped on the re-submit after confirmation
+    // (skipExistingCheck). This runs BEFORE validateBooking so that a
+    // customer with a previous appointment sees the OK/Hủy confirmation
+    // dialog instead of the blocking "Không thể đặt lịch" conflict error.
+    // SKIPPED in EDIT mode: when editing a booking, the user is modifying an
+    // existing appointment, not creating a new one. Showing "khách đã có lịch
+    // trước đó" is meaningless — of COURSE they have a booking, we're editing
+    // it. Only show this prompt for CREATE mode.
     const phone = phoneSearch.trim();
-    if (!skipExistingCheck && phone) {
+    if (!booking && !skipExistingCheck && phone) {
       try {
-        const excludeParam = booking ? `&excludeBookingId=${encodeURIComponent(booking.id)}` : "";
         const existRes = await fetch(
-          `/api/supabase/bookings/by-phone?phone=${encodeURIComponent(phone)}${excludeParam}`
+          `/api/supabase/bookings/by-phone?phone=${encodeURIComponent(phone)}`
         );
         const existJson = await existRes.json();
         if (existJson.ok && Array.isArray(existJson.data) && existJson.data.length > 0) {
@@ -2367,6 +2450,32 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       } catch {
         /* best-effort — don't block on network errors */
       }
+    }
+    // New-customer-cut offer confirmation: if the customer has already PAID
+    // for the "Dành cho khách hàng mới - DV Cắt" offer (status=completed
+    // invoice on a prior booking), show a CONFIRMATION dialog (not a
+    // blocking error). The staff can OK to override and book again, or Hủy
+    // to stop. Skipped on the re-submit after confirmation
+    // (skipNewCustomerCheck). This also runs BEFORE validateBooking so the
+    // user never sees the old "Không thể đặt lịch" message for this case.
+    // SKIPPED in EDIT mode: editing a booking doesn't "re-use" the offer —
+    // the customer is just changing the existing appointment.
+    if (!booking && !skipNewCustomerCheck) {
+      const nccConflict = await checkNewCustomerCutOffer(data);
+      if (nccConflict) {
+        setPendingNewCustomerConflict(nccConflict);
+        setLastValidatedData(data);
+        return; // stop — the confirmation dialog takes over
+      }
+    }
+    // Then validate. After the user confirms the existing-booking prompt,
+    // skipExistingCheck is true → pass it as skipExistingConflict so step 2b
+    // (existing-booking overlap) is skipped, allowing the booking to proceed
+    // even if it overlaps the customer's own previous appointments.
+    const error = await validateBooking(data, skipExistingCheck);
+    if (error) {
+      setConflictMessage(error);
+      return;
     }
     if (booking) {
       updateMutation.mutate(data);
@@ -3590,8 +3699,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
 
       {/* Existing-booking confirmation — shown when the customer (by phone)
           already has non-cancelled bookings. Lists them and asks whether to
-          continue creating/updating. OK → re-submit with skipExistingCheck;
-          Hủy → dismiss and keep the form open. */}
+          continue creating/updating. OK → re-submit with skipExistingCheck
+          (which also skips the time-overlap conflict check so the booking
+          proceeds even if it overlaps a previous appointment); Hủy → dismiss
+          and keep the form open. */}
       <Dialog
         open={pendingExistingBookings.length > 0}
         onOpenChange={(v) => {
@@ -3603,10 +3714,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Khách hàng có lịch hẹn chưa thanh toán</DialogTitle>
+            <DialogTitle>Khách hàng đã có lịch hẹn trước đó</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-gray-700">
-            Số điện thoại này có {pendingExistingBookings.length} lịch hẹn chưa thanh toán. Bạn có chắc muốn đặt lịch tiếp không?
+            Số điện thoại này đã có {pendingExistingBookings.length} lịch hẹn đặt trước đó. Bạn có chắc muốn đặt lịch tiếp không?
           </p>
           <div className="max-h-[300px] space-y-2 overflow-y-auto">
             {pendingExistingBookings.map((b) => (
@@ -3646,6 +3757,82 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               onClick={() => {
                 setPendingExistingBookings([]);
                 setSkipExistingCheck(true);
+                if (lastValidatedData) onSubmit(lastValidatedData);
+              }}
+            >
+              OK, đặt tiếp
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New-customer-cut offer confirmation — shown when the customer (by
+          phone) has already PAID for the "Dành cho khách hàng mới - DV Cắt"
+          offer on a prior booking. The staff can OK to override and book
+          again (the one-time rule is now a soft warning, not a hard block),
+          or Hủy to dismiss and keep the form open. OK → re-submit with
+          skipNewCustomerCheck=true so the check is skipped on re-validation. */}
+      <Dialog
+        open={!!pendingNewCustomerConflict}
+        onOpenChange={(v) => {
+          if (!v) {
+            setPendingNewCustomerConflict(null);
+            setSkipNewCustomerCheck(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Khách hàng đã dùng ưu đãi "Dành cho khách hàng mới"</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-gray-700">
+            Khách hàng <span className="font-semibold">"{pendingNewCustomerConflict?.existingCustomerName}"</span> đã có một lịch
+            "<span className="font-semibold">{pendingNewCustomerConflict?.existingServiceName}</span>" đã thanh toán trước đó. Bạn có chắc muốn đặt ưu đãi này thêm lần nữa không?
+          </p>
+          {pendingNewCustomerConflict && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-amber-700">Ngày giờ:</span>
+                <span className="font-medium text-amber-900">
+                  {pendingNewCustomerConflict.existingDate} · {pendingNewCustomerConflict.existingTime}
+                </span>
+                {pendingNewCustomerConflict.existingBranchName && (
+                  <>
+                    <span className="text-amber-700">Chi nhánh:</span>
+                    <span className="font-medium text-amber-900">
+                      {pendingNewCustomerConflict.existingBranchName}
+                    </span>
+                  </>
+                )}
+                <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-800">
+                  Đã thanh toán
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-amber-700">Thợ:</span>
+                <span className="font-medium text-amber-900">
+                  {pendingNewCustomerConflict.existingStaffName}
+                </span>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setPendingNewCustomerConflict(null);
+                setSkipNewCustomerCheck(false);
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              className="bg-amber-600 text-white hover:bg-amber-700"
+              onClick={() => {
+                setPendingNewCustomerConflict(null);
+                setSkipNewCustomerCheck(true);
                 if (lastValidatedData) onSubmit(lastValidatedData);
               }}
             >

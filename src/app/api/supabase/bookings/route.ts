@@ -181,6 +181,10 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search");
     const pageStr = searchParams.get("page");
     const limitStr = searchParams.get("limit");
+    // Optional: exclude a specific booking by id. Used by the booking dialog's
+    // conflict check so the booking being edited doesn't appear in the day's
+    // list (and thus can't conflict with itself).
+    const excludeBookingId = searchParams.get("exclude_booking_id") || "";
 
     const page = pageStr ? Math.max(1, parseInt(pageStr, 10)) : 1;
     const limit = limitStr ? Math.max(1, parseInt(limitStr, 10)) : 50;
@@ -196,6 +200,7 @@ export async function GET(request: NextRequest) {
     if (status) query = query.eq("status", status);
     if (dateFrom) query = query.gte("date_time", dateFrom);
     if (dateTo) query = query.lte("date_time", dateTo);
+    if (excludeBookingId) query = query.neq("id", excludeBookingId);
     if (search) {
       // The placeholder says "Tìm theo tên hoặc sđt" (search by name or phone),
       // but the bookings table doesn't join customers (no FK constraint), so we

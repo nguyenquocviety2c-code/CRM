@@ -77,4 +77,7 @@ multi-service-*.png
 .staff-revenue-verify.png
 .claude
 .z-ai-config
-.env*
+# .env is COMMITTED intentionally for this project — it contains the Supabase
+# + R2 credentials needed for the app to run on Vercel without manual env setup.
+# (the !.env un-ignore above takes precedence over this .env* line)
+!.env

@@ -1007,18 +1007,47 @@ export function BookingStaffView({
                           const checkinCount = parsed.slotStatuses
                             ? parsed.slotStatuses.filter((s) => s === "checkin").length
                             : 0;
-                          if (slotSt === "checkin" && hasPaidSlot && checkinCount === 1 && onShowInvoice) {
-                            // Single checkin customer + paid invoice → per-customer dialog
-                            onShowInvoice(seg.booking, slotIdx);
-                            return;
-                          }
+                          // === Slot is "checkin" (customer is being served, not paid) ===
+                          // → open the InvoiceDialog so the cashier can review items,
+                          // add products, and proceed to payment. In COMBINED mode
+                          // (no slotIndex) so all checked-in customers' services show
+                          // together. The dialog's serviceRows filter only includes
+                          // services whose slot status is "checkin" — paid/cancelled/
+                          // no_show slots are EXCLUDED (per the user's requirement:
+                          // "dialog Hóa đơn không bao gồm dịch vụ, sản phẩm của khách
+                          // đã thanh toán hoàn tất và khách đã hủy hoặc không đến").
                           if (slotSt === "checkin" && onShowInvoice) {
-                            // 2+ checkin customers OR no paid invoice → combined dialog
-                            // (shows all checkin/checkout services)
                             onShowInvoice(seg.booking);
                             return;
                           }
+                          // === Slot is "checkout" (paid) ===
+                          // → open the full paid invoice view (PaidInvoiceView).
+                          // On the /booking page, `handleShowInvoice` checks
+                          // booking.status === "checkout" && invoiceSlotIndex ===
+                          // undefined → renders PaidInvoiceView. So we pass NO
+                          // slotIndex to trigger the full-page view.
                           if (slotSt === "checkout" && onShowInvoice) {
+                            onShowInvoice(seg.booking);
+                            return;
+                          }
+                          // === Slot is "confirmed" / "cancelled" / "no_show" ===
+                          // When AT LEAST ONE other customer in this booking has
+                          // paid (hasPaidSlot === true), clicking any of these
+                          // slots opens the FULL PAID INVOICE VIEW so the cashier
+                          // can review the paid receipt (services + products of
+                          // all paid customers are merged in). Per the user's
+                          // requirement: "nút xem hóa đơn của các slot khách khác
+                          // ở các trạng thái Đã xác nhận, Đã hủy, Không đến khi
+                          // bấm vào sẽ ra trang full Hóa đơn".
+                          //
+                          // When NO customer has paid yet, the slot behaves as
+                          // before: confirmed → edit dialog (so the staff can
+                          // check in); cancelled/no_show → edit dialog (read-only
+                          // info). The "confirmed" slot STILL shows its Checkin
+                          // button in the hover popover regardless (the popover's
+                          // statusOptions are computed separately and include
+                          // "checkin" for confirmed slots — see BookingHoverDetails).
+                          if (hasPaidSlot && onShowInvoice) {
                             onShowInvoice(seg.booking);
                             return;
                           }

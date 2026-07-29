@@ -70,14 +70,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 4. Build the response list — only UNPAID bookings (not checkout, not
-    //    cancelled, not no_show). The confirmation dialog is meant to warn
-    //    about existing appointments that haven't been paid yet. If all prior
-    //    bookings are paid, the customer can book again without a prompt.
+    // 4. Build the response list — ALL non-cancelled, non-no_show bookings
+    //    (including checkout/paid ones). The confirmation dialog warns the
+    //    staff whenever the customer has ANY previous appointment, so they
+    //    can decide whether to book another one. Previously this filtered
+    //    out checkout bookings, which meant a customer with a paid past
+    //    appointment would NOT see the confirmation — and if that paid
+    //    appointment overlapped in time with the new one, the user would
+    //    see the blocking "Không thể đặt lịch" dialog instead.
     const result = (bookings || [])
       .filter(
         (b: { id: string; status?: string }) =>
-          b.status !== "checkout" &&
           b.status !== "cancelled" &&
           b.status !== "no_show" &&
           (excludeBookingId ? b.id !== excludeBookingId : true)
