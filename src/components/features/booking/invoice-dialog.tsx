@@ -738,6 +738,17 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
       }
 
       // === NORMAL MODE (not per-customer) ===
+      // This is the combined mode — paying for ALL currently-checked-in
+      // customers at once. We APPEND this payment's items (services +
+      // products of checkin slots) to the existing invoice's items (which
+      // contain items from PREVIOUSLY-paid customers). Each item is tagged
+      // with `_slotIdx` so we can later REMOVE a customer's items if their
+      // slot reverts from "checkout" to another status.
+      //
+      // Previously this REPLACED the invoice's items with only the current
+      // checkin slots' items — which wiped out previously-paid customers'
+      // items from the receipt. That's the bug the user reported: "khách hoàn
+      // tất thanh toán trước đó thì bị xóa hết thông tin dịch vụ, sản phẩm".
       const finalAmount = Math.max(0, servicesTotal + productsTotal - promoDiscount) + tip;
       const promotionMeta = selectedPromo
         ? {
@@ -749,10 +760,11 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
             discountAmount: promoDiscount,
           }
         : null;
-      // Build the full items list: services + products. Products are appended
-      // after services so the invoice's items array reflects everything the
-      // customer is paying for (services from the booking + products bought).
-      const allItems = [
+      // Build the NEW items to append (this payment's services + products).
+      // Each item carries `_slotIdx` so we can identify which customer it
+      // belongs to (used by PaidInvoiceView + slot-status revert to remove
+      // a customer's items when their slot reverts from checkout).
+      const newItems = [
         ...serviceRows.map((s) => ({
           name: s.name,
           itemId: null,
@@ -762,6 +774,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
           discount: 0,
           total: s.price,
           staffName: s.staff,
+          _slotIdx: s._slotIdx,
         })),
         ...selectedProducts.map((p) => ({
           name: p.name,
@@ -774,26 +787,94 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
           staffName: p.staffName || undefined,
         })),
       ];
-      const subtotal = servicesTotal + productsTotal;
+      // Fetch the existing invoice's current items so we can APPEND to them
+      // (preserving previously-paid customers' items). The `existingInvoice`
+      // prop may be stale (loaded when the dialog opened); re-fetch to get
+      // the latest state right before saving.
+      let existingItems: Array<Record<string, unknown>> = [];
+      let humanNote: string | null = null;
+      let existingTip = 0;
+      let existingPromotion: unknown = null;
+      let existingPhotos: string[] = [];
+      let existingDiscount = 0;
       if (existingInvoice) {
-        // Update the existing pending invoice -> completed (paid). Photos were
-        // already persisted via PUT as they were added; re-send them so the
-        // completed invoice keeps the latest set (no UI to add after confirm).
+        try {
+          const invRes = await fetch(`/api/supabase/invoices?booking_id=${encodeURIComponent(booking.id)}&limit=1`);
+          const invJson = await invRes.json();
+          const existingInv = invJson.ok && Array.isArray(invJson.data) && invJson.data.length > 0
+            ? invJson.data[0]
+            : null;
+          if (existingInv) {
+            existingDiscount = Number(existingInv.discount) || 0;
+            const rawNote = existingInv.note;
+            if (typeof rawNote === "string" && rawNote.includes('"__kind":"invoice_meta"')) {
+              try {
+                const parsedNote = JSON.parse(rawNote) as {
+                  items?: unknown[]; note?: string | null; tip?: number;
+                  promotion?: unknown; photos?: unknown;
+                };
+                if (Array.isArray(parsedNote.items)) existingItems = parsedNote.items as Array<Record<string, unknown>>;
+                humanNote = parsedNote.note ?? null;
+                existingTip = Number(parsedNote.tip) || 0;
+                existingPromotion = parsedNote.promotion ?? null;
+                if (Array.isArray(parsedNote.photos)) existingPhotos = parsedNote.photos as string[];
+              } catch { /* best-effort */ }
+            }
+          }
+        } catch { /* best-effort — if fetch fails, we just append to empty */ }
+      }
+      // Merge: existing items (previously-paid customers) + new items (this payment).
+      const allItems = [...existingItems, ...newItems];
+      // Recompute totals: existing items' total + new items' total, then
+      // apply discount + tip. The discount/tip come from the existing invoice
+      // (preserving what was set when the first customer paid) — the current
+      // form's tip/promo are for THIS payment only and are added on top.
+      const existingItemsTotal = existingItems.reduce(
+        (sum, it) => sum + (Number(it.total ?? it.price) || 0) * (Number(it.quantity) || 1), 0
+      );
+      const newItemsTotal = newItems.reduce(
+        (sum, it) => sum + (Number(it.price) || 0) * (Number(it.quantity) || 1), 0
+      );
+      const subtotal = existingItemsTotal + newItemsTotal;
+      // Use the existing discount + existing promotion (don't override with
+      // the current form's promo — that would double-apply). The current
+      // form's promo only applies if there was no existing promotion.
+      const effectiveDiscount = existingDiscount > 0 ? existingDiscount : promoDiscount;
+      const effectivePromotion = existingPromotion || promotionMeta;
+      const effectiveTip = existingTip + tip; // sum tips across payments
+      const finalAmountMerged = Math.max(0, subtotal - effectiveDiscount) + effectiveTip;
+      // Merge photos: existing + new draft photos (deduplicated).
+      const mergedPhotos = Array.from(new Set([...existingPhotos, ...draftPhotos]));
+      if (existingInvoice) {
+        // Update the existing invoice → append items + recompute totals.
+        // Status becomes "completed" (paid). The note JSON carries the full
+        // items list + the cashier's human-readable note + tip + promotion +
+        // photos. PUT with `note` (carrying items) + total_amount + final_amount
+        // + status + payment_method (this payment's method — the receipt shows
+        // the LAST payment's method; when multiple payments use different
+        // methods, PaidInvoiceView already sums cash vs transfer from the
+        // merged invoices, but here it's a SINGLE invoice so we use the
+        // current form's method).
+        const newInvNote = JSON.stringify({
+          __kind: "invoice_meta",
+          items: allItems,
+          note: humanNote,
+          tip: effectiveTip,
+          promotion: effectivePromotion,
+          photos: mergedPhotos,
+        });
         const res = await fetch(`/api/supabase/invoices/${existingInvoice.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            items: allItems,
-            subtotal,
-            tip,
-            discount: promoDiscount,
-            promotion: promotionMeta,
-            final_amount: finalAmount,
+            note: newInvNote,
+            total_amount: subtotal,
+            final_amount: finalAmountMerged,
+            discount: effectiveDiscount,
+            tip: effectiveTip,
             status: "completed",
             payment_method: paymentMethod,
-            photos: displayPhotos,
-            // Attribute the PAYMENT/CHECKOUT activity to the logged-in staff
-            // (fallback when the auth cookie isn't sent).
+            photos: mergedPhotos,
             created_by: useAuthStore.getState().user?.id,
           }),
         });
@@ -801,6 +882,14 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         if (!json.ok) throw new Error(json.error || "Không thể cập nhật hóa đơn");
       } else {
         // Fallback: no pending invoice exists — create a completed one directly.
+        const newInvNote = JSON.stringify({
+          __kind: "invoice_meta",
+          items: allItems,
+          note: null,
+          tip: effectiveTip,
+          promotion: effectivePromotion,
+          photos: mergedPhotos,
+        });
         const res = await fetch("/api/supabase/invoices", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -808,16 +897,13 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
             customer_id: (booking.customer as unknown as { id?: string })?.id,
             branch_id: booking.branchId || (booking.branch as { id?: string } | null)?.id || null,
             booking_id: booking.id,
-            items: allItems,
-            subtotal,
-            discount: promoDiscount,
-            tip,
-            promotion: promotionMeta,
-            final_amount: finalAmount,
+            note: newInvNote,
+            total_amount: subtotal,
+            discount: effectiveDiscount,
+            tip: effectiveTip,
+            final_amount: finalAmountMerged,
             payment_method: paymentMethod,
             status: "completed",
-            photos: draftPhotos,
-            // Attribute the CREATE/PAYMENT/CHECKOUT activities to the logged-in staff.
             created_by: useAuthStore.getState().user?.id,
           }),
         });
