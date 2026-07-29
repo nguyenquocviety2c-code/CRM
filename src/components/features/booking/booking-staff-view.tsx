@@ -13,6 +13,7 @@ import { useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamTime, toVietnamDay } from "@/lib/utils";
 import { getAllSlotCustomers, parseMultiCustomerNote } from "@/lib/multi-customer";
+import { usePopoverPlacement } from "@/hooks/use-popover-placement";
 import {
   Select,
   SelectContent,
@@ -1166,6 +1167,9 @@ function SegmentBlock({
   const isReviewing = useIsReviewing(booking.id);
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
+  // Popover placement: auto-flips to left/right/top when there's not enough
+  // space below the slot. Priority: bottom → left → right → top.
+  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass } = usePopoverPlacement(hovered);
 
   // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") ------------
   // When flashBookingId matches this booking, blink the block's background in
@@ -1492,9 +1496,17 @@ function SegmentBlock({
           promotion, tip, total) via BookingHoverDetails. Action buttons
           (edit / delete) stay at the bottom. z-[55] so the popover sits above
           sibling blocks (zIndex 50) but below the sticky header (z-60) — the
-          header row never gets covered by a popover from a top-row slot. */}
+          header row never gets covered by a popover from a top-row slot.
+
+          Placement: auto-flips via usePopoverPlacement. When there's not
+          enough space below, the popover moves to left → right → top. The
+          popover sits flush against the slot edge (no margin gap — per user
+          request: "không còn khoảng cách này nữa"). */}
       {hovered && (
-        <div className="absolute left-0 top-full z-[55] mt-1 w-[255px] border bg-white shadow-xl">
+        <div
+          ref={hoverPopoverRef}
+          className={`absolute ${hoverPlacementClass} z-[55] w-[255px] border bg-white shadow-xl max-h-[80vh] overflow-y-auto`}
+        >
           <BookingHoverDetails
             booking={booking}
             canViewCustomerPhone={canViewCustomerPhone}

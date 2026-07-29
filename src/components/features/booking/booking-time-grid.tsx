@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/hover-card";
 import { BookingHoverDetails } from "@/components/features/booking/booking-staff-view";
 import { parseMultiCustomerNote } from "@/lib/multi-customer";
+import { usePopoverPlacement } from "@/hooks/use-popover-placement";
 
 interface BookingTimeGridProps {
   bookings: Booking[];
@@ -601,6 +602,9 @@ function SegmentCard({
   const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
+  // Popover placement: auto-flips to left/right/top when there's not enough
+  // space below the slot. Priority: bottom → left → right → top.
+  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass } = usePopoverPlacement(hovered);
 
   // Segment-specific service info — the popover shows ONLY this slot's
   // service(s) (the segment's), not the full booking's. A multi-service booking
@@ -805,9 +809,17 @@ function SegmentCard({
           View nhân viên (staff-view) so the hover experience is identical
           across both views: customer name | phone, status + select, services
           with duration + staff in blue, "Tạo bởi" + "Đơn hàng"/"Xem hóa đơn"
-          link, edit + trash buttons. */}
+          link, edit + trash buttons.
+
+          Placement: auto-flips via usePopoverPlacement. When there's not
+          enough space below, the popover moves to left → right → top. The
+          popover sits flush against the slot edge (no margin gap — per user
+          request: "không còn khoảng cách này nữa"). */}
       {hovered && (
-        <div className="absolute left-0 top-0 z-50 mt-1 w-[255px] border bg-white shadow-xl">
+        <div
+          ref={hoverPopoverRef}
+          className={`absolute ${hoverPlacementClass} z-50 w-[255px] border bg-white shadow-xl max-h-[80vh] overflow-y-auto`}
+        >
           <BookingHoverDetails
             booking={booking}
             canViewCustomerPhone={canViewCustomerPhone}
