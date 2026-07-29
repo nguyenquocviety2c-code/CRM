@@ -1167,9 +1167,11 @@ function SegmentBlock({
   const isReviewing = useIsReviewing(booking.id);
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
-  // Popover placement: auto-flips to left/right/top when there's not enough
-  // space below the slot. Priority: bottom → left → right → top.
-  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass } = usePopoverPlacement(hovered);
+  // Popover placement: auto-flips to right/top/left when there's not enough
+  // space below the slot. Priority: bottom → right → top → left. Also
+  // re-measures when the popover's content loads (ResizeObserver) so a
+  // popover that starts short (loading) then grows tall gets re-evaluated.
+  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass, horizontalShift: hoverHorizontalShift } = usePopoverPlacement(hovered);
 
   // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") ------------
   // When flashBookingId matches this booking, blink the block's background in
@@ -1506,6 +1508,7 @@ function SegmentBlock({
         <div
           ref={hoverPopoverRef}
           className={`absolute ${hoverPlacementClass} z-[55] w-[255px] border bg-white shadow-xl max-h-[80vh] overflow-y-auto`}
+          style={{ transform: hoverHorizontalShift !== 0 ? `translateX(${hoverHorizontalShift}px)` : undefined }}
         >
           <BookingHoverDetails
             booking={booking}

@@ -602,9 +602,11 @@ function SegmentCard({
   const canViewCustomerPhone = useAuthStore((s) => s.hasPermission("view_customer_phone"));
   const [hovered, setHovered] = useState(false);
   const [selectOpen, setSelectOpen] = useState(false);
-  // Popover placement: auto-flips to left/right/top when there's not enough
-  // space below the slot. Priority: bottom → left → right → top.
-  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass } = usePopoverPlacement(hovered);
+  // Popover placement: auto-flips to right/top/left when there's not enough
+  // space below the slot. Priority: bottom → right → top → left. Also
+  // re-measures when the popover's content loads (ResizeObserver) so a
+  // popover that starts short (loading) then grows tall gets re-evaluated.
+  const { popoverRef: hoverPopoverRef, placementClass: hoverPlacementClass, horizontalShift: hoverHorizontalShift } = usePopoverPlacement(hovered);
 
   // Segment-specific service info — the popover shows ONLY this slot's
   // service(s) (the segment's), not the full booking's. A multi-service booking
@@ -819,6 +821,7 @@ function SegmentCard({
         <div
           ref={hoverPopoverRef}
           className={`absolute ${hoverPlacementClass} z-50 w-[255px] border bg-white shadow-xl max-h-[80vh] overflow-y-auto`}
+          style={{ transform: hoverHorizontalShift !== 0 ? `translateX(${hoverHorizontalShift}px)` : undefined }}
         >
           <BookingHoverDetails
             booking={booking}
