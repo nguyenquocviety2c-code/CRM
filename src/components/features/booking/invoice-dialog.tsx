@@ -55,10 +55,20 @@ export interface ExistingInvoice {
 
 export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDialogProps) {
   // A booking with status "checkout" is considered already paid -> read-only view.
-  // EXCEPTION: when `slotIndex` is set (per-customer mode), the dialog is
+  // EXCEPTION 1: when `slotIndex` is set (per-customer mode), the dialog is
   // editable even if the booking is "checkout" — the user is paying for ONE
   // more customer in an already-partially-paid multi-customer booking.
-  const isCheckout = booking.status === "checkout" && slotIndex === undefined;
+  // EXCEPTION 2: when the booking is multi-customer with [[MULTI]] note and AT
+  // LEAST ONE customer slot is still "checkin" (unpaid, being served), the
+  // dialog is editable even if the booking-level status is "checkout" — there
+  // are still customers waiting to be served/paid. The dialog's serviceRows
+  // filter only includes "checkin" slots, so paid/cancelled/no_show slots are
+  // excluded from the editable view.
+  const multiCustomerForCheckout = parseMultiCustomerNote(booking.note);
+  const hasCheckinSlot = multiCustomerForCheckout?.slotStatuses
+    ? multiCustomerForCheckout.slotStatuses.some((s) => s === "checkin")
+    : false;
+  const isCheckout = booking.status === "checkout" && slotIndex === undefined && !hasCheckinSlot;
 
   // "Xác nhận đơn hàng và hóa đơn cũ" permission: allows confirming payment on
   // unpaid invoices for bookings whose date has already passed. Without this

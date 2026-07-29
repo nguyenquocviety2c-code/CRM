@@ -35,6 +35,7 @@ const PaidInvoiceView = dynamic(
 );
 import { BookingStatusType } from "@/lib/constants";
 import { transitionBookingToCheckout } from "@/lib/booking-checkout";
+import { parseMultiCustomerNote } from "@/lib/multi-customer";
 import { BranchSelector } from "@/components/layout/branch-selector";
 import { useBranchStore } from "@/stores/branch-store";
 import { StaffReorderDialog } from "@/components/features/booking/staff-reorder-dialog";
@@ -817,10 +818,33 @@ function BookingPageContent() {
 
       {/* Shared invoice dialog / paid invoice view — opened from the
           staff-view and time-grid via the onShowInvoice callback.
-          For PAID bookings, show the full-page PaidInvoiceView; for unpaid,
-          show the InvoiceDialog. */}
-      {invoiceBooking && (
-        (invoiceBooking.status === "checkout" && invoiceBooking.invoice?.id && invoiceSlotIndex === undefined) ? (
+          - When the booking is fully paid (status "checkout") AND no customer
+            is currently "checkin" (unpaid, being served) → show the full-page
+            PaidInvoiceView so the cashier can review/print the receipt.
+          - When the booking is partially paid (some customers "checkout", but
+            at least one customer is still "checkin" — unpaid, being served) →
+            show the InvoiceDialog (editable, combined mode) so the cashier can
+            add services/products and proceed to payment for the checked-in
+            customers. The dialog's serviceRows filter only includes "checkin"
+            slots — paid/cancelled/no_show slots are excluded.
+          - When `slotIndex` is set (per-customer mode from a checkin slot in a
+            partially-paid booking) → always show InvoiceDialog for that one
+            customer. */}
+      {invoiceBooking && (() => {
+        // Determine whether ANY customer slot is currently "checkin" (unpaid,
+        // being served). When true, we show the editable InvoiceDialog even if
+        // the booking-level status is "checkout" (set when the first customer
+        // paid) — because there are still customers waiting to be served/paid.
+        const parsed = parseMultiCustomerNote(invoiceBooking.note);
+        const hasCheckinSlot = parsed?.slotStatuses
+          ? parsed.slotStatuses.some((s) => s === "checkin")
+          : invoiceBooking.status === "checkin";
+        const showFullPaidView =
+          invoiceBooking.status === "checkout" &&
+          invoiceBooking.invoice?.id &&
+          invoiceSlotIndex === undefined &&
+          !hasCheckinSlot;
+        return showFullPaidView ? (
           <PaidInvoiceView
             invoiceId={invoiceBooking.invoice.id}
             customerName={invoiceBooking.customer?.name}
@@ -845,8 +869,9 @@ function BookingPageContent() {
                 setInvoiceSlotIndex(undefined);
                 return;
               }
-              // NORMAL MODE: transition to checkout using the shared helper so
-              // multi-customer bookings preserve per-customer slotStatuses.
+              // NORMAL/COMBINED MODE: transition to checkout using the shared
+              // helper so multi-customer bookings preserve per-customer
+              // slotStatuses (only checked-in slots become "checkout").
               transitionBookingToCheckout(
                 invoiceBooking,
                 useAuthStore.getState().user?.id
@@ -861,8 +886,8 @@ function BookingPageContent() {
               setInvoiceSlotIndex(undefined);
             }}
           />
-        )
-      )}
+        );
+      })()}
 
       {/* Dedicated "Xếp nhân viên" dialog — opened by the "Xếp nhân viên"
           button on no-staff segments/popovers/links in all 3 views. Lets the
