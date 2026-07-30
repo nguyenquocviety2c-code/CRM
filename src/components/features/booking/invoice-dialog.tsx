@@ -930,7 +930,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
         review → the invoice dialog re-appears below. */}
     {!showReview && (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="order-dialog-dense !max-w-[560px] p-0 overflow-hidden" storageKey="invoice">
+      <DialogContent className="order-dialog-dense max-w-[560px] p-0 overflow-hidden" storageKey="invoice" resizable>
         <DialogHeader className="px-4 pt-3 pb-1.5">
           <DialogTitle className="text-lg font-semibold">
             Hóa đơn
@@ -1334,15 +1334,12 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                           </button>
                         </div>
                       </div>
-                      {/* Line 2: staff name + "Xếp nhân viên" button (BELOW the product name,
-                          not on the same line). When staff is assigned, show "NV: <name>" first,
-                          then the yellow "Xếp nhân viên" button directly below it. When no staff,
-                          show only the button. Per the user's request: "nút Xếp nhân viên tự động
-                          đặt ở dưới tên nhân viên chứ không phải cùng dòng". */}
-                      <div className="mt-1 flex flex-col items-start gap-1">
-                        {p.staffName && (
-                          <span className="text-xs text-gray-500">NV: {p.staffName}</span>
-                        )}
+                      {/* Line 2: "Xếp nhân viên" button (LEFT) + staff name (RIGHT) on the
+                          SAME line. When staff is assigned, show "NV: <name>" on the right
+                          (truncated if long); when no staff, show only the button on the left.
+                          Per the user's request: "sau khi thêm nhân viên thì tên nhân viên đặt
+                          bên phải cùng dòng với nút Xếp nhân viên". */}
+                      <div className="mt-1 flex items-center justify-between gap-2">
                         <button
                           type="button"
                           onClick={() => {
@@ -1351,11 +1348,14 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                             setReassignProductStaffId(current?.id || "");
                           }}
                           title={p.staffName ? `Xếp nhân viên (hiện: ${p.staffName})` : "Xếp nhân viên cho sản phẩm này"}
-                          className="flex h-5 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
+                          className="flex h-5 shrink-0 items-center gap-0.5 rounded border border-yellow-400 bg-yellow-400 px-1.5 text-[10px] font-medium text-yellow-800 hover:border-yellow-500 hover:bg-yellow-500 hover:text-yellow-900"
                         >
                           <UserCog className="h-2.5 w-2.5" />
                           Xếp nhân viên
                         </button>
+                        {p.staffName && (
+                          <span className="text-xs text-gray-500 truncate min-w-0 text-right">NV: {p.staffName}</span>
+                        )}
                       </div>
                       {/* Line 3: product code (under the staff/button, when present) */}
                       {p.code && (

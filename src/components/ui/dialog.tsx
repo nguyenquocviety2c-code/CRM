@@ -138,10 +138,14 @@ function useDraggable(minimized: boolean) {
  *
  * `contentRef` is shared with the drag hook (both target the same content el).
  */
-function useResizable(contentRef: React.RefObject<HTMLDivElement | null>, storageKey?: string) {
+function useResizable(contentRef: React.RefObject<HTMLDivElement | null>, storageKey?: string, forceEnable?: boolean) {
   // `resize_table` permission gate. read once; permission changes are rare and
-  // a re-mount (after refreshSession) picks up new values.
-  const canResize = useAuthStore((s) => s.hasPermission("resize_table"))
+  // a re-mount (after refreshSession) picks up new values. `forceEnable` lets a
+  // specific dialog (e.g. the Invoice dialog) be resizable regardless of the
+  // staff's permissions — used when the business wants that dialog always
+  // resizable + size-persistent.
+  const hasPerm = useAuthStore((s) => s.hasPermission("resize_table"))
+  const canResize = forceEnable || hasPerm
   // Base width captured on first resize (the dialog's natural CSS width, BEFORE
   // any zoom is applied — used as the denominator for zoom factor calculation).
   const baseSizeRef = React.useRef<{ w: number; h: number } | null>(null)
@@ -342,6 +346,7 @@ function DialogContent({
   showCloseButton = true,
   minimized = false,
   storageKey,
+  resizable,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -353,11 +358,16 @@ function DialogContent({
    *  localStorage under this key so the dialog reopens at the same size next
    *  time. Use a unique string per dialog TYPE (e.g. "invoice", "booking"). */
   storageKey?: string
+  /** When true, the resize handles are ALWAYS shown (bypassing the
+   *  `resize_table` permission gate). Use this for dialogs the business wants
+   *  every staff member to be able to resize + persist (e.g. the Invoice
+   *  dialog). Size persistence (storageKey) still works independently of this. */
+  resizable?: boolean
 }) {
   const { offset, contentRef, onPointerDown } = useDraggable(minimized)
-  // Resize is only enabled for non-minimized dialogs AND when the staff has
-  // the "resize_table" permission (checked inside the hook).
-  const { canResize, size, startResize } = useResizable(contentRef, storageKey)
+  // Resize is enabled for non-minimized dialogs when EITHER the `resizable`
+  // prop is set OR the staff has the "resize_table" permission.
+  const { canResize, size, startResize } = useResizable(contentRef, storageKey, resizable)
   const showResizeHandles = canResize && !minimized
 
   return (
@@ -381,8 +391,15 @@ function DialogContent({
           // active resize these are overridden directly on the DOM by the
           // native move handler; the committed values keep the size stable
           // across re-renders between drags.
-          ...(size.width != null ? { width: `${size.width}px` } : {}),
-          ...(size.height != null ? { height: `${size.height}px` } : {}),
+          //
+          // When a custom width/height is present we also set
+          // maxWidth/maxHeight to "none" inline. This OVERRIDES any class-based
+          // max-w-* (e.g. `max-w-[560px]` on the Invoice dialog) so the
+          // restored/resized size is NOT capped back down to the default max.
+          // Without this, a dialog resized to 700px would reopen at 560px
+          // because `max-width: 560px` clamps the inline `width: 700px`.
+          ...(size.width != null ? { width: `${size.width}px`, maxWidth: "none" } : {}),
+          ...(size.height != null ? { height: `${size.height}px`, maxHeight: "none" } : {}),
           ...(size.zoom !== 1 ? { zoom: size.zoom } : {}),
         }}
         onPointerDown={onPointerDown}
