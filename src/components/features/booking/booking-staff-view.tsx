@@ -344,22 +344,31 @@ export function BookingStaffView({
       const services = getAllServices(booking)
         .slice()
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-      // Each service is its OWN segment (NO merging of same-staff services).
-      // This way, when 2 services share the same staff + same start time,
-      // they render as 2 separate blocks SIDE-BY-SIDE in the same slot
-      // (split layout). The SegmentBlock renderer detects same-slot segments
-      // and splits them horizontally (2 per row, 3rd wraps to next row).
-      const totalSegments = services.length;
+      // Group CONSECUTIVE services performed by the SAME staff into one
+      // segment. Same-booking + same-staff + same-time services are MERGED
+      // into one block (displayed as a single ô). Only when DIFFERENT bookings
+      // overlap on the same staff's timeline will the renderer split them.
+      const groups: BookingServiceRow[][] = [];
+      for (const s of services) {
+        const last = groups.length > 0 ? groups[groups.length - 1] : null;
+        const lastStaffId = last && last.length > 0 ? last[last.length - 1].staff_id : null;
+        if (last && lastStaffId && lastStaffId === s.staff_id) {
+          last.push(s);
+        } else {
+          groups.push([s]);
+        }
+      }
+      const totalSegments = groups.length;
       const startMin = getBookingStartMinutes(booking);
       // PARALLEL: every segment starts at the booking's startMin.
-      services.forEach((svc, i) => {
-        const duration = svc.service?.duration || 60;
-        const staffId = svc.staff_id || "";
+      groups.forEach((group, i) => {
+        const duration = group.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+        const staffId = group[0].staff_id || "";
         const seg: ServiceSegment = {
           booking,
-          services: [svc],
+          services: group,
           staffId,
-          staffName: svc.staff?.name || "—",
+          staffName: group[0].staff?.name || "—",
           segmentIndex: i,
           totalSegments,
           startMin: startMin ?? 0,
@@ -373,8 +382,6 @@ export function BookingStaffView({
         if (col) {
           col.segments.push(seg);
         } else {
-          // Staff on the booking but not in allStaff (different branch / group).
-          // Add an extra column so the segment is still visible.
           const newCol: StaffColumn = {
             staff: { id: staffId, name: seg.staffName },
             segments: [seg],
@@ -948,14 +955,15 @@ export function BookingStaffView({
                     />
                   )}
 
-                  {/* Service-segment blocks. Each segment = one service of one
-                      booking, positioned at [start, start+duration) on THIS
-                      staff's timeline. When 2+ segments share the SAME startMin
-                      (same time slot, same staff), they are SPLIT side-by-side:
-                      ALL on the SAME row (no wrapping), each gets 1/N width. */}
+                  {/* Service-segment blocks. Same-booking + same-staff services
+                      are MERGED into one block (single ô). Only when DIFFERENT
+                      bookings overlap on the same staff's timeline (one block
+                      would cover another) → SPLIT them side-by-side, each gets
+                      equal width (100/N), all on the same row. */}
                   {(() => {
-                    // Group segments by startMin to detect same-slot overlaps.
                     const segs = col.segments;
+                    // Group by startMin to detect overlapping segments from
+                    // DIFFERENT bookings (same startMin + different booking.id).
                     const slotGroups = new Map<number, typeof segs>();
                     for (const s of segs) {
                       const key = s.startMin;
@@ -964,11 +972,13 @@ export function BookingStaffView({
                     }
                     return segs.map((seg) => {
                       const group = slotGroups.get(seg.startMin) || [seg];
-                      const slotCount = group.length;
-                      // If only 1 segment → full width. If 2+ → ALL share the
-                      // same row, each gets equal width (100/N). No wrapping.
-                      const isSplit = slotCount > 1;
+                      // Only split when 2+ segments from DIFFERENT bookings share
+                      // the same slot. Same-booking segments are already merged
+                      // (1 segment = 1 block), so they never trigger split.
+                      const distinctBookings = new Set(group.map((s) => s.booking.id));
+                      const isSplit = group.length > 1 && distinctBookings.size > 1;
                       const segIndexInSlot = group.indexOf(seg);
+                      const slotCount = group.length;
                       const widthPct = isSplit ? 100 / slotCount : 100;
                       const leftPct = isSplit ? segIndexInSlot * widthPct : 0;
                       const rowOffset = 0;
