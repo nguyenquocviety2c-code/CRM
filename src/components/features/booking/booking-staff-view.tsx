@@ -428,7 +428,26 @@ export function BookingStaffView({
 
   // Total timeline height in pixels. Uses the resizable pxPerHour (single-day)
   // or the constant (multi-day DayRangeGrid uses its own DAYGRID_ROW_HEIGHT).
-  const timelineHeight = (END_HOUR - START_HOUR) * pxPerHour;
+  // EXPANDED when split slots need extra vertical space: each "wrap row" (3rd+
+  // service in a slot) adds pxPerHour/2 extra height so blocks don't overlap.
+  const splitExtraHeight = useMemo(() => {
+    let extra = 0;
+    for (const col of staffColumns) {
+      const slotGroups = new Map<number, number>();
+      for (const s of col.segments) {
+        const key = s.startMin;
+        slotGroups.set(key, (slotGroups.get(key) || 0) + 1);
+      }
+      for (const count of slotGroups.values()) {
+        // Each pair of services beyond the first 2 adds one extra row.
+        // Each extra row = pxPerHour / 2 (half the slot height).
+        const extraRows = Math.max(0, Math.ceil((count - 2) / 2));
+        extra = Math.max(extra, extraRows * (pxPerHour / 2));
+      }
+    }
+    return extra;
+  }, [staffColumns, pxPerHour]);
+  const timelineHeight = (END_HOUR - START_HOUR) * pxPerHour + splitExtraHeight;
 
   // ---- Column resizing (with persistence) ----
   // columnWidths[0] = "Giờ" column width; columnWidths[1..N] = staff columns.
@@ -1298,6 +1317,11 @@ function SegmentBlock({
     : Math.min(rawEnd, trackMinutes);
   const topPx = (clampedStart / 60) * pxPerHour;
   const heightPx = Math.max(24, ((clampedEnd - clampedStart) / 60) * pxPerHour);
+  // When split with 3+ services, each sub-block's height is capped at
+  // pxPerHour (1 hour) so blocks don't overflow. When NOT split, the height
+  // is the service's actual duration (may be > 1 hour for long services).
+  const maxHeightPx = isSplit ? pxPerHour : heightPx;
+  const effectiveHeightPx = Math.min(heightPx, maxHeightPx);
 
   // Time-range label "HH:MM - HH:MM" for THIS service's slice.
   const startTotalMin = START_HOUR * 60 + segment.startMin;
@@ -1439,7 +1463,7 @@ function SegmentBlock({
       className="absolute"
       style={{
         top: `${topPx + rowOffset}px`,
-        height: `${heightPx - rowOffset}px`,
+        height: `${effectiveHeightPx - rowOffset}px`,
         zIndex,
         // When split: position at leftPct% with widthPct% width (inside the
         // column). When NOT split: left-1 right-1 (full width with 4px margin).
@@ -1473,10 +1497,10 @@ function SegmentBlock({
             onClick();
           }
         }}
-        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 p-2 text-left shadow-sm transition hover:shadow-md ${blockBg} ${draggable ? "active:cursor-grabbing" : ""}`}
+        className={`absolute inset-0 cursor-pointer overflow-hidden border-2 text-left shadow-sm transition hover:shadow-md ${blockBg} ${draggable ? "active:cursor-grabbing" : ""} ${isSplit ? "p-1 text-[10px] leading-tight" : "p-2 text-xs"}`}
       >
         {/* Time range for THIS service's slice + date + multi-service badge */}
-        <div className={`flex items-center justify-between text-sm font-semibold ${timeText}`}>
+        <div className={`flex items-center justify-between font-semibold ${timeText} ${isSplit ? "text-[10px]" : "text-sm"}`}>
           <span>
             {timeRange}
             {dateLabel && <span className="ml-1 text-xs font-normal text-gray-500">{dateLabel}</span>}
