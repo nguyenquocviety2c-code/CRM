@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   type IncentiveShape,
   type AppliedPromotion,
@@ -23,10 +24,12 @@ import { X, PlusCircle, Package, ChevronLeft, Minus, Plus, UserCog, Loader2 } fr
 import { InvoiceActivityTable } from "@/components/features/cashier/invoice-activity-table";
 import { Booking } from "@/stores/booking-store";
 import { useAuthStore } from "@/stores/auth-store";
+import { queryKeys } from "@/lib/query-keys";
 import { usePaymentReviewStore, useIsReviewing } from "@/stores/payment-review-store";
 import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { parseMultiCustomerNote, buildMultiCustomerNote } from "@/lib/multi-customer";
+import { TimePicker } from "@/components/ui/time-picker";
 
 export interface InvoiceDialogProps {
   booking: Booking;
@@ -75,6 +78,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   // unpaid invoices for bookings whose date has already passed. Without this
   // permission, past-date unpaid invoices are shown read-only.
   const { hasPermission } = useAuthStore();
+  const queryClient = useQueryClient();
   const canConfirmOldInvoice = hasPermission("confirm_old_invoice");
 
   // Determine if this is a "past-date unpaid" booking: the booking's date_time
@@ -320,6 +324,10 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   const [reassignStaffError, setReassignStaffError] = useState("");
   const [reassignStaffChecking, setReassignStaffChecking] = useState(false);
   const [reassignStaffSaving, setReassignStaffSaving] = useState(false);
+  // Reassign staff dialog — optional time override. Defaults to the booking's
+  // first service time (the booking-level date_time), but the user can pick a
+  // different time for this specific service via the TimePicker.
+  const [reassignStaffPickTime, setReassignStaffPickTime] = useState<string>("");
 
   // === Per-product "Xếp nhân viên" dialog state ===
   // Opened by the "Xếp nhân viên" button in each product row. Products don't
@@ -665,6 +673,47 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   //  "Ảnh đính kèm" UI section — photos can no longer be added or removed
   //  from this dialog. Existing invoice photos remain on the server and are
   //  still re-sent on confirm via `displayPhotos` / `draftPhotos`.)
+
+  // === Remove a service from the booking ===
+  // Called by the "x" button next to a service's price. PUTs the booking with
+  // the services array MINUS the removed service (syncBookingServices on the
+  // API replaces the whole list). On success, invalidates the bookings cache so
+  // the booking reloads with the service gone.
+  const [removingServiceId, setRemovingServiceId] = useState<string | null>(null);
+  const handleRemoveService = async (bookingServiceId: string) => {
+    if (!bookingServiceId || removingServiceId) return;
+    setRemovingServiceId(bookingServiceId);
+    try {
+      // Build the NEW services array: all current services EXCEPT the one
+      // being removed. Use allServiceRows (the full list) so multi-customer
+      // bookings keep their other customers' services.
+      const remainingServices = allServiceRows
+        .filter((r) => r.bookingServiceId !== bookingServiceId)
+        .map((s, idx) => ({
+          service_id: s.serviceId,
+          staff_id: s.staffId || null,
+          service_category_id: s.categoryId || null,
+          sort_order: idx,
+        }));
+      const res = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          services: remainingServices,
+          actor_staff_id: useAuthStore.getState().user?.id,
+        }),
+      });
+      const json = await res.json();
+      if (!json.ok) throw new Error(json.error || "Không thể xóa dịch vụ");
+      // Invalidate so the booking reloads with the updated services list.
+      queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
+      queryClient.invalidateQueries({ queryKey: ["booking-dialog-day-bookings"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Xóa dịch vụ thất bại");
+    } finally {
+      setRemovingServiceId(null);
+    }
+  };
 
   const handleConfirm = async () => {
     setError("");
@@ -1076,7 +1125,10 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                     setServicePickerStep("groups");
                     setSelectedServiceGroup(null);
                     setServiceQuantities({});
-                    setPickedServiceStaffId("");
+                    // Default the staff to the FIRST service's staff (the
+                    // booking's assigned staff) so added services share the
+                    // same staff by default — per request.
+                    setPickedServiceStaffId(allServiceRows[0]?.staffId || "");
                     setServicePickerError("");
                     setServicePickerTargetSlot(slotIndex);
                     setServicePickerOpen(true);
@@ -1114,7 +1166,11 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                           setServicePickerStep("groups");
                           setSelectedServiceGroup(null);
                           setServiceQuantities({});
-                          setPickedServiceStaffId("");
+                          // Default the staff to this customer's first
+                          // service's staff so added services share the same
+                          // staff by default.
+                          const slotStaff = allServiceRows.find((r) => r._slotIdx === group.idx)?.staffId || "";
+                          setPickedServiceStaffId(slotStaff || allServiceRows[0]?.staffId || "");
                           setServicePickerError("");
                           setServicePickerTargetSlot(group.idx);
                           setServicePickerOpen(true);
@@ -1144,6 +1200,11 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                                     onClick={() => {
                                       setReassignStaffServiceId(srvRow.bookingServiceId);
                                       setReassignStaffPickStaffId(srvRow.staffId || "");
+                                      // Default the time to the booking's start
+                                      // time (the first service's time). The
+                                      // user can pick a different time in the
+                                      // dialog's TimePicker.
+                                      setReassignStaffPickTime(booking.time || (booking.date_time ? toVietnamTime(booking.date_time) : ""));
                                       setReassignStaffError("");
                                       setReassignStaffChecking(false);
                                     }}
@@ -1157,9 +1218,28 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                                 {s.staff && <span className="text-xs text-gray-500">NV: {s.staff}</span>}
                               </div>
                             </div>
-                            {/* Price on the same line as the service name */}
-                            <div className="font-medium text-gray-900 shrink-0 ml-2">
-                              {fmt(Number(s.price) || 0)}đ
+                            {/* Price + "x" delete button on the same line as the service name.
+                                The "x" removes this service from the booking (PUT with services
+                                array minus this one). Only shown in editable mode. */}
+                            <div className="flex items-center shrink-0 ml-2 gap-1">
+                              <div className="font-medium text-gray-900">
+                                {fmt(Number(s.price) || 0)}đ
+                              </div>
+                              {!effectivelyReadOnly && srvRow?.bookingServiceId && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveService(srvRow.bookingServiceId)}
+                                  disabled={removingServiceId === srvRow.bookingServiceId}
+                                  title={`Xóa ${s.name || "dịch vụ"}`}
+                                  className="flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-red-100 hover:text-red-600 disabled:opacity-50"
+                                >
+                                  {removingServiceId === srvRow.bookingServiceId ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <X className="h-3 w-3" strokeWidth={2.5} />
+                                  )}
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -1203,6 +1283,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                             onClick={() => {
                               setReassignStaffServiceId(srvRow.bookingServiceId);
                               setReassignStaffPickStaffId(srvRow.staffId || "");
+                              setReassignStaffPickTime(booking.time || (booking.date_time ? toVietnamTime(booking.date_time) : ""));
                               setReassignStaffError("");
                               setReassignStaffChecking(false);
                             }}
@@ -1216,8 +1297,26 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                         {s.staffName && <span className="text-xs text-gray-500">NV: {s.staffName}</span>}
                       </div>
                     </div>
-                    <div className="font-medium text-gray-900 shrink-0 ml-2">
-                      {fmt(Number(s.price) || 0)}đ
+                    {/* Price + "x" delete button on the same line. */}
+                    <div className="flex items-center shrink-0 ml-2 gap-1">
+                      <div className="font-medium text-gray-900">
+                        {fmt(Number(s.price) || 0)}đ
+                      </div>
+                      {!effectivelyReadOnly && srvRow?.bookingServiceId && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveService(srvRow.bookingServiceId)}
+                          disabled={removingServiceId === srvRow.bookingServiceId}
+                          title={`Xóa ${s.name || "dịch vụ"}`}
+                          className="flex h-4 w-4 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-red-100 hover:text-red-600 disabled:opacity-50"
+                        >
+                          {removingServiceId === srvRow.bookingServiceId ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <X className="h-3 w-3" strokeWidth={2.5} />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                   );
@@ -2207,6 +2306,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
           if (!v) {
             setReassignStaffServiceId(null);
             setReassignStaffPickStaffId("");
+            setReassignStaffPickTime("");
             setReassignStaffError("");
           }
         }}
@@ -2244,6 +2344,18 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
             {!reassignStaffPickStaffId && (
               <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
             )}
+            {/* Time picker — lets the user set a SPECIFIC time for this service
+                (overrides the booking's default time). Defaults to the booking's
+                start time (first service's time), editable via the TimePicker
+                popover. */}
+            <div className="mt-2 space-y-1">
+              <label className="text-[11px] text-gray-500">Giờ thực hiện</label>
+              <TimePicker
+                value={reassignStaffPickTime}
+                onChange={(v) => setReassignStaffPickTime(v)}
+                placeholder="HH:MM"
+              />
+            </div>
             {reassignStaffError && (
               <div className="whitespace-pre-line mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
                 {reassignStaffError}
@@ -2258,6 +2370,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
               onClick={() => {
                 setReassignStaffServiceId(null);
                 setReassignStaffPickStaffId("");
+                setReassignStaffPickTime("");
                 setReassignStaffError("");
               }}
               disabled={reassignStaffSaving}
