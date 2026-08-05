@@ -9,7 +9,7 @@ import { getCurrentStaffId } from "@/lib/auth/current-staff";
 // So we only join booking_services and branches here, and enrich the customer
 // (and source) data manually after fetching.
 const BOOKING_SELECT =
-  "*, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, booking_id, service_id, staff_id, service_category_id, sort_order, service:services!service_id(id, name, code, price, duration), category:service_categories!service_category_id(id, name), staff:staff!staff_id(id, name))";
+  "*, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, booking_id, service_id, staff_id, service_category_id, sort_order, service:services!service_id(id, name, code, price, duration), category:service_categories!service_category_id(id, name))";
 
 /**
  * Enrich a list of booking rows with customer (and customer source) data.
