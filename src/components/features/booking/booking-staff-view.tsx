@@ -521,9 +521,17 @@ export function BookingStaffView({
   //   scroll.
   // - canResizeTable = false: "Giờ" col (px) + staff cols (1fr each). Always
   //   equal width, fills the container, not draggable.
+  // SAFETY: if columnWidths doesn't match staffColumns.length + 1 (e.g. during
+  // async staff load when allStaff is still []), fall back to defaults so ALL
+  // staff columns always render (never collapse to 0 columns).
+  const widthsMatchColumns =
+    columnWidths.length === staffColumns.length + 1;
+  const safeColumnWidths = widthsMatchColumns
+    ? columnWidths
+    : [TIME_COL_WIDTH, ...Array(staffColumns.length).fill(STAFF_COL_WIDTH)];
   const gridTemplate = canResizeTable
-    ? columnWidths.map((w) => `${w}px`).join(" ")
-    : `${columnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
+    ? safeColumnWidths.map((w) => `${w}px`).join(" ")
+    : `${safeColumnWidths[0] || TIME_COL_WIDTH}px repeat(${Math.max(staffColumns.length, 1)}, minmax(0, 1fr))`;
   // Total scrollable width. Only meaningful when canResizeTable = true (the
   // px-based grid may exceed the container). When 1fr, the container is 100%.
   const totalWidth = columnWidths.reduce((s, w) => s + w, 0);
@@ -2567,8 +2575,17 @@ export function BookingHoverDetails({
           "checkin" via onStatusChange("checkin"). Once checked in, the button
           disappears (the status is already checkin). */}
       <div className="border-t pt-1">
-        <div className="mb-0.5 text-xs text-gray-500">
+        <div className="mb-0.5 text-xs text-gray-500 whitespace-nowrap">
           Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
+          {booking.created_at && (() => {
+            try {
+              const d = toVietnamDay(booking.created_at).split("-");
+              const t = toVietnamTime(booking.created_at);
+              return ` lúc ${t} ${d.length === 3 ? `${d[2]}/${d[1]}/${d[0]}` : ""}`;
+            } catch {
+              return "";
+            }
+          })()}
         </div>
         <div className="flex items-center gap-2">
           <button

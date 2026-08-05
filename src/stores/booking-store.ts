@@ -43,6 +43,10 @@ export interface Booking {
   /** Raw creator staff id (UUID). Null when the booking was placed by a
    *  customer via the /dat-lich kiosk (no staff logged in). */
   created_by?: string | null;
+  /** ISO timestamp when the booking record was created (Supabase column).
+   *  Used to show "Tạo bởi: (name) lúc HH:MM DD/MM/YYYY" in the View nhân viên
+   *  + View khách hàng > Khung giờ hover popovers. */
+  created_at?: string;
   /** Creator staff profile ({ id, name }) resolved by the bookings API.
    *  Null when created_by is null (kiosk) OR the staff record was deleted. */
   createdBy: { id?: string; name?: string; email?: string } | null;

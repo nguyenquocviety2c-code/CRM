@@ -454,26 +454,20 @@ export function BookingCustomerView({
                 {visibleColumns.note && (
                 <td className="border-r border-gray-300 px-3 py-1">
                   <div className="space-y-0.5">
+                    {/* Compute the user-visible note ONCE here (the [[MULTI]] JSON
+                        block is stripped; only the cashier's own typed note is
+                        shown). Used by the "Xem ghi chú" link at the bottom of
+                        this cell (below "Tạo bởi"). */}
                     {(() => {
-                      // Multi-customer "Cùng lịch" booking: the note carries a
-                      // [[MULTI]] JSON block (per-slot customer map). Customer
-                      // info is shown in the "Khách hàng" column (not here) —
-                      // this column shows ONLY services + staff (+ the cashier's
-                      // own typed note if present). Falls back to the regular
-                      // layout (ghi chú + services + staff) for plain bookings.
                       const parsed = parseMultiCustomerNote(booking.note);
                       const userNote = parsed ? parsed.userNote : (booking.note || "");
                       return (
                         <>
-                          {userNote && (
-                            <button
-                              type="button"
-                              onClick={() => setNoteDialogText(userNote)}
-                              className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
-                            >
-                              Xem ghi chú
-                            </button>
-                          )}
+                          {/* "Xem ghi chú" link REMOVED from the top — moved
+                              BELOW "Tạo bởi" (at the bottom of this cell) per
+                              request. The link is rendered after the IIFE
+                              (below "Tạo bởi"), using the same userNote value
+                              computed again there. */}
                           {serviceDisplay.length === 0 ? (
                             <div className="text-xs text-gray-400">Chưa có dịch vụ</div>
                           ) : (
@@ -597,6 +591,27 @@ export function BookingCustomerView({
                     <div className="text-xs text-gray-500">
                       Tạo bởi: {booking.created_by ? (booking.createdBy?.name || "—") : "Khách hàng"}
                     </div>
+                    {/* "Xem ghi chú" link — sits BELOW "Tạo bởi" (bottom of the
+                        cell) so the note link is the last thing the cashier sees.
+                        Only shown when the booking has a user note (the [[MULTI]]
+                        JSON block is stripped; the cashier's own typed note is
+                        what's shown here). Opens a dialog with the full note text.
+                        userNote is recomputed here (outside the IIFE above) since
+                        the IIFE's scope doesn't reach this point. */}
+                    {(() => {
+                      const parsedForNote = parseMultiCustomerNote(booking.note);
+                      const noteForLink = parsedForNote ? parsedForNote.userNote : (booking.note || "");
+                      if (!noteForLink) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setNoteDialogText(noteForLink)}
+                          className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                        >
+                          Xem ghi chú
+                        </button>
+                      );
+                    })()}
                   </div>
                 </td>
                 )}
