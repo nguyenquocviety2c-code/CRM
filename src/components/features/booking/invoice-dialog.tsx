@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type IncentiveShape,
   type AppliedPromotion,
@@ -30,6 +30,28 @@ import { maskPhone } from "@/lib/phone-mask";
 import { toVietnamDay, toVietnamTime } from "@/lib/utils";
 import { parseMultiCustomerNote, buildMultiCustomerNote } from "@/lib/multi-customer";
 import { TimePicker } from "@/components/ui/time-picker";
+
+/**
+ * Fetch a customer's "old/new" type. "old" = has ≥1 completed invoice with a
+ * service item (or belongs to a "khách cũ" group). Returns false for new/guest
+ * customers or on any error. Used to filter service categories in the invoice
+ * dialog's "Thêm dịch vụ" picker.
+ */
+function useIsOldCustomer(customerId: string | null): boolean {
+  const { data } = useQuery<{ ok: boolean; data?: { customer_type?: string; group?: { name?: string } | null } }>({
+    queryKey: ["invoice-dialog-customer-type", customerId],
+    queryFn: async () => {
+      if (!customerId) return { ok: false };
+      const res = await fetch(`/api/supabase/customers/${encodeURIComponent(customerId)}`);
+      return res.json();
+    },
+    enabled: !!customerId,
+    staleTime: 30_000,
+  });
+  if (!data?.ok || !data.data) return false;
+  const groupName = (data.data.group?.name || "").toLowerCase();
+  return data.data.customer_type === "old" || groupName.includes("khách cũ");
+}
 
 export interface InvoiceDialogProps {
   booking: Booking;
@@ -575,6 +597,14 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
       cancelled = true;
     };
   }, [effectivelyReadOnly, booking.branchId, booking.branch, booking.customer]);
+
+  // === Customer type (old/new) — drives service-category filtering ===
+  // Fetch the customer's type from the API. "old" = has at least one completed
+  // invoice with a service item (or belongs to a "khách cũ" group). "new" =
+  // otherwise. This filters the service picker: old customers DON'T see
+  // "Dành cho khách hàng mới"; new customers DON'T see "Dịch Vụ Cắt".
+  const customerId = (booking.customer as unknown as { id?: string } | null)?.id || null;
+  const isOldCustomer = useIsOldCustomer(customerId);
 
   // The selected promotion object (or null).
   const selectedPromo = promotions.find((p) => p.id === selectedPromoId) || null;
@@ -1924,7 +1954,9 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                     setServicePickerStep("groups");
                     setSelectedServiceGroup(null);
                     setServiceQuantities({});
-                    setPickedServiceStaffId("");
+                    // DON'T reset pickedServiceStaffId on "back" — the default
+                    // was set when the picker opened (booking's first service's
+                    // staff). Keeping it so the user doesn't lose the default.
                     setServicePickerError("");
                   }}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900"
@@ -1946,7 +1978,19 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
               ) : serviceCategories.length === 0 ? (
                 <div className="col-span-2 px-3 py-6 text-center text-sm text-gray-400">Chưa có nhóm dịch vụ</div>
               ) : (
-                serviceCategories.map((c) => {
+                // === Filter service categories by customer type ===
+                // - Old customers (have ≥1 completed invoice): HIDE "Dành cho
+                //   khách hàng mới" (they're not new).
+                // - New customers (no completed invoice): HIDE "Dịch Vụ Cắt"
+                //   (only new-customer cut is offered).
+                // This mirrors the cashier module's service-category filtering.
+                serviceCategories
+                  .filter((c) => {
+                    if (isOldCustomer && c.name.toLowerCase().includes("dành cho khách hàng mới")) return false;
+                    if (!isOldCustomer && c.name.toLowerCase().includes("dịch vụ cắt") && !c.name.toLowerCase().includes("dành cho")) return false;
+                    return true;
+                  })
+                  .map((c) => {
                   const count = servicesList.filter((s) => s.categoryId === c.id).length;
                   return (
                     <button
@@ -1955,7 +1999,10 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                       onClick={() => {
                         setSelectedServiceGroup(c.name);
                         setServiceQuantities({});
-                        setPickedServiceStaffId("");
+                        // DON'T reset pickedServiceStaffId here — the default
+                        // was set when the picker opened (to the booking's
+                        // first service's staff). Resetting it to "" would
+                        // lose the default staff the user expects.
                         setServicePickerError("");
                         setServicePickerStep("services");
                       }}
