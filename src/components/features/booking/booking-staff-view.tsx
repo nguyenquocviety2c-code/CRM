@@ -428,26 +428,7 @@ export function BookingStaffView({
 
   // Total timeline height in pixels. Uses the resizable pxPerHour (single-day)
   // or the constant (multi-day DayRangeGrid uses its own DAYGRID_ROW_HEIGHT).
-  // EXPANDED when split slots need extra vertical space: each "wrap row" (3rd+
-  // service in a slot) adds pxPerHour/2 extra height so blocks don't overlap.
-  const splitExtraHeight = useMemo(() => {
-    let extra = 0;
-    for (const col of staffColumns) {
-      const slotGroups = new Map<number, number>();
-      for (const s of col.segments) {
-        const key = s.startMin;
-        slotGroups.set(key, (slotGroups.get(key) || 0) + 1);
-      }
-      for (const count of slotGroups.values()) {
-        // Each pair of services beyond the first 2 adds one extra row.
-        // Each extra row = pxPerHour / 2 (half the slot height).
-        const extraRows = Math.max(0, Math.ceil((count - 2) / 2));
-        extra = Math.max(extra, extraRows * (pxPerHour / 2));
-      }
-    }
-    return extra;
-  }, [staffColumns, pxPerHour]);
-  const timelineHeight = (END_HOUR - START_HOUR) * pxPerHour + splitExtraHeight;
+  const timelineHeight = (END_HOUR - START_HOUR) * pxPerHour;
 
   // ---- Column resizing (with persistence) ----
   // columnWidths[0] = "Giờ" column width; columnWidths[1..N] = staff columns.
@@ -971,9 +952,7 @@ export function BookingStaffView({
                       booking, positioned at [start, start+duration) on THIS
                       staff's timeline. When 2+ segments share the SAME startMin
                       (same time slot, same staff), they are SPLIT side-by-side:
-                      max 2 per row, 3rd wraps to the next row. Each sub-block
-                      gets full width / N (or 1/2 when 3+), so all services in
-                      the same slot are visible simultaneously. */}
+                      ALL on the SAME row (no wrapping), each gets 1/N width. */}
                   {(() => {
                     // Group segments by startMin to detect same-slot overlaps.
                     const segs = col.segments;
@@ -986,20 +965,13 @@ export function BookingStaffView({
                     return segs.map((seg) => {
                       const group = slotGroups.get(seg.startMin) || [seg];
                       const slotCount = group.length;
-                      // If this segment is the ONLY one in its slot → full width
-                      // (left-1 right-1, as before). If 2+ share the slot →
-                      // split: max 2 per row. The 3rd (odd) wraps to the next
-                      // row and takes FULL width (it's alone in its row).
-                      const segIndexInSlot = group.indexOf(seg);
+                      // If only 1 segment → full width. If 2+ → ALL share the
+                      // same row, each gets equal width (100/N). No wrapping.
                       const isSplit = slotCount > 1;
-                      const row = Math.floor(segIndexInSlot / 2); // 0 = first row, 1 = second row
-                      const colInRow = segIndexInSlot % 2; // 0 = left, 1 = right
-                      const isOddInRow = isSplit && slotCount % 2 === 1 && segIndexInSlot === slotCount - 1;
-                      const widthPct = isSplit ? (isOddInRow ? 100 : 50) : 100;
-                      const leftPct = isSplit ? (isOddInRow ? 0 : colInRow * 50) : 0;
-                      const rowOffset = isSplit && row > 0
-                        ? heightPxForSeg(seg, pxPerHour) / 2
-                        : 0;
+                      const segIndexInSlot = group.indexOf(seg);
+                      const widthPct = isSplit ? 100 / slotCount : 100;
+                      const leftPct = isSplit ? segIndexInSlot * widthPct : 0;
+                      const rowOffset = 0;
                       return (
                         <SegmentBlock
                           key={`${seg.booking.id}-${seg.segmentIndex}`}
@@ -1317,11 +1289,9 @@ function SegmentBlock({
     : Math.min(rawEnd, trackMinutes);
   const topPx = (clampedStart / 60) * pxPerHour;
   const heightPx = Math.max(24, ((clampedEnd - clampedStart) / 60) * pxPerHour);
-  // When split with 3+ services, each sub-block's height is capped at
-  // pxPerHour (1 hour) so blocks don't overflow. When NOT split, the height
-  // is the service's actual duration (may be > 1 hour for long services).
-  const maxHeightPx = isSplit ? pxPerHour : heightPx;
-  const effectiveHeightPx = Math.min(heightPx, maxHeightPx);
+  // Block height = actual service duration (NO cap). Split blocks show
+  // their full time slice just like non-split blocks.
+  const effectiveHeightPx = heightPx;
 
   // Time-range label "HH:MM - HH:MM" for THIS service's slice.
   const startTotalMin = START_HOUR * 60 + segment.startMin;
