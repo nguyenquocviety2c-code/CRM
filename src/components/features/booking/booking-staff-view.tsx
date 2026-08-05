@@ -344,32 +344,22 @@ export function BookingStaffView({
       const services = getAllServices(booking)
         .slice()
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-      // Group CONSECUTIVE services performed by the SAME staff into one
-      // segment (a run of same-staff services merges into one slot).
-      const groups: BookingServiceRow[][] = [];
-      for (const s of services) {
-        const last = groups.length > 0 ? groups[groups.length - 1] : null;
-        const lastStaffId = last && last.length > 0 ? last[last.length - 1].staff_id : null;
-        if (last && lastStaffId && lastStaffId === s.staff_id) {
-          last.push(s);
-        } else {
-          groups.push([s]);
-        }
-      }
-      const totalSegments = groups.length;
+      // Each service is its OWN segment (NO merging of same-staff services).
+      // This way, when 2 services share the same staff + same start time,
+      // they render as 2 separate blocks SIDE-BY-SIDE in the same slot
+      // (split layout). The SegmentBlock renderer detects same-slot segments
+      // and splits them horizontally (2 per row, 3rd wraps to next row).
+      const totalSegments = services.length;
       const startMin = getBookingStartMinutes(booking);
-      // PARALLEL: every segment starts at the booking's startMin. Previously a
-      // cursor advanced by each segment's duration (consecutive model), making
-      // the 2nd service of a multi-staff booking appear at startMin + 1st
-      // service's duration (e.g. 11:00 instead of 09:30). Fixed to parallel.
-      groups.forEach((group, i) => {
-        const duration = group.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
-        const staffId = group[0].staff_id || "";
+      // PARALLEL: every segment starts at the booking's startMin.
+      services.forEach((svc, i) => {
+        const duration = svc.service?.duration || 60;
+        const staffId = svc.staff_id || "";
         const seg: ServiceSegment = {
           booking,
-          services: group,
+          services: [svc],
           staffId,
-          staffName: group[0].staff?.name || "—",
+          staffName: svc.staff?.name || "—",
           segmentIndex: i,
           totalSegments,
           startMin: startMin ?? 0,
@@ -960,39 +950,65 @@ export function BookingStaffView({
 
                   {/* Service-segment blocks. Each segment = one service of one
                       booking, positioned at [start, start+duration) on THIS
-                      staff's timeline. A multi-service / multi-staff booking
-                      therefore appears as separate blocks in each staff's
-                      column, each occupying its own time slice. */}
-                  {col.segments.map((seg) => (
-                    <SegmentBlock
-                      key={`${seg.booking.id}-${seg.segmentIndex}`}
-                      segment={seg}
-                      pxPerHour={pxPerHour}
-                      flashBookingId={flashBookingId}
-                      // Drag-to-move: only "new" + "confirmed" bookings are
-                      // draggable. Checkin/checkout/cancelled/no_show bookings
-                      // are LOCKED in place (per request — a checked-in customer
-                      // is being served, a cancelled/no_show is no longer active).
-                      // The callback stores the booking info in dragStateRef so
-                      // the staff column's onDrop can compute the new time/staff.
-                      draggable={!!onMoveBooking && (seg.booking.status === "confirmed" || seg.booking.status === "new")}
-                      onDragStart={(e) => {
-                        if (!onMoveBooking) return;
-                        e.dataTransfer.effectAllowed = "move";
-                        e.dataTransfer.setData("text/plain", seg.booking.id);
-                        dragStateRef.current = {
-                          bookingId: seg.booking.id,
-                          durationMin: seg.duration,
-                          originalStaffId: col.staff?.id || null,
-                          originalBooking: seg.booking,
-                        };
-                        setIsDragging(true);
-                      }}
-                      onDragEnd={() => {
-                        dragStateRef.current = null;
-                        setIsDragging(false);
-                        setDragOverSlot(null);
-                      }}
+                      staff's timeline. When 2+ segments share the SAME startMin
+                      (same time slot, same staff), they are SPLIT side-by-side:
+                      max 2 per row, 3rd wraps to the next row. Each sub-block
+                      gets full width / N (or 1/2 when 3+), so all services in
+                      the same slot are visible simultaneously. */}
+                  {(() => {
+                    // Group segments by startMin to detect same-slot overlaps.
+                    const segs = col.segments;
+                    const slotGroups = new Map<number, typeof segs>();
+                    for (const s of segs) {
+                      const key = s.startMin;
+                      if (!slotGroups.has(key)) slotGroups.set(key, []);
+                      slotGroups.get(key)!.push(s);
+                    }
+                    return segs.map((seg) => {
+                      const group = slotGroups.get(seg.startMin) || [seg];
+                      const slotCount = group.length;
+                      // If this segment is the ONLY one in its slot → full width
+                      // (left-1 right-1, as before). If 2+ share the slot →
+                      // split: 2 per row, 3rd wraps. Each sub-block gets
+                      // width = 50% (for 2) or 50% (for 3+, wrapping).
+                      const isSplit = slotCount > 1;
+                      const segIndexInSlot = group.indexOf(seg);
+                      const cols = isSplit ? Math.min(slotCount, 2) : 1;
+                      const widthPct = isSplit ? 100 / cols : 100;
+                      const leftPct = isSplit ? (segIndexInSlot % cols) * widthPct : 0;
+                      // For 3+ segments: the 3rd (index 2) wraps to the next
+                      // "row" — we offset its top by half the block height.
+                      const rowOffset = isSplit && segIndexInSlot >= 2
+                        ? heightPxForSeg(seg, pxPerHour) / 2
+                        : 0;
+                      return (
+                        <SegmentBlock
+                          key={`${seg.booking.id}-${seg.segmentIndex}`}
+                          segment={seg}
+                          pxPerHour={pxPerHour}
+                          flashBookingId={flashBookingId}
+                          draggable={!!onMoveBooking && (seg.booking.status === "confirmed" || seg.booking.status === "new")}
+                          isSplit={isSplit}
+                          widthPct={widthPct}
+                          leftPct={leftPct}
+                          rowOffset={rowOffset}
+                          onDragStart={(e) => {
+                            if (!onMoveBooking) return;
+                            e.dataTransfer.effectAllowed = "move";
+                            e.dataTransfer.setData("text/plain", seg.booking.id);
+                            dragStateRef.current = {
+                              bookingId: seg.booking.id,
+                              durationMin: seg.duration,
+                              originalStaffId: col.staff?.id || null,
+                              originalBooking: seg.booking,
+                            };
+                            setIsDragging(true);
+                          }}
+                          onDragEnd={() => {
+                            dragStateRef.current = null;
+                            setIsDragging(false);
+                            setDragOverSlot(null);
+                          }}
                       // Click logic:
                       // - checkout (paid) → open the full paid invoice view (giao diện hóa
                       //   đơn hoàn tất) so the cashier can review/print the receipt.
@@ -1111,7 +1127,9 @@ export function BookingStaffView({
                       onDelete={() => onDelete?.(seg.booking.id)}
                       onAssignStaff={() => onAssignStaff?.(seg.booking)}
                     />
-                  ))}
+                    );
+                  });
+                  })()}
                 </div>
               ))}
             </div>
@@ -1145,6 +1163,11 @@ function AssignStaffButton({ onAssignStaff }: { onAssignStaff?: () => void }) {
   );
 }
 
+// Helper: compute the pixel height of a segment based on its duration + pxPerHour.
+function heightPxForSeg(seg: ServiceSegment, pxPerHour: number): number {
+  return Math.max(24, (seg.duration / 60) * pxPerHour);
+}
+
 /** A single service-segment block on a staff's timeline. The block occupies
  *  [segment.startMin, segment.startMin + segment.duration) — the time slice
  *  THIS service runs for, on THIS staff's column. A multi-service / multi-staff
@@ -1162,6 +1185,11 @@ function SegmentBlock({
   flashBookingId,
   draggable,
   onDragStart,
+  onDragEnd,
+  isSplit = false,
+  widthPct = 100,
+  leftPct = 0,
+  rowOffset = 0,
 }: {
   segment: ServiceSegment;
   onClick: () => void;
@@ -1186,6 +1214,16 @@ function SegmentBlock({
   /** Drag-start handler — the parent stores the booking info in a ref so the
    *  drop target can compute the new time/staff. */
   onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?: (e: React.DragEvent) => void;
+  /** When true, this block is part of a split slot (2+ services share the
+   *  same time slot on the same staff's column). */
+  isSplit?: boolean;
+  /** Width percentage (0–100) when split. 50 = half width. */
+  widthPct?: number;
+  /** Left offset percentage (0–100) when split. */
+  leftPct?: number;
+  /** Top offset in px when 3+ segments share a slot (wraps to next row). */
+  rowOffset?: number;
 }) {
   const booking = segment.booking;
   const canCancelPayment = useAuthStore((s) => s.hasPermission("cancel_payment"));
@@ -1398,8 +1436,17 @@ function SegmentBlock({
 
   return (
     <div
-      className="absolute left-1 right-1"
-      style={{ top: `${topPx}px`, height: `${heightPx}px`, zIndex }}
+      className="absolute"
+      style={{
+        top: `${topPx + rowOffset}px`,
+        height: `${heightPx - rowOffset}px`,
+        zIndex,
+        // When split: position at leftPct% with widthPct% width (inside the
+        // column). When NOT split: left-1 right-1 (full width with 4px margin).
+        ...(isSplit
+          ? { left: `${leftPct}%`, width: `${widthPct}%`, padding: "0 2px" }
+          : { left: "4px", right: "4px" }),
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         // Keep popover open while the status select dropdown is open (it portals outside).
@@ -1418,6 +1465,7 @@ function SegmentBlock({
         tabIndex={0}
         draggable={draggable}
         onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
         onClick={onClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
