@@ -645,7 +645,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
     ? (existingInvoice?.items ?? []).filter(
         (it) => (it as { type?: string }).type !== "product"
       )
-    : serviceRows.map((s) => ({ name: s.name, price: s.price, staffName: s.staff ?? undefined, customer: s.customer ?? undefined }));
+    : serviceRows.map((s) => ({ name: s.name, price: s.price, staffName: s.staff ?? s.staffName ?? undefined, customer: s.customer ?? undefined }));
 
   // === Multi-customer service grouping ===
   // For multi-customer "Cùng lịch" bookings, group services by customer so the
@@ -1262,6 +1262,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
                                   </button>
                                 )}
                                 {s.staff && <span className="text-xs text-gray-500">NV: {s.staff}</span>}
+                                {s.staffName && !s.staff && <span className="text-xs text-gray-500">NV: {s.staffName}</span>}
                               </div>
                             </div>
                             {/* Price + "x" delete button on the same line as the service name.

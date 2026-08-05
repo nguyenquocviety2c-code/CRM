@@ -9,20 +9,29 @@ import { getCurrentStaffId } from "@/lib/auth/current-staff";
 // So we only join booking_services and branches here, and enrich the customer
 // (and source) data manually after fetching.
 const BOOKING_SELECT =
-  "*, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, booking_id, service_id, staff_id, service_category_id, sort_order, service:services!service_id(id, name, code, price, duration), category:service_categories!service_category_id(id, name))";
+  "*, branch:branches!branch_id(id, name), services:booking_services!booking_id(id, booking_id, service_id, staff_id, service_category_id, sort_order, service:services!service_id(id, name, code, price, duration), category:service_categories!service_category_id(id, name), staff:staff!staff_id(id, name))";
 
 /**
  * Enrich a list of booking rows with customer (and customer source) data.
  * Done as a manual batch lookup because the FK is not registered in PostgREST.
+ * Also enriches each booking_service's staff name (from the staff table).
  */
 async function enrichBookings(
   rows: Array<Record<string, unknown>>
 ): Promise<void> {
   const customerIds = new Set<string>();
   const sourceIds = new Set<string>();
+  const staffIds = new Set<string>();
   for (const r of rows) {
     if (r.customer_id) customerIds.add(String(r.customer_id));
     if (r.customer_source_id) sourceIds.add(String(r.customer_source_id));
+    if (r.created_by) staffIds.add(String(r.created_by));
+    // Collect staff_id from each booking_service entry.
+    const services = Array.isArray(r.services) ? r.services : [];
+    for (const s of services) {
+      const sid = (s as Record<string, unknown>)?.staff_id;
+      if (sid) staffIds.add(String(sid));
+    }
   }
 
   const customerMap = new Map<string, Record<string, unknown>>();
@@ -51,11 +60,35 @@ async function enrichBookings(
     }
   }
 
+  const staffMap = new Map<string, Record<string, unknown>>();
+  if (staffIds.size > 0) {
+    const { data: staffList } = await supabaseAdmin
+      .from("staff")
+      .select("id, name")
+      .in("id", Array.from(staffIds));
+    if (staffList) {
+      for (const s of staffList) {
+        staffMap.set(String(s.id), s as Record<string, unknown>);
+      }
+    }
+  }
+
   for (const r of rows) {
     const cid = r.customer_id ? String(r.customer_id) : null;
     r.customer = cid ? customerMap.get(cid) ?? null : null;
     const sid = r.customer_source_id ? String(r.customer_source_id) : null;
     r.source = sid ? sourceMap.get(sid) ?? null : null;
+    // Attach creator staff name for "Tạo bởi".
+    const cby = r.created_by ? String(r.created_by) : null;
+    r.createdBy = cby ? staffMap.get(cby) ?? null : null;
+    // Attach staff name to each booking_service entry (overrides the FK join
+    // which returns {id, name} from the staff table).
+    const services = Array.isArray(r.services) ? r.services : [];
+    for (const s of services) {
+      const svc = s as Record<string, unknown>;
+      const stid = svc.staff_id ? String(svc.staff_id) : null;
+      svc.staff = stid ? staffMap.get(stid) ?? null : null;
+    }
   }
 }
 

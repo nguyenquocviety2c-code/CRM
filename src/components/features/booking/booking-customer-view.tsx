@@ -571,14 +571,11 @@ export function BookingCustomerView({
                                 }
                                 return (
                                   <div key={idx} className="space-y-0.5">
-                                    {e.category && (
-                                      <div className={`text-xs font-medium ${svcColor}`}>
-                                        {prefix}{e.category}
-                                      </div>
-                                    )}
+                                    {/* Only show service NAME (not category). Color
+                                        follows the booking/slot status. */}
                                     {e.service && (
-                                      <div className="text-xs text-gray-600">
-                                        {e.service}
+                                      <div className={`text-xs font-medium ${svcColor}`}>
+                                        {prefix}{e.service}
                                       </div>
                                     )}
                                     {e.staff ? (
