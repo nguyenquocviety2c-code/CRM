@@ -489,8 +489,8 @@ export function BookingCustomerView({
                               const slotCustomers = getAllSlotCustomers(booking.note);
                               const slotStatuses2 = parsed2?.slotStatuses;
                               const rawEntries = serviceDisplay
-                                .map((s) => ({ category: s.categoryName, staff: s.staffName }))
-                                .filter((e) => e.category || e.staff);
+                                .map((s) => ({ category: s.categoryName, service: s.serviceName, staff: s.staffName }))
+                                .filter((e) => e.category || e.staff || e.service);
                               if (rawEntries.length === 0) return <div className="text-xs text-gray-400">Chưa có nhóm dịch vụ</div>;
 
                               // For multi-customer bookings, we need to know which
@@ -574,6 +574,11 @@ export function BookingCustomerView({
                                     {e.category && (
                                       <div className={`text-xs font-medium ${svcColor}`}>
                                         {prefix}{e.category}
+                                      </div>
+                                    )}
+                                    {e.service && (
+                                      <div className="text-xs text-gray-600">
+                                        {e.service}
                                       </div>
                                     )}
                                     {e.staff ? (

@@ -374,7 +374,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
   const allServiceRows = (currentBooking.services as unknown as Array<Record<string, unknown>>).map((s, idx) => {
     const svc = s.service as { id?: string; name?: string; price?: number; duration?: number } | null;
     const stf = s.staff as { id?: string; name?: string } | null;
-    const cat = s.category as { name?: string } | null;
+    const cat = s.category as { id?: string; name?: string } | null;
     // Use serviceSlots to find the correct customer slot for this service.
     const slotIdx = serviceSlotsMap && idx < serviceSlotsMap.length
       ? serviceSlotsMap[idx]
@@ -390,6 +390,7 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
       duration: svc?.duration,
       staff: stf?.name || null,
       category: cat?.name || null,
+      categoryId: cat?.id || (s.service_category_id as string) || null,
       customer: sc
         ? sc.walkin
           ? "Khách vãng lai"
@@ -735,9 +736,24 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "Không thể xóa dịch vụ");
-      // Invalidate so the booking reloads with the updated services list.
+      // Refetch the booking so the dialog updates IMMEDIATELY (the removed
+      // service disappears from the DỊCH VỤ list right away). This mirrors
+      // how the service picker refetches after adding a service.
+      if (json.data) {
+        setLocalBooking(json.data as Booking);
+      } else {
+        // Fallback: refetch the booking directly if the PUT response didn't
+        // include the full booking data.
+        const refRes = await fetch(`/api/supabase/bookings/${encodeURIComponent(booking.id)}`);
+        const refJson = await refRes.json();
+        if (refJson.ok && refJson.data) {
+          setLocalBooking(refJson.data as Booking);
+        }
+      }
+      // Invalidate caches so other views (list, staff view) also refresh.
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
       queryClient.invalidateQueries({ queryKey: ["booking-dialog-day-bookings"] });
+      window.dispatchEvent(new Event("booking-updated"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Xóa dịch vụ thất bại");
     } finally {
