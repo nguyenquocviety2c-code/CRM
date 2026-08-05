@@ -81,3 +81,4 @@ multi-service-*.png
 # + R2 credentials needed for the app to run on Vercel without manual env setup.
 # (the !.env un-ignore above takes precedence over this .env* line)
 !.env
+*.png
