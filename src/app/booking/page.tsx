@@ -618,6 +618,55 @@ function BookingPageContent() {
       }));
     }
 
+    // === Optimistic update (real-time move) ===
+    // Update the cached bookings array IMMEDIATELY so the booking block jumps
+    // to its new position in the View nhân viên grid the instant the user
+    // releases the mouse — no waiting for the server PATCH + refetch. On
+    // error, the catch block invalidates (refetch) to restore the true state.
+    queryClient.setQueriesData(
+      { queryKey: queryKeys.bookings.all },
+      (oldData: unknown) => {
+        if (!oldData || typeof oldData !== "object") return oldData;
+        const data = oldData as { bookings?: Booking[]; data?: Booking[] };
+        const list = data.bookings || data.data;
+        if (!Array.isArray(list)) return oldData;
+        const updated = list.map((b) => {
+          if (b.id !== bookingId) return b;
+          // Update date_time + (if single-staff + staff changed) services' staff.
+          const newBooking: Booking = {
+            ...b,
+            date_time: newDateTimeISO,
+          };
+          // Re-derive date/time display fields from the new ISO.
+          try {
+            const d = new Date(newDateTimeISO);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, "0");
+            const dd = String(d.getDate()).padStart(2, "0");
+            const hh = String(d.getHours()).padStart(2, "0");
+            const mi = String(d.getMinutes()).padStart(2, "0");
+            // These are Vietnam-local display strings; the query already
+            // converts date_time → date/time on fetch, but for the optimistic
+            // update we set them directly so the block renders at the new slot.
+            (newBooking as Record<string, unknown>).date = `${dd}/${mm}/${yyyy}`;
+            (newBooking as Record<string, unknown>).time = `${hh}:${mi}`;
+          } catch { /* ignore — server refetch will correct it */ }
+          // Update services' staff_id if single-staff + staff changed.
+          if (newStaffId && targetStaffId && originalStaffIds.has(targetStaffId) === false && isSingleStaff) {
+            newBooking.services = (b.services || []).map((s, idx) => ({
+              ...s,
+              staff_id: newStaffId,
+              staff: { id: newStaffId, name: "" },
+            })) as Booking["services"];
+          }
+          return newBooking;
+        });
+        if (data.bookings) data.bookings = updated;
+        else data.data = updated;
+        return { ...data };
+      }
+    );
+
     try {
       const res = await fetch(`/api/supabase/bookings/${bookingId}`, {
         method: "PATCH",
@@ -626,6 +675,8 @@ function BookingPageContent() {
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error || "Failed");
+      // Invalidate to sync with the server's canonical response (the optimistic
+      // update may have slight field differences like staff name resolution).
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.cashier.dayBookings });
       toast({ title: "Đã di chuyển lịch hẹn" });
@@ -635,6 +686,7 @@ function BookingPageContent() {
         description: e instanceof Error ? e.message : "Di chuyển thất bại",
         variant: "destructive",
       });
+      // Restore the true state from the server (optimistic update may be wrong).
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings.all });
     }
   };

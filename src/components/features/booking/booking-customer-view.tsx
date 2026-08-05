@@ -6,12 +6,18 @@ import { useRouter } from "next/navigation";
 // Lazy-load InvoiceDialog + PaidInvoiceView — only opened on demand (user
 // clicks a checkin/checkout booking). Keeps the customer view's initial
 // bundle small. Customer history now navigates to /customers/[id].
+// Lazy-load the InvoiceDialog + PaidInvoiceView + BookingInfoDialog so the
+// list view stays light until a dialog is opened.
 const InvoiceDialog = dynamic(
   () => import("./invoice-dialog").then((m) => m.InvoiceDialog),
   { ssr: false }
 );
 const PaidInvoiceView = dynamic(
   () => import("./paid-invoice-view").then((m) => m.PaidInvoiceView),
+  { ssr: false }
+);
+const BookingInfoDialog = dynamic(
+  () => import("./booking-info-dialog").then((m) => m.BookingInfoDialog),
   { ssr: false }
 );
 import { useQueryClient } from "@tanstack/react-query";
@@ -118,6 +124,10 @@ export function BookingCustomerView({
   const [reminderLoadingId, setReminderLoadingId] = useState<string | null>(null);
   // Note dialog — when non-null, a Dialog showing the booking's user note is open.
   const [noteDialogText, setNoteDialogText] = useState<string | null>(null);
+  // Booking info dialog — when non-null, a Dialog showing the booking's full
+  // info + activity history (Lịch sử thao tác) is open. Set when the user
+  // clicks a booking's code.
+  const [infoDialogBooking, setInfoDialogBooking] = useState<Booking | null>(null);
 
   // --- Flash highlight (deep-link from Cashier "Xem lịch hẹn") -------------
   // Map a booking's status → its status-badge bg color as a CSS color string.
@@ -321,12 +331,14 @@ export function BookingCustomerView({
                   <button
                     type="button"
                     onClick={() => {
-                      const isPaid = booking.status === "checkout";
-                      if (isPaid) openInvoice(booking);
-                      else onEdit(booking);
+                      // Open the BookingInfoDialog — shows the booking's full
+                      // info + the "Lịch sử thao tác" activity history table
+                      // (same table as the paid-invoice view). Available for
+                      // ALL booking statuses (confirmed/checkin/checkout/etc.).
+                      setInfoDialogBooking(booking);
                     }}
                     className="font-medium text-sky-600 hover:text-sky-700 hover:underline cursor-pointer"
-                    title={booking.status === "checkout" ? "Xem hóa đơn" : "Chỉnh sửa lịch hẹn"}
+                    title="Xem thông tin lịch hẹn"
                   >
                     {booking.code}
                   </button>
@@ -963,6 +975,14 @@ export function BookingCustomerView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Booking info dialog — shows the booking's full info + the "Lịch sử
+          thao tác" activity history table (same InvoiceActivityTable as the
+          paid-invoice view). Opened by clicking a booking's code. */}
+      <BookingInfoDialog
+        booking={infoDialogBooking}
+        onClose={() => setInfoDialogBooking(null)}
+      />
 
     </div>
   );

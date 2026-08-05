@@ -969,10 +969,13 @@ export function BookingStaffView({
                       segment={seg}
                       pxPerHour={pxPerHour}
                       flashBookingId={flashBookingId}
-                      // Drag-to-move: only confirmed bookings are draggable.
+                      // Drag-to-move: only "new" + "confirmed" bookings are
+                      // draggable. Checkin/checkout/cancelled/no_show bookings
+                      // are LOCKED in place (per request — a checked-in customer
+                      // is being served, a cancelled/no_show is no longer active).
                       // The callback stores the booking info in dragStateRef so
                       // the staff column's onDrop can compute the new time/staff.
-                      draggable={!!onMoveBooking && seg.booking.status === "confirmed"}
+                      draggable={!!onMoveBooking && (seg.booking.status === "confirmed" || seg.booking.status === "new")}
                       onDragStart={(e) => {
                         if (!onMoveBooking) return;
                         e.dataTransfer.effectAllowed = "move";
