@@ -194,10 +194,12 @@ export default function DatLichPage() {
   // A "returning" (old) customer is one whose exact phone number already
   // exists in the customers table. This drives the service-category filter
   // (new customers see the "Dành cho khách hàng mới" cut; old customers see
-  // the regular "Dịch Vụ Cắt").
+  // the regular "Dịch Vụ Cắt"). The query also fetches the customer's name so
+  // we can show a name-suggestion chip below the phone input (clicking it fills
+  // the name field — replaces the old autocomplete dropdown).
   const trimmedPhone = customerPhone.trim();
   const { data: phoneLookup } = useQuery<
-    { id: string; phone?: string | null }[] | null
+    { id: string; name?: string; phone?: string | null }[] | null
   >({
     queryKey: ["dat-lich-phone-lookup", trimmedPhone],
     queryFn: async () => {
@@ -207,13 +209,19 @@ export default function DatLichPage() {
       );
       const json = await res.json();
       if (!json.ok) return null;
-      return (json.data || []) as { id: string; phone?: string | null }[];
+      return (json.data || []) as { id: string; name?: string; phone?: string | null }[];
     },
     enabled: trimmedPhone.length >= 9,
   });
   const isOldCustomer = useMemo(() => {
     if (!trimmedPhone || !phoneLookup) return false;
     return phoneLookup.some((c) => c.phone === trimmedPhone);
+  }, [trimmedPhone, phoneLookup]);
+  // The customer whose phone EXACTLY matches the typed phone — used to show a
+  // name-suggestion chip below the phone input. Clicking it fills the name.
+  const phoneMatchedCustomer = useMemo(() => {
+    if (!trimmedPhone || !phoneLookup) return null;
+    return phoneLookup.find((c) => c.phone === trimmedPhone) || null;
   }, [trimmedPhone, phoneLookup]);
 
   // --- Customer autocomplete ----------------------------------------------
@@ -485,6 +493,7 @@ export default function DatLichPage() {
   // "HH:MM" label. The grid renders these as clickable pill buttons (matches
   // the user's reference design). A slot is ENABLED only when it doesn't
   // conflict with any active row's staff busy intervals (feasibleSlots).
+  // PAST slots (already elapsed today) + past-date slots are HIDDEN entirely.
   const timeSlots = useMemo<string[]>(() => {
     const parseHHMM = (s: string): number => {
       const mm = s.match(/^(\d{1,2}):(\d{2})$/);
@@ -500,14 +509,37 @@ export default function DatLichPage() {
     // Align the first slot DOWN to the nearest 30-min boundary (e.g. 09:30
     // stays 09:30; 09:40 → 09:30) so the grid starts on a clean half-hour.
     openMin = Math.floor(openMin / 30) * 30;
+    // Determine if the selected date is TODAY — if so, past time slots are
+    // hidden (the customer can't book a slot that already elapsed). Past
+    // dates → ALL slots hidden (the whole grid is empty). Future dates → all
+    // slots shown.
+    const now = new Date();
+    const isToday = (() => {
+      const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return false;
+      const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+      return d.toDateString() === now.toDateString();
+    })();
+    const isPast = (() => {
+      const m = bookingDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (!m) return false;
+      const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return d < today;
+    })();
+    // If past date → no slots at all.
+    if (isPast) return [];
+    const nowMin = now.getHours() * 60 + now.getMinutes();
     const slots: string[] = [];
     for (let min = openMin; min <= closeMin; min += 30) {
+      // Hide past slots when the selected date is today.
+      if (isToday && min <= nowMin) continue;
       const h = Math.floor(min / 60);
       const mm = min % 60;
       slots.push(`${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`);
     }
     return slots;
-  }, [salonInfo]);
+  }, [salonInfo, bookingDate]);
 
   // --- Row mutation helpers -----------------------------------------------
   const updateRow = (id: string, patch: Partial<ServiceRow>) => {
@@ -827,6 +859,48 @@ export default function DatLichPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
+                <Label htmlFor="phone" className="text-sm text-gray-700">
+                  <span className="text-red-500">*</span> Số điện thoại
+                </Label>
+                <div className="relative">
+                  <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <Input
+                    id="phone"
+                    value={customerPhone}
+                    onChange={(e) => {
+                      setCustomerPhone(e.target.value);
+                      // NO autocomplete dropdown for phone — per request. When
+                      // the typed phone EXACTLY matches a customer in the DB,
+                      // a name-suggestion chip appears below; clicking it fills
+                      // the name input. This is handled by the phoneLookup
+                      // query + the nameSuggestion render below.
+                    }}
+                    placeholder="0xxx xxx xxx"
+                    className="h-10 pl-9"
+                    autoComplete="off"
+                  />
+                  {/* Name suggestion: when the typed phone EXACTLY matches a
+                      customer in the DB, show a chip with their name below the
+                      phone input. Clicking it fills the name field. This
+                      replaces the old autocomplete dropdown (which matched by
+                      phone prefix). */}
+                  {phoneMatchedCustomer && !customerName.trim() && (
+                    <div className="mt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomerName(phoneMatchedCustomer.name);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-100"
+                      >
+                        <User className="h-3 w-3" />
+                        {phoneMatchedCustomer.name}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-1.5">
                 <Label htmlFor="name" className="text-sm text-gray-700">
                   <span className="text-red-500">*</span> Họ tên khách
                 </Label>
@@ -871,51 +945,6 @@ export default function DatLichPage() {
                   )}
                 </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="phone" className="text-sm text-gray-700">
-                  <span className="text-red-500">*</span> Số điện thoại
-                </Label>
-                <div className="relative">
-                  <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                  <Input
-                    id="phone"
-                    value={customerPhone}
-                    onChange={(e) => {
-                      setCustomerPhone(e.target.value);
-                      setActiveField("phone");
-                      setShowSuggestions(true);
-                    }}
-                    onFocus={() => {
-                      setActiveField("phone");
-                      if (suggestions.length > 0) setShowSuggestions(true);
-                    }}
-                    onBlur={() => {
-                      setTimeout(() => setShowSuggestions(false), 200);
-                    }}
-                    placeholder="0xxx xxx xxx"
-                    className="h-10 pl-9"
-                    autoComplete="off"
-                  />
-                  {showSuggestions && activeField === "phone" && suggestions.length > 0 && (
-                    <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
-                      {suggestions.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectSuggestion(s);
-                          }}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50"
-                        >
-                          <span className="font-medium text-gray-800">{s.phone || "—"}</span>
-                          <span className="text-xs text-gray-500">{s.name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="date" className="text-sm text-gray-700">
                   <span className="text-red-500">*</span> Ngày đặt lịch
@@ -923,7 +952,11 @@ export default function DatLichPage() {
                 <div className="relative max-w-xs">
                   <CalendarIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                   <div className="pl-9">
-                    <DatePicker value={bookingDate} onChange={setBookingDate} />
+                    <DatePicker
+                      value={bookingDate}
+                      onChange={setBookingDate}
+                      minDate={new Date(new Date().setHours(0, 0, 0, 0))}
+                    />
                   </div>
                 </div>
               </div>
@@ -1111,22 +1144,19 @@ export default function DatLichPage() {
             {/* Khung giờ — shared across all services (parallel model: all
                 services start at the same time). Rendered as a GRID of
                 clickable 30-min pill buttons (matches the reference design).
-                Locked until at least one complete row (Nhóm DV + Dịch vụ +
-                Nhân viên) exists. Busy slots are disabled + dimmed so the
-                customer can only pick a free slot. */}
+                ALWAYS visible (not locked) so the customer can see available
+                slots upfront. Busy slots are disabled + dimmed (darker than
+                before — text-gray-400 bg-gray-100, not the faint gray-300/50).
+                Past time slots + past-date slots are already HIDDEN from the
+                timeSlots array (filtered in the useMemo above). */}
             <div className="mt-4 space-y-2">
               <Label className="text-sm text-gray-700">
                 Chọn khung giờ dịch vụ <span className="text-red-500">*</span>
               </Label>
-              <div
-                className={cn(
-                  "transition-opacity",
-                  !timePickerReady && "pointer-events-none opacity-40"
-                )}
-              >
-                {!timePickerReady ? (
+              <div>
+                {timeSlots.length === 0 ? (
                   <p className="text-xs text-gray-400">
-                    Chọn dịch vụ + NV trước
+                    {bookingDate ? "Không có khung giờ khả dụng cho ngày đã chọn." : "Chọn ngày để xem khung giờ."}
                   </p>
                 ) : (
                   <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
@@ -1148,7 +1178,7 @@ export default function DatLichPage() {
                             selected
                               ? "border-emerald-600 bg-emerald-600 text-white"
                               : disabled
-                                ? "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-300"
+                                ? "cursor-not-allowed border-gray-300 bg-gray-200 text-gray-400 line-through"
                                 : "border-gray-300 bg-white text-gray-700 hover:border-emerald-500 hover:bg-emerald-50 hover:text-emerald-700"
                           )}
                           title={disabled ? "Khung giờ bận" : `Chọn ${slot}`}
