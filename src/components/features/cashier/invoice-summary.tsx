@@ -73,6 +73,8 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     removeInvoiceItem,
     setInvoiceItemStaff,
     setAllInvoiceItemsStaff,
+    setInvoiceItemTip,
+    duplicateInvoiceItem,
     setDiscountAmount,
     setTipAmount,
     setVoucherCode,
@@ -441,6 +443,16 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
     }
   };
 
+  // The active customer's real id — used to fetch their GIFTED incentives
+  // (promotions/vouchers gifted via the "Tặng khuyến mãi" dialog). Walk-in
+  // draft tabs (id starts with "walkin-") have no real customer until linked,
+  // so giftedIncentives stays empty for them.
+  const activeCustomerId =
+    activeTabMetaForInvoice?.customerId ||
+    (!activeCustomer?.customerId?.startsWith("walkin-")
+      ? activeCustomer?.customerId
+      : undefined);
+
   // Fetch the active promotions created in CSKH so they can be selected here
   // (synced with the same source as the booking invoice dialog).
   const { data: promotionsData } = useQuery<{
@@ -466,14 +478,92 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       return json.data || { items: [] };
     },
   });
+
+  // Fetch the active customer's GIFTED incentives (promotions + vouchers gifted
+  // via the "Tặng khuyến mãi" dialog). Each gift joins the incentives table so
+  // we get the full incentive shape. Gifted incentives are usable by this
+  // customer EVEN AFTER their global usageLimit is exhausted — the gift grants
+  // a personal allowance (as long as still within date validity). So we merge
+  // them into the selectable promotions list below, bypassing the usageLimit
+  // check for gifted ones.
+  const { data: giftedData } = useQuery<{
+    items: Array<{
+      incentive_id: string;
+      incentive: {
+        id: string;
+        code: string | null;
+        name: string;
+        discountValue: number;
+        discountType: string;
+        serviceIds: string | null;
+        branchIds: string | null;
+        applyScope: string | null;
+        startDate: string | null;
+        endDate: string | null;
+        usageLimit: number;
+        usedCount: number;
+        type?: string;
+      } | null;
+    }>;
+  }>({
+    queryKey: ["customer-gifts", activeCustomerId],
+    queryFn: async () => {
+      if (!activeCustomerId) return { items: [] };
+      const res = await fetch(
+        `/api/supabase/customer-gifts?customer_id=${encodeURIComponent(activeCustomerId)}`
+      );
+      const json = await res.json();
+      if (!json.ok) return { items: [] };
+      return { items: json.data || [] };
+    },
+    enabled: !!activeCustomerId,
+  });
+
+  // Build the gifted-promotions list: only the PROMOTION-type gifts, kept when
+  // still within the date validity (start ≤ now ≤ end). The usageLimit check
+  // is SKIPPED for gifts — the customer has a personal allowance. Branch check
+  // still applies (a gift doesn't override branch scope).
+  const giftedPromotions = (giftedData?.items || [])
+    .filter((g) => g.incentive && (g.incentive.type || "promotion") === "promotion")
+    .map((g) => g.incentive!)
+    .filter((p) => {
+      // Date-validity check only (no usageLimit check for gifts).
+      const now = Date.now();
+      if (p.startDate) {
+        const start = new Date(p.startDate).getTime();
+        if (!isNaN(start) && now < start) return false;
+      }
+      if (p.endDate) {
+        const end = new Date(p.endDate).getTime();
+        if (!isNaN(end) && now > end) return false;
+      }
+      return true;
+    });
+
   // Only show CURRENTLY USABLE promotions in the selector: filter out expired
   // (endDate in the past), not-yet-started (startDate in the future), fully-used
   // (usedCount >= usageLimit), AND promotions that don't apply to the currently
   // selected branch. Mirrors the Booking module's getActivePromotionsForBooking
   // so both selectors stay consistent and only branch-eligible promos appear.
-  const promotions = (promotionsData?.items || []).filter(
+  //
+  // THEN merge in the customer's GIFTED promotions (still within date validity,
+  // branch-eligible) — gifted ones bypass the usageLimit check so the customer
+  // can still use them even after the global quota is exhausted. Deduplicate by
+  // id (a gifted promotion already in the active list isn't added twice).
+  const activePromotions = (promotionsData?.items || []).filter(
     (p) => isPromotionActive(p) && isPromotionForBranch(p, selectedBranchId)
   );
+  // Merge: active promotions + gifted promotions (gifted ones bypass the
+  // usageLimit check). Deduplicate by id so a gifted promo already in the
+  // active list isn't added twice.
+  const promotions = [
+    ...activePromotions,
+    ...giftedPromotions.filter(
+      (p) =>
+        isPromotionForBranch(p, selectedBranchId) &&
+        !activePromotions.some((a) => a.id === p.id)
+    ),
+  ];
   const selectedPromo = promotions.find((p) => p.id === selectedPromoId) || null;
 
   // Fetch ALL active staff (no branch filter) so the "Xếp nhân viên" dialog
@@ -743,8 +833,39 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         setSelectedVoucher(null);
         return;
       }
-      // Validate: active (date + usage).
-      if (!isPromotionActive(voucher)) {
+      // Validate: active (date + usage). BUT — if this voucher was GIFTED to
+      // the active customer (via the "Tặng khuyến mãi" dialog), bypass the
+      // usageLimit check: the gift grants a personal allowance so the customer
+      // can still use it even after the global quota is exhausted (as long as
+      // still within date validity). Branch check still applies.
+      const isGiftedVoucher = (giftedData?.items || []).some(
+        (g) =>
+          g.incentive_id === voucher.id &&
+          g.incentive &&
+          (g.incentive.type || "voucher") === "voucher"
+      );
+      if (isGiftedVoucher) {
+        // Gifts: date-validity only (skip usageLimit). Check date range.
+        const now = Date.now();
+        if (voucher.startDate) {
+          const start = new Date(voucher.startDate).getTime();
+          if (!isNaN(start) && now < start) {
+            setVoucherError("Voucher chưa đến ngày áp dụng");
+            if (selectedVoucher) clearVoucherDiscount();
+            setSelectedVoucher(null);
+            return;
+          }
+        }
+        if (voucher.endDate) {
+          const end = new Date(voucher.endDate).getTime();
+          if (!isNaN(end) && now > end) {
+            setVoucherError("Voucher đã hết hạn");
+            if (selectedVoucher) clearVoucherDiscount();
+            setSelectedVoucher(null);
+            return;
+          }
+        }
+      } else if (!isPromotionActive(voucher)) {
         setVoucherError("Voucher đã hết hạn hoặc hết lượt sử dụng");
         if (selectedVoucher) clearVoucherDiscount();
         setSelectedVoucher(null);
@@ -1069,6 +1190,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                 discountType: it.discountType || "VND",
                 total: it.total,
                 staffName: it.staffName,
+                tip: it.tip || 0,
               })),
               subtotal,
               discount: invoice.discountAmount,
@@ -1265,6 +1387,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           discountType: it.discountType || "VND",
           total: it.total,
           staffName: it.staffName,
+          tip: it.tip || 0,
         })),
         subtotal,
         discount: invoice.discountAmount,
@@ -1465,6 +1588,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                 discountType: it.discountType || "VND",
                 total: it.total,
                 staffName: it.staffName,
+                tip: it.tip || 0,
               })),
               subtotal: getSubtotal(activeTabId),
               discount: invoice.discountAmount,
@@ -1547,6 +1671,7 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           discountType: it.discountType || "VND",
           total: it.total,
           staffName: it.staffName,
+          tip: it.tip || 0,
         })),
         subtotal,
         discount: invoice.discountAmount,
@@ -2710,14 +2835,18 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
       </Dialog>
 
       {/* Bulk "Xếp nhân viên" dialog — opened by the action-bar button of the
-          same name. The cashier picks ONE staff; on confirm, that staff is
-          assigned to EVERY line item in the current invoice (services +
-          products + packages). This is a BULK operation: it does NOT run the
-          per-item booking-conflict check (the cashier is explicitly choosing
-          to assign the whole order to one staff). OK is disabled until a staff
-          is picked. Cancel closes without changing anything. Uses the same
-          `eligibleBranchStaff` list as the per-item dialog so the options are
-          consistent (only stylist-title staff for the selected branch). */}
+          same name. Shows EVERY line item in the invoice (services, products,
+          packages) as its OWN card, each with:
+            • Item name + type badge + price (top line).
+            • A staff Select (per-item), a tip input, and a "+" button (bottom
+              line, BELOW the name).
+          The "+" button DUPLICATES that item — appends a new row that's a copy
+          of the same service/product/package below (fresh id, qty 1, no staff,
+          tip 0) so the cashier can assign a different staff to the copy.
+          Tips update the item's tip AND the invoice's tipAmount ("Thưởng thợ")
+          = sum of all items' tips, live as the cashier types. Staff assignments
+          are applied live (per-item) via setInvoiceItemStaff. On "Xác nhận" the
+          dialog just closes (all changes were already applied). */}
       <Dialog
         open={assignAllStaffOpen}
         onOpenChange={(v) => {
@@ -2727,45 +2856,168 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
           }
         }}
       >
-        <DialogContent className="max-w-[400px] sm:max-w-[400px] p-4 gap-3">
+        <DialogContent className="max-w-[560px] sm:max-w-[560px] p-4 gap-3">
           <DialogHeader className="space-y-0">
             <DialogTitle className="text-sm">Xếp nhân viên cho toàn bộ đơn</DialogTitle>
           </DialogHeader>
           <div className="space-y-1">
             <p className="text-[11px] text-gray-500">
-              Chọn một nhân viên — toàn bộ dịch vụ, sản phẩm và gói dịch vụ
-              trong đơn sẽ do nhân viên này thực hiện. Bắt buộc.
+              Chọn nhân viên và nhập tiền thưởng cho từng dịch vụ / sản phẩm / gói
+              dịch vụ. Thưởng sẽ cộng vào "Thưởng thợ" của hóa đơn.
             </p>
-            <Select
-              value={assignAllStaffPickStaffId}
-              onValueChange={(v) => setAssignAllStaffPickStaffId(v)}
-            >
-              <SelectTrigger className="w-full h-8 text-xs">
-                <SelectValue placeholder="Chọn nhân viên" />
-              </SelectTrigger>
-              <SelectContent>
-                {(eligibleBranchStaff || []).length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-gray-500">
-                    Không có nhân viên ở cửa hàng này
+            {/* Per-item rows — each line item gets its own card: name on top,
+                staff Select + tip input + "+" button below. Scrollable when
+                the list grows beyond a few rows (4+) so the cashier can
+                scroll up/down to review all services/products/packages. Uses
+                the `dialog-list-scroll` class for an always-visible styled
+                scrollbar (see globals.css). */}
+            <div className="dialog-list-scroll mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
+              {invoice && invoice.items.length > 0 ? (
+                invoice.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-md border border-gray-100 bg-gray-50/50 px-2 py-1.5"
+                  >
+                    {/* Top line: item name + type badge + price (read-only). */}
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`shrink-0 rounded px-1 text-[9px] font-semibold ${
+                          item.type === "service"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : item.type === "product"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-purple-100 text-purple-700"
+                        }`}
+                      >
+                        {item.type === "service"
+                          ? "DV"
+                          : item.type === "product"
+                          ? "SP"
+                          : "Gói"}
+                      </span>
+                      <span
+                        className="flex-1 truncate text-xs font-medium text-gray-800"
+                        title={item.name}
+                      >
+                        {item.name}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-gray-400">
+                        {(item.price || 0).toLocaleString("vi-VN")}đ
+                      </span>
+                      {/* "x" delete button — removes this item from the invoice.
+                          Sits at the far right of the name line (after price). */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (activeTabId) {
+                            removeInvoiceItem(activeTabId, item.id);
+                          }
+                        }}
+                        title={`Xóa ${item.name}`}
+                        aria-label={`Xóa ${item.name}`}
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-red-100 hover:text-red-600"
+                      >
+                        <X className="h-3 w-3" strokeWidth={2.5} />
+                      </button>
+                    </div>
+                    {/* Bottom line: staff Select + tip input + "+" add button.
+                        These controls sit BELOW the item name so the name is
+                        the primary identifier and the staff/tip/+ are
+                        secondary controls for that item. */}
+                    <div className="mt-1 flex items-center gap-2">
+                      {/* Staff Select — per-item. */}
+                      <Select
+                        value={
+                          (() => {
+                            const found = (eligibleBranchStaff || []).find(
+                              (s) => s.name === (item.staffName || "")
+                            );
+                            return found?.id || "";
+                          })()
+                        }
+                        onValueChange={(v) => {
+                          const staffName =
+                            (eligibleBranchStaff || []).find((s) => s.id === v)?.name || "";
+                          if (activeTabId && staffName) {
+                            setInvoiceItemStaff(activeTabId, item.id, staffName);
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-7 flex-1 text-[11px]">
+                          <SelectValue placeholder="Chọn nhân viên" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(eligibleBranchStaff || []).length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-gray-500">
+                              Không có nhân viên
+                            </div>
+                          ) : (
+                            (eligibleBranchStaff || []).map((s) => (
+                              <SelectItem key={s.id} value={s.id} className="text-xs">
+                                {s.name}
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                      {/* Tip input — per-item. Updates item.tip AND invoice
+                          tipAmount (sum of all items' tips) via setInvoiceItemTip. */}
+                      <div className="relative shrink-0">
+                        <input
+                          type="number"
+                          min={0}
+                          inputMode="numeric"
+                          value={item.tip || ""}
+                          onChange={(e) => {
+                            if (!activeTabId) return;
+                            setInvoiceItemTip(
+                              activeTabId,
+                              item.id,
+                              Number(e.target.value) || 0
+                            );
+                          }}
+                          placeholder="Thưởng"
+                          className="h-7 w-24 rounded border border-gray-300 bg-white px-1.5 pr-5 text-right text-[11px] text-gray-700 placeholder:text-gray-400 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                        />
+                        <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">
+                          đ
+                        </span>
+                      </div>
+                      {/* "+" button — duplicates THIS item: appends a new row
+                          that's a copy of the same service/product/package
+                          below (fresh id, qty 1, no staff, tip 0) so the
+                          cashier can assign a different staff to the copy. */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!activeTabId) return;
+                          duplicateInvoiceItem(activeTabId, item.id);
+                        }}
+                        title={`Thêm ${item.name} nữa`}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-cyan-300 bg-cyan-50 text-cyan-600 transition-colors hover:bg-cyan-100 hover:text-cyan-700"
+                      >
+                        <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
+                      </button>
+                    </div>
                   </div>
-                ) : (
-                  (eligibleBranchStaff || []).map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-            {!assignAllStaffPickStaffId && (
-              <p className="text-[11px] text-red-500">Vui lòng chọn nhân viên</p>
-            )}
-            {/* Summary of how many items will be updated, so the cashier knows
-                the scope of the bulk action before confirming. */}
+                ))
+              ) : (
+                <p className="py-4 text-center text-xs text-gray-400">
+                  Đơn hàng chưa có mặt hàng nào.
+                </p>
+              )}
+            </div>
+            {/* Summary: total tip + item count, so the cashier sees the impact. */}
             {invoice && invoice.items.length > 0 && (
-              <p className="mt-1 text-[11px] text-gray-400">
-                Sẽ áp dụng cho {invoice.items.length} mặt hàng trong đơn.
-              </p>
+              <div className="mt-2 flex items-center justify-between rounded-md bg-cyan-50 px-2.5 py-1.5">
+                <span className="text-[11px] text-gray-600">
+                  {invoice.items.length} mặt hàng
+                </span>
+                <span className="text-[11px] font-medium text-cyan-700">
+                  Thưởng thợ: {(getTipAmount(activeTabId || "") || 0).toLocaleString("vi-VN")}đ
+                </span>
+              </div>
             )}
           </div>
           <DialogFooter className="gap-2">
@@ -2777,21 +3029,14 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
                 setAssignAllStaffPickStaffId("");
               }}
             >
-              Hủy
+              Đóng
             </Button>
             <Button
               size="sm"
-              disabled={!assignAllStaffPickStaffId || !activeTabId || !invoice || invoice.items.length === 0}
-              title={!assignAllStaffPickStaffId ? "Vui lòng chọn nhân viên" : undefined}
+              disabled={!activeTabId || !invoice || invoice.items.length === 0}
               onClick={() => {
-                if (!activeTabId || !invoice || invoice.items.length === 0) return;
-                const staffName =
-                  (eligibleBranchStaff || []).find(
-                    (s) => s.id === assignAllStaffPickStaffId
-                  )?.name || "";
-                if (!staffName) return; // safety — OK is disabled in this case
-                // Bulk-assign the picked staff to EVERY line item in the invoice.
-                setAllInvoiceItemsStaff(activeTabId, staffName);
+                // Staff assignments were applied live (per-item) as the cashier
+                // picked each Select. Tips were applied live too. Just close.
                 setAssignAllStaffOpen(false);
                 setAssignAllStaffPickStaffId("");
               }}

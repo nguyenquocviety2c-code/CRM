@@ -30,6 +30,10 @@ interface InvoiceItemInput {
   total: number;
   staffId?: string;
   staffName?: string;
+  // Per-item tip (tiền khách thưởng cho thợ thực hiện item này). Attributed
+  // to the item's staffId/staffName so per-staff tip reports stay accurate.
+  // The invoice's overall `tip` = sum of all items' tips ("Thưởng thợ").
+  tip?: number;
 }
 
 /**
@@ -336,6 +340,9 @@ export async function POST(request: NextRequest) {
           total: Number(it.total) || (Number(it.quantity) || 1) * (Number(it.price) || 0),
           staffId: it.staffId,
           staffName: it.staffName,
+          // Persist per-item tip so per-staff tip reports stay accurate.
+          // Defaults to 0 for older clients that don't send it.
+          tip: Number(it.tip) || 0,
           // keep sort_order conceptually via array order
           ...(idx !== undefined ? {} : {}),
         }))
@@ -344,7 +351,11 @@ export async function POST(request: NextRequest) {
     const computedSubtotal = itemRows.reduce((sum, it) => sum + it.price * it.quantity, 0);
     const subtotalAmount = subtotal != null ? Number(subtotal) : computedSubtotal;
     const discountAmount = Number(discount) || 0;
-    const tipAmount = Number(tip) || 0;
+    // Invoice tip: prefer the explicit total sent by the client (which is the
+    // store's tipAmount = sum of per-item tips). Fall back to summing the
+    // per-item tips if the client didn't send an explicit total.
+    const perItemTipSum = itemRows.reduce((sum, it) => sum + (Number(it.tip) || 0), 0);
+    const tipAmount = tip != null ? Number(tip) : perItemTipSum;
     const promotionMeta = promotion || null;
     const finalAmount = final_amount != null ? Number(final_amount) : Math.max(0, subtotalAmount - discountAmount + tipAmount);
 

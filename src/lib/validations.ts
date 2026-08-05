@@ -178,6 +178,12 @@ export const customerSetConditionSchema = z.object({
   id: z.string().optional(),
   conditionType: z.string().min(1, "Vui lòng chọn điều kiện"),
   conditionValue: z.string().optional(),
+  // Operator: "gt" (lớn hơn), "lt" (nhỏ hơn), "between" (trong khoảng).
+  // Optional — some conditions (birthdayMonth, customerGroup) use equality.
+  conditionOperator: z.string().optional(),
+  // Second value for "between" (range) operator: conditionValue = from,
+  // conditionValue2 = to. Optional otherwise.
+  conditionValue2: z.string().optional(),
 });
 
 export const customerSetSchema = z.object({
@@ -185,6 +191,10 @@ export const customerSetSchema = z.object({
   name: z.string().min(1, "Tên không được để trống"),
   note: z.string().optional(),
   autoUpdate: z.boolean().optional(),
+  // Color hex (e.g. "#3b82f6") for the customer-set badge/icon background.
+  color: z.string().optional(),
+  // Logo image URL (R2 public URL or base64 data URL) shown beside the name.
+  logo: z.string().optional(),
   conditions: z.array(customerSetConditionSchema).optional(),
 });
 

@@ -9,6 +9,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CustomerSet } from "@/stores/customer-care-store";
+import { renderLogo } from "@/lib/customer-set-logos";
 import { CustomerSetActions } from "./customer-set-actions";
 
 interface CustomerSetListProps {
@@ -16,9 +17,10 @@ interface CustomerSetListProps {
   isLoading: boolean;
   onEdit: (item: CustomerSet) => void;
   onDelete: (item: CustomerSet) => void;
+  onView: (item: CustomerSet) => void;
 }
 
-export function CustomerSetList({ data, isLoading, onEdit, onDelete }: CustomerSetListProps) {
+export function CustomerSetList({ data, isLoading, onEdit, onDelete, onView }: CustomerSetListProps) {
   if (isLoading) {
     return (
       <div className="py-8 text-center text-gray-500">Đang tải...</div>
@@ -43,7 +45,22 @@ export function CustomerSetList({ data, isLoading, onEdit, onDelete }: CustomerS
         {data.map((item) => (
           <TableRow key={item.id} className="border-b hover:bg-gray-50">
             <TableCell className="text-left">
-              <span className="text-emerald-600">{item.name}</span>
+              {/* Name row — clickable to open the members view. Color swatch +
+                  logo are shown to the LEFT of the name. */}
+              <button
+                type="button"
+                onClick={() => onView(item)}
+                className="flex items-center gap-1.5 text-left"
+                title={`Xem khách hàng trong "${item.name}"`}
+              >
+                {item.logo && renderLogo(item.logo, "h-4 w-4 shrink-0")}
+                <span
+                  className="font-semibold uppercase tracking-wide hover:underline"
+                  style={{ color: item.color || undefined }}
+                >
+                  {item.name}
+                </span>
+              </button>
             </TableCell>
             <TableCell className="text-left">
               <div className="flex items-center justify-between">

@@ -56,6 +56,12 @@ const CustomerDialog = dynamic(
   () => import("./customer-dialog").then((m) => m.CustomerDialog),
   { ssr: false }
 );
+// Lazy-load GiftPromotionDialog — only opened on demand (clicking "Tặng
+// khuyến mãi"). Shows eligible promotions/vouchers for this customer.
+const GiftPromotionDialog = dynamic(
+  () => import("./gift-promotion-dialog").then((m) => m.GiftPromotionDialog),
+  { ssr: false }
+);
 const PaidInvoiceView = dynamic(
   () => import("../booking/paid-invoice-view").then((m) => m.PaidInvoiceView),
   { ssr: false }
@@ -213,6 +219,9 @@ export function CustomerInfoView({
 }) {
   const [activeTab, setActiveTab] = useState<TabKey>("bookings");
   const [editOpen, setEditOpen] = useState(false);
+  // "Tặng khuyến mãi" dialog state — opens the GiftPromotionDialog which
+  // shows promotions/vouchers suitable for this customer.
+  const [giftPromoOpen, setGiftPromoOpen] = useState(false);
   // State for the full-page invoice view. Set when the user clicks a booking
   // code or invoice code — opens the PaidInvoiceView (the fixed invoice
   // interface), NOT a dialog.
@@ -385,10 +394,10 @@ export function CustomerInfoView({
                   variant="outline"
                   size="sm"
                   className="border-blue-500 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-                  onClick={() => setActiveTab("promotions")}
+                  onClick={() => setGiftPromoOpen(true)}
                 >
-                  <Plus className="mr-1 h-4 w-4" />
-                  Tăng Khuyến mãi
+                  <Gift className="mr-1 h-4 w-4" />
+                  Tặng khuyến mãi
                 </Button>
                 <Button
                   type="button"
@@ -502,6 +511,23 @@ export function CustomerInfoView({
         open={editOpen}
         onClose={() => setEditOpen(false)}
         customer={info as never}
+      />
+
+      {/* "Tặng khuyến mãi" dialog — opened by the "Tặng khuyến mãi" button.
+          Shows promotions/vouchers suitable for this customer's type (new/
+          vip/member), still within the active period and with remaining
+          quantity, sourced from the CSKH > Chương trình khuyến mãi module. */}
+      <GiftPromotionDialog
+        open={giftPromoOpen}
+        onOpenChange={setGiftPromoOpen}
+        customer={{
+          id: info.id,
+          name: info.name,
+          group: info.group,
+          rank: info.rank,
+          totalSpent,
+          created_at: info.created_at,
+        }}
       />
 
       {/* Full-page invoice view — opened by clicking a booking code or invoice

@@ -5,7 +5,7 @@ import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useQuery, useMutation, useQueryClient, keepPreviousData, useQueries } from "@tanstack/react-query";
-import { Plus, Trash2, UserPlus, Loader2, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Plus, Trash2, UserPlus, Loader2, ChevronDown, ChevronUp, X, StickyNote } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -118,11 +118,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     if (!open) {
       setMinimized(false);
       // Reset multi-customer state when the dialog closes so the next open
-      // starts fresh (default "Cùng lịch", no active slot dropdown).
-      setScheduleMode("same");
+      // starts fresh (default "Khác lịch" = each customer gets their own
+      // separate booking, no active slot dropdown).
+      setScheduleMode("different");
       setActiveSlotDropdown(null);
       setIsMultiSubmitting(false);
       setExtraServices({});
+      // Clear per-customer notes + note dialog state so the next open starts
+      // fresh (no leftover notes from a previous multi-customer session).
+      setCustomerNotes({});
+      setNoteDialogSlot(null);
+      setNoteDraft("");
       setServiceConflict("");
       // Clear the phone/name search fields so the dialog is CLEAN on reopen.
       // Without this, typing a phone/name then closing without saving would
@@ -151,6 +157,9 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // are booked without a specific staff assignment (staffId left empty).
   const { hasPermission, user } = useAuthStore();
   const canAssignStaff = hasPermission("assign_staff");
+  // canBookPastDate: staff in the "Admin" group have the book_past_date
+  // permission, so they see all hours/dates (including past ones) and can
+  // pick any time. All other staff only see future times/dates.
   const canBookPastDate = hasPermission("book_past_date");
 
   // Fetch customers from Supabase (server-side search)
@@ -174,7 +183,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
   // ------------------------------------------------------------------
   // scheduleMode: "same" = 1 booking with N services (parallel staff);
   //               "different" = N separate bookings, 1 service each.
-  const [scheduleMode, setScheduleMode] = useState<"same" | "different">("same");
+  // Default is "different" — when the user sets số khách >= 2, each customer
+  // becomes its OWN separate booking (1 service each). The Cùng lịch / Khác
+  // lịch toggle is HIDDEN (no longer user-selectable); "different" is always
+  // used for multi-customer mode. "same" is only reachable in single-customer
+  // mode (which is just 1 booking anyway).
+  const [scheduleMode, setScheduleMode] = useState<"same" | "different">("different");
   // Which slot index's autocomplete dropdown is currently open. Only one
   // slot's dropdown shows at a time (the one the user is actively typing in).
   const [activeSlotDropdown, setActiveSlotDropdown] = useState<number | null>(null);
@@ -1573,6 +1587,17 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
     serviceId: string;
     staffId: string;
   }>>>({});
+  // Per-customer notes — in multi-customer mode, each customer gets their OWN
+  // booking (Khác lịch), and each booking can have its own note. This record is
+  // keyed by the customer's field index (matching extraServices). The main
+  // `note` field (single-customer mode) is the booking-level note; for
+  // multi-customer mode, each slot's note is sent as that booking's note.
+  const [customerNotes, setCustomerNotes] = useState<Record<number, string>>({});
+  // Which customer's note dialog is open (field index), or null when closed.
+  const [noteDialogSlot, setNoteDialogSlot] = useState<number | null>(null);
+  // Draft text being typed in the note dialog (synced back to customerNotes on
+  // save; discarded on cancel).
+  const [noteDraft, setNoteDraft] = useState("");
   // Per-service conflict message — shown when adding/selecting a service that
   // would overlap an existing booking for the selected staff.
   const [serviceConflict, setServiceConflict] = useState<string>("");
@@ -2208,7 +2233,10 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
             customer_channel_id: data.customerChannelId || null,
             number_of_customers: 1,
             status: data.status,
-            note: data.note || null,
+            // Per-customer note: each booking gets its OWN note (from the
+            // "Ghi chú" link in that customer's service row). Falls back to
+            // the booking-level note when no per-customer note was entered.
+            note: customerNotes[i] || data.note || null,
             branch_id: selectedBranchId || null,
             ...(booking ? {} : { created_by: user?.id || null }),
             services: [
@@ -3005,16 +3033,12 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                     ? "Tất cả dịch vụ sẽ cùng bắt đầu vào giờ này (mỗi dịch vụ 1 thợ khác nhau)."
                     : "Vui lòng chọn Ngày trước, sau đó mới chọn Giờ."}
                 </p>
-
-                <div className="space-y-2">
-                  <Label htmlFor="note">Ghi chú</Label>
-                  <Textarea
-                    id="note"
-                    {...register("note")}
-                    placeholder="Nhập ghi chú..."
-                    className="min-h-[80px]"
-                  />
-                </div>
+                {/* The booking-level "Ghi chú" textarea was REMOVED from the left
+                    column. In single-customer mode, the note is edited via the
+                    "Ghi chú" link next to "Thêm dịch vụ" in the right column.
+                    In multi-customer mode, each customer has their own note
+                    (per-customer, edited via the "Ghi chú" link in each
+                    customer's service row). */}
               </div>
             </div>
 
@@ -3025,37 +3049,11 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-700">
                   Dịch vụ
                 </h3>
-                {isMultiCustomerMode && (
-                  // Cùng lịch / Khác lịch toggle — only in multi-customer mode.
-                  // "Cùng lịch" (default): all N services share ONE booking
-                  // (parallel staff, same date_time, 1 booking record).
-                  // "Khác lịch": each slot gets its OWN separate booking (N
-                  // POST requests, each with 1 service + its own customer_id).
-                  <div className="flex items-center gap-1 rounded-md border bg-gray-100 p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setScheduleMode("same")}
-                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                        scheduleMode === "same"
-                          ? "bg-white text-emerald-700 shadow-sm"
-                          : "text-gray-600 hover:text-gray-900"
-                      }`}
-                    >
-                      Cùng lịch
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setScheduleMode("different")}
-                      className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                        scheduleMode === "different"
-                          ? "bg-white text-emerald-700 shadow-sm"
-                          : "text-gray-600 hover:text-gray-900"
-                      }`}
-                    >
-                      Khác lịch
-                    </button>
-                  </div>
-                )}
+                {/* Cùng lịch / Khác lịch toggle REMOVED. Multi-customer mode now
+                    ALWAYS creates N separate bookings (1 service each) — the
+                    "Khác lịch" behavior. Each customer gets their own booking
+                    with its own note. The "Cùng lịch" option is no longer
+                    user-selectable. */}
               </div>
 
               <div className="space-y-3">
@@ -3432,15 +3430,35 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
                             </Button>
                           </div>
                         ))}
-                        {/* "Thêm dịch vụ" button — adds a new extra service row. */}
-                        <button
-                          type="button"
-                          onClick={() => addExtraService(index)}
-                          className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700"
-                        >
-                          <Plus className="h-3 w-3" />
-                          Thêm dịch vụ
-                        </button>
+                        {/* "Thêm dịch vụ" button — adds a new extra service row.
+                            "Ghi chú" link beside it opens a dialog to edit this
+                            customer's OWN note (per-customer, since each gets
+                            their own booking in Khác lịch mode). */}
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => addExtraService(index)}
+                            className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:text-emerald-700"
+                          >
+                            <Plus className="h-3 w-3" />
+                            Thêm dịch vụ
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNoteDialogSlot(index);
+                              setNoteDraft(customerNotes[index] || "");
+                            }}
+                            className="flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                            title="Ghi chú riêng cho khách này"
+                          >
+                            <StickyNote className="h-3 w-3" />
+                            Ghi chú
+                            {customerNotes[index] && (
+                              <span className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-blue-500" title="Đã có ghi chú" />
+                            )}
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -3454,17 +3472,34 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
 
                 {/* "+ Thêm dịch vụ" button — hidden in multi-customer mode
                     because row count is controlled by the "Số khách" input
-                    (the auto-adjust effect keeps fields.length === N). */}
+                    (the auto-adjust effect keeps fields.length === N).
+                    Beside it is a "Ghi chú" link that opens a dialog to edit
+                    the booking-level note (single-customer mode only). */}
                 {!isMultiCustomerMode && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleAddService}
-                  className="w-full border-dashed"
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Thêm dịch vụ
-                </Button>
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Open the booking-level note dialog (slot = -1 marks it
+                      // as the booking-level note, not a per-customer slot).
+                      setNoteDialogSlot(-1);
+                      setNoteDraft(watch("note") || "");
+                    }}
+                    className="flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                  >
+                    <StickyNote className="h-3 w-3" />
+                    Ghi chú
+                  </button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleAddService}
+                    className="border-dashed"
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Thêm dịch vụ
+                  </Button>
+                </div>
                 )}
 
                 {/* Consolidated summary of all selected services. Each service's
@@ -3839,6 +3874,76 @@ export function BookingDialog({ open, onClose, booking, prefillSlot, defaultNewS
               OK, đặt tiếp
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* === Note dialog — opened by the "Ghi chú" link (single-customer =
+          booking-level note; multi-customer = per-customer note). A small
+          modal with a textarea + Lưu/Hủy buttons. On save, the draft is
+          committed to either `note` (booking-level, slot = -1) or
+          `customerNotes[slot]` (per-customer). */}
+      <Dialog
+        open={noteDialogSlot !== null}
+        onOpenChange={(v) => {
+          if (!v) {
+            setNoteDialogSlot(null);
+            setNoteDraft("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-[400px] sm:max-w-[400px] p-4 gap-3">
+          <DialogHeader className="space-y-0">
+            <DialogTitle className="text-sm flex items-center gap-2">
+              <StickyNote className="h-4 w-4 text-blue-600" />
+              Ghi chú
+              {noteDialogSlot !== null && noteDialogSlot >= 0 && (
+                <span className="text-[11px] font-normal text-gray-500">
+                  (riêng cho khách #{noteDialogSlot + 1})
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <Textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            placeholder="Nhập ghi chú cho lịch hẹn này..."
+            className="min-h-[120px]"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setNoteDialogSlot(null);
+                setNoteDraft("");
+              }}
+            >
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (noteDialogSlot === null) return;
+                if (noteDialogSlot === -1) {
+                  // Booking-level note (single-customer mode).
+                  setValue("note", noteDraft);
+                } else {
+                  // Per-customer note (multi-customer mode).
+                  setCustomerNotes((prev) => ({
+                    ...prev,
+                    [noteDialogSlot]: noteDraft,
+                  }));
+                }
+                setNoteDialogSlot(null);
+                setNoteDraft("");
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Lưu
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </Dialog>

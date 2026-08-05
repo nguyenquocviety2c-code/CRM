@@ -5,6 +5,8 @@ export interface CustomerSet {
   name: string;
   note: string | null;
   autoUpdate: boolean;
+  color: string | null;
+  logo: string | null;
   createdAt: string;
   updatedAt: string;
   conditions: CustomerSetCondition[];
@@ -15,6 +17,8 @@ export interface CustomerSetCondition {
   customerSetId: string;
   conditionType: string;
   conditionValue: string | null;
+  conditionOperator: string | null;
+  conditionValue2: string | null;
 }
 
 export interface Incentive {

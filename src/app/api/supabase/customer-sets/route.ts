@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { customerSetSchema } from "@/lib/validations";
+import { repopulateSetMembers } from "@/lib/customer-set-matcher";
 
 interface RawCondition {
   id?: string;
   condition_type?: string;
   condition_value?: string | null;
+  condition_operator?: string | null;
+  condition_value2?: string | null;
 }
 
 interface RawCustomerSet {
@@ -13,6 +16,8 @@ interface RawCustomerSet {
   name: string;
   note: string | null;
   auto_update: boolean;
+  color: string | null;
+  logo: string | null;
   created_at: string;
   updated_at: string;
   conditions?: RawCondition[];
@@ -20,8 +25,7 @@ interface RawCustomerSet {
 
 /**
  * Map a Supabase customer_set row (snake_case, with optional nested
- * conditions) to the camelCase shape that the UI expects — matching the
- * original Prisma API surface so callers don't need to change their parsing.
+ * conditions) to the camelCase shape that the UI expects.
  */
 function mapCustomerSet(row: RawCustomerSet) {
   return {
@@ -29,6 +33,8 @@ function mapCustomerSet(row: RawCustomerSet) {
     name: row.name,
     note: row.note ?? null,
     autoUpdate: Boolean(row.auto_update),
+    color: row.color ?? null,
+    logo: row.logo ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     conditions: (row.conditions ?? []).map((c) => ({
@@ -36,6 +42,8 @@ function mapCustomerSet(row: RawCustomerSet) {
       customerSetId: row.id,
       conditionType: c.condition_type ?? "",
       conditionValue: c.condition_value ?? null,
+      conditionOperator: c.condition_operator ?? null,
+      conditionValue2: c.condition_value2 ?? null,
     })),
   };
 }
@@ -105,6 +113,8 @@ export async function POST(request: NextRequest) {
         name: setData.name,
         note: setData.note || null,
         auto_update: Boolean(setData.autoUpdate),
+        color: setData.color || null,
+        logo: setData.logo || null,
       })
       .select("id")
       .single();
@@ -124,6 +134,8 @@ export async function POST(request: NextRequest) {
         customer_set_id: newId,
         condition_type: c.conditionType,
         condition_value: c.conditionValue || null,
+        condition_operator: c.conditionOperator || null,
+        condition_value2: c.conditionValue2 || null,
       }));
       const { error: condErr } = await supabaseAdmin
         .from("customer_set_conditions")
@@ -138,7 +150,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 3. Re-fetch with conditions to return the full shape.
+    // 3. Auto-populate members: evaluate the conditions against all customers
+    //    and insert matching customer ids into customer_set_members. Runs in the
+    //    background — a failure here doesn't fail the save (the set is still
+    //    created; members can be refreshed later).
+    repopulateSetMembers(
+      newId,
+      (conditions || []).map((c) => ({
+        conditionType: c.conditionType,
+        conditionValue: c.conditionValue || null,
+        conditionOperator: c.conditionOperator || null,
+        conditionValue2: c.conditionValue2 || null,
+      }))
+    ).catch((e) => {
+      console.error("Background member population failed:", e?.message || e);
+    });
+
+    // 4. Re-fetch with conditions to return the full shape.
     const { data: refreshed, error: fetchErr } = await supabaseAdmin
       .from("customer_sets")
       .select(SELECT_WITH_CONDITIONS)

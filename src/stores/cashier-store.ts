@@ -19,6 +19,10 @@ export interface InvoiceItem {
   staffName?: string;
   date?: string; // "DD/MM/YYYY" — when the service is scheduled
   time?: string; // "HH:MM" — when the service is scheduled
+  // Per-item tip (tiền khách thưởng cho thợ thực hiện item này). Sum of all
+  // items' tips = the invoice's tipAmount ("Thưởng thợ"). Each item's tip is
+  // attributed to its staffName so per-staff tip reports stay accurate.
+  tip?: number;
 }
 
 /**
@@ -102,6 +106,15 @@ export interface TabMeta {
   // gap check also uses this as the reference (|newStart - bookingStart| ≤
   // 15 min → same booking). Matches the booking module's parallel model.
   lastServiceStartMs?: number;
+  // Checkin timestamp (epoch ms) — set to Date.now() when the cashier clicks
+  // "Tạo hóa đơn" (creates a walk-in tab). Shown in the customer info bar as
+  // "Giờ checkin: (time) Thực hiện bởi: (actor)". Bookings opened from the
+  // Lịch hẹn module don't set this (their checkin time comes from the booking's
+  // CHECKIN invoice_activity instead).
+  checkinMs?: number;
+  // Name of the staff who clicked "Tạo hóa đơn" (performed the checkin for
+  // this walk-in tab). Paired with checkinMs in the info-bar activity line.
+  checkinBy?: string;
   // The services array for the current booking (mirrors what's on Supabase).
   // Appended to when a service joins the same booking; reset when a new
   // booking is created. Sent as-is in the PUT to keep the booking in sync.
@@ -201,6 +214,27 @@ interface CashierState {
     customerId: string,
     staffName: string
   ) => void;
+  /**
+   * Set the tip amount on a SINGLE line item (tiền thưởng cho thợ thực hiện
+   * item đó). Also updates the invoice's tipAmount to the SUM of all items'
+   * tips so "Thưởng thợ" reflects the total. Used by the per-item tip input
+   * in the "Xếp nhân viên cho toàn bộ đơn" dialog.
+   */
+  setInvoiceItemTip: (
+    customerId: string,
+    itemId: string,
+    tip: number
+  ) => void;
+  /**
+   * Duplicate a single line item — insert a NEW row IMMEDIATELY BELOW the
+   * source item (not at the end of the list). The copy shares the source's
+   * itemId/name/type/price but gets a FRESH id, quantity 1, NO staff, tip 0.
+   * Always inserts (never merges) — the fresh id guarantees it stays a
+   * visually distinct row right under the original. Used by the "+" button in
+   * the bulk "Xếp nhân viên" dialog to add another copy of the same
+   * service/product/package directly below the one clicked.
+   */
+  duplicateInvoiceItem: (customerId: string, itemId: string) => void;
   setVoucherCode: (customerId: string, code: string) => void;
   setDiscountAmount: (customerId: string, amount: number) => void;
   setTipAmount: (customerId: string, amount: number) => void;
@@ -467,6 +501,71 @@ export const useCashierStore = create<CashierState>()(
                 ? item
                 : { ...item, staffName: targetName }
             ),
+          },
+        },
+      };
+    });
+  },
+
+  setInvoiceItemTip: (customerId, itemId, tip) => {
+    set((state) => {
+      const invoice = state.invoices[customerId];
+      if (!invoice) return state;
+      // Clamp the tip to a non-negative number.
+      const safeTip = Math.max(0, Math.round(Number(tip) || 0));
+      // Update the matching item's tip, then recompute the invoice's tipAmount
+      // as the SUM of all items' tips so "Thưởng thợ" stays in sync.
+      const updatedItems = invoice.items.map((item) =>
+        item.id === itemId ? { ...item, tip: safeTip } : item
+      );
+      const totalTip = updatedItems.reduce(
+        (sum, item) => sum + (Number(item.tip) || 0),
+        0
+      );
+      return {
+        invoices: {
+          ...state.invoices,
+          [customerId]: {
+            ...invoice,
+            items: updatedItems,
+            tipAmount: totalTip,
+          },
+        },
+      };
+    });
+  },
+
+  duplicateInvoiceItem: (customerId, itemId) => {
+    set((state) => {
+      const invoice = state.invoices[customerId];
+      if (!invoice) return state;
+      const sourceIndex = invoice.items.findIndex((i) => i.id === itemId);
+      if (sourceIndex < 0) return state;
+      const source = invoice.items[sourceIndex];
+      // Build a fresh copy: same itemId/name/type/price, but a NEW id, qty 1,
+      // no staff, no tip, no discount. Inserted IMMEDIATELY BELOW the source
+      // (index + 1) so the cashier sees the copy right under the original.
+      const clone: InvoiceItem = {
+        id: `${source.itemId || "item"}-${crypto.randomUUID()}`,
+        itemId: source.itemId,
+        name: source.name,
+        type: source.type,
+        price: source.price,
+        quantity: 1,
+        discount: 0,
+        discountType: source.discountType || "VND",
+        total: source.price * 1,
+        staffName: undefined,
+        tip: 0,
+      };
+      const newItems = [...invoice.items];
+      newItems.splice(sourceIndex + 1, 0, clone);
+      return {
+        invoices: {
+          ...state.invoices,
+          [customerId]: {
+            ...invoice,
+            items: newItems,
           },
         },
       };

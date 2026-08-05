@@ -155,7 +155,7 @@ const HAIRDRESSER_GROUPS = ["Artist", "Creative Director", "Master", "Junior"];
 /** Map a booking's status → its status-badge bg color as a CSS color string.
  *  These mirror BookingStatusBadgeColors (Tailwind bg-*-100 classes) so the
  *  flash uses the SAME hue as the booking's current status badge background.
- *  Used by the "Xem lịch hẹn" deep-link flash highlight. */
+ *  Used as the background tint of the flash highlight. */
 function flashColorForStatus(status: BookingStatusType | string | undefined): string {
   switch (status) {
     case "new": return "#dbeafe"; // bg-blue-100
@@ -165,6 +165,24 @@ function flashColorForStatus(status: BookingStatusType | string | undefined): st
     case "no_show": return "#fee2e2"; // bg-red-100
     case "cancelled": return "#f3f4f6"; // bg-gray-100
     default: return "#dbeafe";
+  }
+}
+
+/** Map a booking's status → a SATURATED, bright glow color (Tailwind -500
+ *  variants) used for the radiating box-shadow halo. The -100 bg tints are
+ *  too pale to read as a "glow" against the white grid — these -500 colors
+ *  are noticeably darker/brighter so the light visibly radiates around the
+ *  slot, while still matching the status hue (green for checkin, yellow for
+ *  checkout, red for no_show, etc.). */
+function flashGlowColorForStatus(status: BookingStatusType | string | undefined): string {
+  switch (status) {
+    case "new": return "#3b82f6"; // blue-500
+    case "confirmed": return "#3b82f6"; // blue-500
+    case "checkin": return "#22c55e"; // green-500
+    case "checkout": return "#eab308"; // yellow-500
+    case "no_show": return "#ef4444"; // red-500
+    case "cancelled": return "#9ca3af"; // gray-400
+    default: return "#3b82f6";
   }
 }
 
@@ -1195,14 +1213,19 @@ function SegmentBlock({
     // status-badge bg color. The color mirrors BookingStatusBadgeColors so the
     // flash matches the booking's current status (per the requirement
     // "nháy sáng màu giống với màu nền hiện tại của lịch hẹn").
-    const color = flashColorForStatus(booking.status);
+    const fillColor = flashColorForStatus(booking.status);
+    const glowColor = flashGlowColorForStatus(booking.status);
+    // Radiating glow: a SATURATED, bright box-shadow halo (Tailwind -500
+    // colors, 28px blur + 10px spread) so the light visibly "tỏa ra xung
+    // quanh" the slot with a strong, readable glow. The -100 tint fills the
+    // background for a softer color wash. 3 cycles (per request), 800ms each.
     const animation = el.animate(
       [
         { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
-        { boxShadow: `0 0 0 4px ${color}`, backgroundColor: color },
+        { boxShadow: `0 0 28px 10px ${glowColor}`, backgroundColor: fillColor },
         { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
       ],
-      { duration: 700, iterations: 6, easing: "ease-in-out" }
+      { duration: 800, iterations: 3, easing: "ease-in-out" }
     );
     return () => animation.cancel();
   }, [isFlashing, booking.status, segment.segmentIndex]);
@@ -1998,14 +2021,19 @@ function BookingChip({
     if (!isFlashing || !flashRef.current) return;
     const el = flashRef.current;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    const color = flashColorForStatus(booking.status);
+    const fillColor = flashColorForStatus(booking.status);
+    const glowColor = flashGlowColorForStatus(booking.status);
+    // Radiating glow: a SATURATED, bright box-shadow halo (Tailwind -500
+    // colors, 28px blur + 10px spread) so the light visibly "tỏa ra xung
+    // quanh" the slot with a strong, readable glow. The -100 tint fills the
+    // background for a softer color wash. 3 cycles (per request), 800ms each.
     const animation = el.animate(
       [
         { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
-        { boxShadow: `0 0 0 4px ${color}`, backgroundColor: color },
+        { boxShadow: `0 0 28px 10px ${glowColor}`, backgroundColor: fillColor },
         { boxShadow: "0 0 0 0 transparent", backgroundColor: "transparent" },
       ],
-      { duration: 700, iterations: 6, easing: "ease-in-out" }
+      { duration: 800, iterations: 3, easing: "ease-in-out" }
     );
     return () => animation.cancel();
   }, [isFlashing, booking.status]);

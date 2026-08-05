@@ -184,7 +184,7 @@ function BookingPageContent() {
     }
   }, [searchParams, setViewMode, setSearchQuery, setDateRange]);
 
-  // Clear the flash state after the animation finishes (5 cycles × 0.9s ≈ 4.5s)
+  // Clear the flash state after the animation finishes (3 cycles × 0.8s ≈ 2.4s)
   // so a later normal visit doesn't re-flash. setState is inside a setTimeout
   // callback (not synchronous), so this complies with the set-state-in-effect rule.
   useEffect(() => {
@@ -192,6 +192,41 @@ function BookingPageContent() {
     const t = setTimeout(() => setFlashBookingId(null), 6000);
     return () => clearTimeout(t);
   }, [flashBookingId]);
+
+  // === Re-apply deep-link params when the URL changes WITHOUT a remount ===
+  // When the user is already on /booking (e.g. /booking?view=customer) and
+  // clicks "Xem lịch hẹn" (navigates to /booking?view=staff&flash=ID&...),
+  // Next.js keeps this component mounted (same route, only query params
+  // change). The initial-mount effect above won't re-run (flashAppliedRef is
+  // already true), so the view mode + flash wouldn't update. This effect
+  // watches `searchParams` for a NEW flash id and re-applies the deep-link:
+  // resets the guard ref so the apply effect re-runs, and syncs flashBookingId.
+  useEffect(() => {
+    const flash = searchParams.get("flash");
+    // Only act when the flash param is present AND differs from the currently
+    // applied flash (avoids re-running on every unrelated searchParams change).
+    if (flash && flash !== flashBookingId) {
+      // Reset the guard so the apply effect re-runs with the new params.
+      flashAppliedRef.current = false;
+      setFlashBookingId(flash);
+      // Re-apply view + search + date from the new params (zustand setters).
+      const view = searchParams.get("view");
+      const code = searchParams.get("search");
+      const dateParam = searchParams.get("date");
+      if (view === "customer") setViewMode("customer");
+      if (view === "staff") setViewMode("staff");
+      if (code) setSearchQuery(code);
+      if (dateParam) {
+        const m = dateParam.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) {
+          const from = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+          const to = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+          setDateRange({ from, to });
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Whether the currently-viewed date is in the past.
   const isViewingPastDate = (() => {
@@ -345,6 +380,43 @@ function BookingPageContent() {
   });
 
   const handleStatusChange = (bookingId: string, newStatus: BookingStatusType) => {
+    // === Time-window restriction for checkin (non-admin) ===
+    // A booking can only transition from "confirmed" → "checkin" when the
+    // current time is within [booking start − 30 min, booking start + 60 min].
+    // Outside this window, the action is blocked with a toast so the cashier
+    // can't accidentally check in an appointment that's far from its slot.
+    // Admins bypass this restriction entirely (they can check in at any time).
+    if (newStatus === "checkin") {
+      const booking = bookings.find((b) => b.id === bookingId);
+      // Admin bypass: staff in the "Admin" group have the book_past_date
+      // permission, so they can check in a booking at ANY time. All other
+      // staff are restricted to [booking start − 30 min, booking start + 60 min].
+      const isAdmin = hasPermission("book_past_date");
+      if (booking && !isAdmin) {
+        const startTime = booking.date_time ? new Date(booking.date_time).getTime() : NaN;
+        if (!isNaN(startTime)) {
+          const now = Date.now();
+          const windowStart = startTime - 30 * 60 * 1000; // 30 min before
+          const windowEnd = startTime + 60 * 60 * 1000;   // 60 min after
+          if (now < windowStart || now > windowEnd) {
+            // Block the checkin — show a human-readable reason. Use the VN
+            // time of the booking's slot so the cashier knows when it IS OK.
+            try {
+              const slotTime = toVietnamTime(booking.date_time!);
+              alert(
+                `Chỉ được checkin trong khoảng 30 phút trước đến 60 phút sau giờ hẹn (${slotTime}). Hiện tại chưa đến thời gian cho phép.`
+              );
+            } catch {
+              alert(
+                "Chỉ được checkin trong khoảng 30 phút trước đến 60 phút sau giờ hẹn. Hiện tại chưa đến thời gian cho phép."
+              );
+            }
+            return;
+          }
+        }
+      }
+    }
+
     statusMutation.mutate({ bookingId, newStatus });
 
     // When a booking transitions to "checkin", create a PENDING invoice (status

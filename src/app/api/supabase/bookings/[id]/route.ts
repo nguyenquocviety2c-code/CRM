@@ -592,17 +592,17 @@ export async function PATCH(
 
 
     // === Auto-delete linked invoice when reverting to pre-invoice statuses ===
-    // When the user changes a booking back to "confirmed" or "cancelled" (the
-    // statuses that should NOT have an invoice), any existing invoice (pending
-    // or paid) + its activities are deleted from Supabase. This lets the user
-    // recover from mistakes: e.g. accidentally checked in (created a pending
-    // invoice) → revert to confirmed → the stale invoice is cleaned up.
-    // NOTE: only confirmed and cancelled trigger deletion (per the requirement).
-    // no_show keeps the invoice for records; checkin/checkout obviously keep it.
+    // When the user changes a booking back to "confirmed", "cancelled", or
+    // "no_show" (the statuses that should NOT have an invoice in the cashier
+    // module), any existing invoice (pending or paid) + its activities are
+    // deleted from Supabase. This keeps the cashier module clean: only
+    // "checkin" / "checkout" bookings appear there (per the cashier filter).
+    // Reverting a checked-in booking to confirmed/cancelled/no_show removes
+    // the invoice so the cashier tab disappears on the next refresh.
     let invoiceDeleted = false;
     if (
       newStatus &&
-      (newStatus === "confirmed" || newStatus === "cancelled") &&
+      (newStatus === "confirmed" || newStatus === "cancelled" || newStatus === "no_show") &&
       bookingInvoiceId
     ) {
       try {

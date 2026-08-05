@@ -242,7 +242,7 @@ export function CustomerDialog({ open, onClose, customer }: CustomerDialogProps)
             }
           `}</style>
 
-          <form id="customer-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <form id="customer-form" onSubmit={handleSubmit(onSubmit)} className="space-y-2">
             {/* Row 1: Họ tên */}
             <div className="flex items-start gap-4">
               <Label className="w-[140px] pt-2 text-right shrink-0">

@@ -217,6 +217,15 @@ export function TimePicker({ value, onChange, placeholder = "HH:MM", id, disable
             onChange={disabled ? undefined : handleInputChange}
             onBlur={disabled ? undefined : handleInputBlur}
             disabled={disabled}
+            // Disable the browser's native autofill/autocomplete suggestions
+            // — the dark-background dropdown that Chrome/Firefox show when the
+            // user types into a text input. Those suggestions are meaningless
+            // for a time field and clutter the UI. The custom Radix popover
+            // (hours/minutes columns) is the real picker.
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             className={cn("pr-8", disabled ? "cursor-not-allowed bg-gray-100 text-gray-400" : "cursor-pointer")}
           />
         </PopoverTrigger>

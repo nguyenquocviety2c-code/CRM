@@ -265,6 +265,22 @@ textarea { min-height: 56px !important; }
 .time-grid-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 5px; }
 .time-grid-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 .time-grid-scroll::-webkit-scrollbar-corner { background: #f1f5f9; }
+
+/*
+ * Dialog list scroll — for the "Xếp nhân viên cho toàn bộ đơn" dialog's
+ * per-item list (and any similar dialog list that grows beyond 4 rows).
+ * Always-visible styled scrollbar so the user can see + grab it to scroll
+ * up/down when there are many services/products/packages. Mirrors the
+ * time-grid scrollbar colors.
+ */
+.dialog-list-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.dialog-list-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+.dialog-list-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.dialog-list-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.dialog-list-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
 /* Firefox — thin scrollbar with matching colors. */
 .time-grid-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
 

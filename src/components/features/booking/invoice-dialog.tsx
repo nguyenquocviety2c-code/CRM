@@ -7,6 +7,7 @@ import {
   getActivePromotionsForBooking,
   getPromotionServiceIds,
   calculatePromotionDiscount,
+  isPromotionForBranch,
 } from "@/lib/promotion-utils";
 import {
   Dialog,
@@ -495,30 +496,77 @@ export function InvoiceDialog({ booking, onClose, onPaid, slotIndex }: InvoiceDi
     };
   }, [booking.id, effectivelyReadOnly]);
 
-  // Fetch active promotions from Supabase (editable mode only).
+  // Fetch active promotions from Supabase (editable mode only). Also fetch the
+  // customer's GIFTED incentives (via "Tặng khuyến mãi") and merge them in:
+  // gifted promotions bypass the usageLimit check (the gift grants a personal
+  // allowance) but still must be within date validity + branch-eligible.
   useEffect(() => {
     if (effectivelyReadOnly) return;
     let cancelled = false;
     const branchId = booking.branchId || (booking.branch as { id?: string } | null)?.id || null;
-    fetch("/api/supabase/incentives?type=promotion&page=1&limit=100")
-      .then((r) => r.json())
-      .then((json) => {
+    const customerId = (booking.customer as unknown as { id?: string } | null)?.id || null;
+
+    const loadPromotions = async () => {
+      try {
+        const [promosRes, giftsRes] = await Promise.all([
+          fetch("/api/supabase/incentives?type=promotion&page=1&limit=100").then((r) => r.json()),
+          customerId
+            ? fetch(`/api/supabase/customer-gifts?customer_id=${encodeURIComponent(customerId)}`).then((r) => r.json())
+            : Promise.resolve({ ok: true, data: [] }),
+        ]);
         if (cancelled) return;
-        if (json.ok && json.data && Array.isArray(json.data.items)) {
-          const active = getActivePromotionsForBooking(json.data.items, { branchId });
-          setPromotions(active);
-        }
-      })
-      .catch(() => {
+        const active = getActivePromotionsForBooking(
+          promosRes.ok ? promosRes.data?.items || [] : [],
+          { branchId }
+        );
+        // Build the gifted-promotions list: only promotion-type gifts, kept
+        // when still within date validity (start ≤ now ≤ end). usageLimit
+        // check is SKIPPED for gifts. Branch check still applies.
+        const gifts = (giftsRes.ok ? giftsRes.data || [] : []) as Array<{
+          incentive_id: string;
+          incentive: IncentiveShape & { type?: string } | null;
+        }>;
+        const now = Date.now();
+        const giftedPromos = gifts
+          .filter(
+            (g) =>
+              g.incentive &&
+              (g.incentive.type || "promotion") === "promotion"
+          )
+          .map((g) => g.incentive as IncentiveShape)
+          .filter((p) => {
+            // Date-validity check only (no usageLimit check for gifts).
+            if (p.startDate) {
+              const start = new Date(p.startDate).getTime();
+              if (!isNaN(start) && now < start) return false;
+            }
+            if (p.endDate) {
+              const end = new Date(p.endDate).getTime();
+              if (!isNaN(end) && now > end) return false;
+            }
+            return true;
+          });
+        // Merge: active promotions + gifted promotions (deduplicate by id).
+        const merged = [
+          ...active,
+          ...giftedPromos.filter(
+            (p) =>
+              isPromotionForBranch(p, branchId) &&
+              !active.some((a) => a.id === p.id)
+          ),
+        ];
+        if (!cancelled) setPromotions(merged);
+      } catch {
         /* best-effort */
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoadingPromos(false);
-      });
+      }
+    };
+    loadPromotions();
     return () => {
       cancelled = true;
     };
-  }, [effectivelyReadOnly, booking.branchId, booking.branch]);
+  }, [effectivelyReadOnly, booking.branchId, booking.branch, booking.customer]);
 
   // The selected promotion object (or null).
   const selectedPromo = promotions.find((p) => p.id === selectedPromoId) || null;

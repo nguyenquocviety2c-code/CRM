@@ -330,6 +330,37 @@ export function BookingCustomerView({
                   >
                     {booking.code}
                   </button>
+                  {/* "Xem lịch hẹn" link — BELOW the booking code. Jumps to the
+                      Lịch hẹn module > View nhân viên, where this booking's slot
+                      radiates a glow 3 times in its status-badge color (same
+                      flash logic as the cashier module's "Xem lịch hẹn" button).
+                      Uses ?view=staff&flash=BOOKING_ID&search=CODE&date=YYYY-MM-DD. */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const params = new URLSearchParams();
+                        params.set("view", "staff");
+                        params.set("flash", booking.id);
+                        if (booking.code) params.set("search", booking.code);
+                        // Booking's Vietnam calendar day (YYYY-MM-DD) so the
+                        // booking page defaults to showing ONLY this day.
+                        if (booking.date_time) {
+                          try {
+                            params.set("date", toVietnamDay(booking.date_time));
+                          } catch {
+                            // ignore malformed date_time
+                          }
+                        }
+                        router.push(`/booking?${params.toString()}`);
+                      }}
+                      className="text-[11px] font-medium text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                      title="Xem lịch hẹn tại View nhân viên"
+                    >
+                      Xem lịch hẹn
+                    </button>
+                  </div>
                 </td>
                 )}
                 {visibleColumns.customer && (

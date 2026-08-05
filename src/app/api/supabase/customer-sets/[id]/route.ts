@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { customerSetSchema } from "@/lib/validations";
+import { repopulateSetMembers } from "@/lib/customer-set-matcher";
 
 interface RawCondition {
   id?: string;
   condition_type?: string;
   condition_value?: string | null;
+  condition_operator?: string | null;
+  condition_value2?: string | null;
 }
 
 interface RawCustomerSet {
@@ -13,6 +16,8 @@ interface RawCustomerSet {
   name: string;
   note: string | null;
   auto_update: boolean;
+  color: string | null;
+  logo: string | null;
   created_at: string;
   updated_at: string;
   conditions?: RawCondition[];
@@ -24,6 +29,8 @@ function mapCustomerSet(row: RawCustomerSet) {
     name: row.name,
     note: row.note ?? null,
     autoUpdate: Boolean(row.auto_update),
+    color: row.color ?? null,
+    logo: row.logo ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     conditions: (row.conditions ?? []).map((c) => ({
@@ -31,6 +38,8 @@ function mapCustomerSet(row: RawCustomerSet) {
       customerSetId: row.id,
       conditionType: c.condition_type ?? "",
       conditionValue: c.condition_value ?? null,
+      conditionOperator: c.condition_operator ?? null,
+      conditionValue2: c.condition_value2 ?? null,
     })),
   };
 }
@@ -91,6 +100,8 @@ export async function PUT(
         name: setData.name,
         note: setData.note || null,
         auto_update: Boolean(setData.autoUpdate),
+        color: setData.color || null,
+        logo: setData.logo || null,
         updated_at: new Date().toISOString(),
       })
       .eq("id", id);
@@ -112,6 +123,8 @@ export async function PUT(
         customer_set_id: id,
         condition_type: c.conditionType,
         condition_value: c.conditionValue || null,
+        condition_operator: c.conditionOperator || null,
+        condition_value2: c.conditionValue2 || null,
       }));
       const { error: condErr } = await supabaseAdmin
         .from("customer_set_conditions")
@@ -121,7 +134,21 @@ export async function PUT(
       }
     }
 
-    // 3. Re-fetch with conditions.
+    // 3. Auto-populate members: re-evaluate the (possibly updated) conditions
+    //    against all customers and refresh customer_set_members. Background.
+    repopulateSetMembers(
+      id,
+      (conditions || []).map((c) => ({
+        conditionType: c.conditionType,
+        conditionValue: c.conditionValue || null,
+        conditionOperator: c.conditionOperator || null,
+        conditionValue2: c.conditionValue2 || null,
+      }))
+    ).catch((e) => {
+      console.error("Background member population failed:", e?.message || e);
+    });
+
+    // 4. Re-fetch with conditions.
     const { data: refreshed, error: fetchErr } = await supabaseAdmin
       .from("customer_sets")
       .select(SELECT_WITH_CONDITIONS)
