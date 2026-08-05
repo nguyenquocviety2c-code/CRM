@@ -969,16 +969,16 @@ export function BookingStaffView({
                       const slotCount = group.length;
                       // If this segment is the ONLY one in its slot → full width
                       // (left-1 right-1, as before). If 2+ share the slot →
-                      // split: 2 per row, 3rd wraps. Each sub-block gets
-                      // width = 50% (for 2) or 50% (for 3+, wrapping).
-                      const isSplit = slotCount > 1;
+                      // split: max 2 per row. The 3rd (odd) wraps to the next
+                      // row and takes FULL width (it's alone in its row).
                       const segIndexInSlot = group.indexOf(seg);
-                      const cols = isSplit ? Math.min(slotCount, 2) : 1;
-                      const widthPct = isSplit ? 100 / cols : 100;
-                      const leftPct = isSplit ? (segIndexInSlot % cols) * widthPct : 0;
-                      // For 3+ segments: the 3rd (index 2) wraps to the next
-                      // "row" — we offset its top by half the block height.
-                      const rowOffset = isSplit && segIndexInSlot >= 2
+                      const isSplit = slotCount > 1;
+                      const row = Math.floor(segIndexInSlot / 2); // 0 = first row, 1 = second row
+                      const colInRow = segIndexInSlot % 2; // 0 = left, 1 = right
+                      const isOddInRow = isSplit && slotCount % 2 === 1 && segIndexInSlot === slotCount - 1;
+                      const widthPct = isSplit ? (isOddInRow ? 100 : 50) : 100;
+                      const leftPct = isSplit ? (isOddInRow ? 0 : colInRow * 50) : 0;
+                      const rowOffset = isSplit && row > 0
                         ? heightPxForSeg(seg, pxPerHour) / 2
                         : 0;
                       return (
