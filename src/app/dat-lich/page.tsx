@@ -232,67 +232,15 @@ export default function DatLichPage() {
   }, [trimmedPhone, phoneLookup]);
 
   // --- Customer autocomplete ----------------------------------------------
-  // Debounced search: when the user types ≥2 chars in EITHER the name or phone
-  // field, fetch matching customers (by name prefix OR phone prefix) and show
-  // a dropdown. Selecting a suggestion fills both name + phone.
+  // DISABLED: the name-field autocomplete dropdown was removed per request.
+  // The only customer lookup now is the phone-input → name-suggestion chip
+  // (which uses the phoneLookup query, not this effect). This effect is kept
+  // to avoid unused-variable errors for `selectSuggestion` — it's never called
+  // from the UI anymore, but the function + state remain for potential future use.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    // Determine the search term based on which field the user is typing in.
-    const term =
-      activeField === "phone"
-        ? customerPhone.trim()
-        : activeField === "name"
-          ? customerName.trim()
-          : "";
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      if (term.length < 2) {
-        if (!cancelled) {
-          setSuggestions([]);
-          setShowSuggestions(false);
-        }
-        return;
-      }
-      try {
-        const res = await fetch(
-          `/api/supabase/customers?search=${encodeURIComponent(term)}&limit=10`
-        );
-        const json = await res.json();
-        if (cancelled) return;
-        if (json.ok && Array.isArray(json.data)) {
-          // Match phone by SUBSTRING (anywhere: prefix / middle / suffix),
-          // not just prefix — so typing a tail or middle chunk of a phone
-          // still finds the customer. Name keeps prefix matching (natural
-          // for names). Results are then ranked by phone relevance so the
-          // customers whose phone matches the query the most are suggested
-          // first.
-          const lower = term.toLowerCase();
-          const matches = (json.data as Array<{ id: string; name: string; phone?: string | null; code?: string | null }>)
-            .filter((c) => {
-              const nameMatch = (c.name || "").toLowerCase().startsWith(lower);
-              const phoneMatch = phoneContains(c.phone, term);
-              return nameMatch || phoneMatch;
-            })
-            .map((c) => ({ id: c.id, name: c.name, phone: c.phone ?? null, code: c.code ?? null }))
-            .sort(
-              (a, b) =>
-                scorePhoneMatch(b.phone, term) - scorePhoneMatch(a.phone, term)
-            );
-          if (!cancelled) {
-            setSuggestions(matches);
-            setShowSuggestions(matches.length > 0);
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setSuggestions([]);
-          setShowSuggestions(false);
-        }
-      }
-    }, 250); // 250ms debounce
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
+    // No-op: autocomplete dropdown removed. Keeping the effect to satisfy
+    // the dependency array without lint errors.
   }, [customerName, customerPhone, activeField]);
 
   const selectSuggestion = (s: { name: string; phone: string | null }) => {
@@ -924,6 +872,10 @@ export default function DatLichPage() {
                         type="button"
                         onClick={() => {
                           setCustomerName(phoneMatchedCustomer.name);
+                          // Hide the chip immediately — the name is filled,
+                          // no need to show the suggestion again.
+                          setShowSuggestions(false);
+                          setActiveField(null);
                         }}
                         className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-100"
                       >
@@ -944,39 +896,15 @@ export default function DatLichPage() {
                     value={customerName}
                     onChange={(e) => {
                       setCustomerName(e.target.value);
-                      setActiveField("name");
-                      setShowSuggestions(true);
-                    }}
-                    onFocus={() => {
-                      setActiveField("name");
-                      if (suggestions.length > 0) setShowSuggestions(true);
-                    }}
-                    onBlur={() => {
-                      // Delay hide so a click on a suggestion registers first.
-                      setTimeout(() => setShowSuggestions(false), 200);
                     }}
                     placeholder="Nhập họ và tên"
                     className="h-10"
                     autoComplete="off"
                   />
-                  {showSuggestions && activeField === "name" && suggestions.length > 0 && (
-                    <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-200 bg-white shadow-lg max-h-60 overflow-y-auto">
-                      {suggestions.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectSuggestion(s);
-                          }}
-                          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-emerald-50"
-                        >
-                          <span className="font-medium text-gray-800">{s.name}</span>
-                          <span className="text-xs text-gray-500">{s.phone || "—"}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  {/* Name autocomplete dropdown REMOVED — the phone-input name
+                      suggestion chip (above) is the only autocomplete. Once the
+                      name is filled (by chip click or manual typing), there's
+                      no need to show suggestions again. */}
                 </div>
               </div>
               <div className="space-y-1.5 sm:col-span-2">
