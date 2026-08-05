@@ -362,7 +362,11 @@ export function BookingStaffView({
       const startMin = getBookingStartMinutes(booking);
       // PARALLEL: every segment starts at the booking's startMin.
       groups.forEach((group, i) => {
-        const duration = group.reduce((sum, s) => sum + (s.service?.duration || 0), 0);
+        // PARALLEL model: all services start at the same time, so the
+        // segment's duration = the LONGEST service's duration (NOT the sum).
+        // E.g. 3 services of 60/90/30 min all starting at 16:00 → the block
+        // spans 16:00–17:30 (90 min, the longest), NOT 16:00–19:00 (180 min).
+        const duration = Math.max(...group.map((s) => s.service?.duration || 60));
         const staffId = group[0].staff_id || "";
         const seg: ServiceSegment = {
           booking,
