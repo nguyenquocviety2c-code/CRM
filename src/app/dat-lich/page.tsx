@@ -28,6 +28,7 @@ interface ServiceCategory {
   id: string;
   name: string;
   branches?: string[];
+  requires_contact?: boolean;
 }
 interface Service {
   id: string;
@@ -215,7 +216,13 @@ export default function DatLichPage() {
   });
   const isOldCustomer = useMemo(() => {
     if (!trimmedPhone || !phoneLookup) return false;
-    return phoneLookup.some((c) => c.phone === trimmedPhone);
+    // "Old" = customer exists in DB AND has customer_type "old" (which the API
+    // computes as: has ≥1 completed invoice with a service item). Simply having
+    // the phone in the DB is NOT enough — the customer must have a COMPLETED
+    // invoice to be considered "old" (per the user's requirement).
+    const match = phoneLookup.find((c) => c.phone === trimmedPhone);
+    if (!match) return false;
+    return (match as { customer_type?: string }).customer_type === "old";
   }, [trimmedPhone, phoneLookup]);
   // The customer whose phone EXACTLY matches the typed phone — used to show a
   // name-suggestion chip below the phone input. Clicking it fills the name.
@@ -414,6 +421,9 @@ export default function DatLichPage() {
   const { data: salonInfo } = useQuery<{
     open_time: string | null;
     close_time: string | null;
+    phone: string | null;
+    website: string | null;
+    fanpage: string | null;
   } | null>({
     queryKey: ["dat-lich-salon-info", selectedBranchId],
     queryFn: async () => {
@@ -425,6 +435,9 @@ export default function DatLichPage() {
       return {
         open_time: (json.data as { open_time?: string | null }).open_time ?? null,
         close_time: (json.data as { close_time?: string | null }).close_time ?? null,
+        phone: (json.data as { phone?: string | null }).phone ?? null,
+        website: (json.data as { website?: string | null }).website ?? null,
+        fanpage: (json.data as { fanpage?: string | null }).fanpage ?? null,
       };
     },
     staleTime: 60_000,
@@ -607,8 +620,29 @@ export default function DatLichPage() {
     !submitting;
 
   // --- Submit: lookup/create customer, then create booking -----------------
+  const [showContactDialog, setShowContactDialog] = useState(false);
+  const [contactServices, setContactServices] = useState<string[]>([]);
+
   const handleSubmit = async () => {
     if (!canSubmit) return;
+
+    // 0a. Check if ANY selected service belongs to a "requires_contact"
+    //     category (Liên hệ trực tiếp). If so, show the contact dialog
+    //     instead of creating the booking.
+    const contactCats = new Set(
+      categories.filter((c) => c.requires_contact).map((c) => c.id)
+    );
+    const contactRows = completeRows.filter((row) => contactCats.has(row.categoryId));
+    if (contactRows.length > 0) {
+      const svcNames = contactRows.map((row) => {
+        const svc = allServices.find((s) => s.id === row.serviceId);
+        return svc?.name || "Dịch vụ";
+      });
+      setContactServices(svcNames);
+      setShowContactDialog(true);
+      return; // Don't create the booking — customer must contact directly.
+    }
+
     setError("");
     setSubmitting(true);
     try {
@@ -1332,6 +1366,70 @@ export default function DatLichPage() {
           )}
         </div>
       </main>
+
+      {/* Contact-required dialog — shown when a selected service belongs to a
+          "requires_contact" category. Instead of creating a booking, shows the
+          salon's contact info (phone, website, fanpage) + the list of services
+          that require direct contact. */}
+      {showContactDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-lg border bg-white p-6 shadow-xl">
+            <h2 className="mb-3 text-lg font-bold text-gray-900">Liên hệ trực tiếp</h2>
+            <p className="mb-4 text-sm text-gray-600">
+              Dịch vụ bạn chọn yêu cầu liên hệ trực tiếp để đặt lịch. Vui lòng
+              liên hệ với chúng tôi qua:
+            </p>
+            {/* Contact info */}
+            <div className="mb-4 space-y-2">
+              {salonInfo?.phone && (
+                <div className="flex items-center gap-2 text-sm">
+                  <Phone className="h-4 w-4 text-gray-400" />
+                  <span className="font-medium text-gray-700">Điện thoại:</span>
+                  <span className="text-emerald-600">{salonInfo.phone}</span>
+                </div>
+              )}
+              {salonInfo?.website && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium text-gray-700">Website:</span>
+                  <a href={salonInfo.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    {salonInfo.website}
+                  </a>
+                </div>
+              )}
+              {salonInfo?.fanpage && (
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-medium text-gray-700">Fanpage:</span>
+                  <a href={salonInfo.fanpage} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    {salonInfo.fanpage}
+                  </a>
+                </div>
+              )}
+            </div>
+            {/* List of contact-required services */}
+            <div className="mb-4">
+              <p className="mb-1 text-xs font-medium text-gray-500">Dịch vụ cần liên hệ trực tiếp:</p>
+              <ul className="space-y-1">
+                {contactServices.map((s, i) => (
+                  <li key={i} className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-700">
+                    {s}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                onClick={() => {
+                  setShowContactDialog(false);
+                  setContactServices([]);
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                Đã hiểu
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

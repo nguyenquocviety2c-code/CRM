@@ -12,8 +12,8 @@ interface ServiceCategoryState {
   openDialog: (mode: "create" | "edit", id?: string) => void;
   closeDialog: () => void;
   fetchItems: (branchId?: string) => Promise<void>;
-  addItem: (name: string, branchIds?: string[]) => Promise<void>;
-  updateItem: (id: string, name: string, branchIds?: string[]) => Promise<void>;
+  addItem: (name: string, branchIds?: string[], requiresContact?: boolean) => Promise<void>;
+  updateItem: (id: string, name: string, branchIds?: string[], requiresContact?: boolean) => Promise<void>;
   deleteItem: (id: string) => Promise<void>;
 }
 
@@ -56,6 +56,7 @@ export const useServiceCategoryStore = create<ServiceCategoryState>((set, get) =
             name: String(r.name ?? ""),
             branchId: (r.branch_id as string) || null,
             branches: (r.branches as string[]) || [],
+            requires_contact: (r.requires_contact as boolean) || false,
           })),
         });
       }
@@ -66,12 +67,12 @@ export const useServiceCategoryStore = create<ServiceCategoryState>((set, get) =
     }
   },
 
-  addItem: async (name, branchIds) => {
+  addItem: async (name, branchIds, requiresContact) => {
     try {
       const response = await fetch("/api/supabase/service-categories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, branch_ids: branchIds || [] }),
+        body: JSON.stringify({ name, branch_ids: branchIds || [], requires_contact: requiresContact || false }),
       });
       const result = await response.json();
       if (result.ok) {
@@ -82,12 +83,12 @@ export const useServiceCategoryStore = create<ServiceCategoryState>((set, get) =
     }
   },
 
-  updateItem: async (id, name, branchIds) => {
+  updateItem: async (id, name, branchIds, requiresContact) => {
     try {
       const response = await fetch(`/api/supabase/service-categories/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, branch_ids: branchIds || [] }),
+        body: JSON.stringify({ name, branch_ids: branchIds || [], requires_contact: requiresContact || false }),
       });
       const result = await response.json();
       if (result.ok) {

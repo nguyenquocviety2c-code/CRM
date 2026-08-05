@@ -29,6 +29,7 @@ export function ServiceCategoryDialog() {
 
   const [name, setName] = useState("");
   const [selectedBranches, setSelectedBranches] = useState<string[]>([]);
+  const [requiresContact, setRequiresContact] = useState(false);
   const [error, setError] = useState("");
 
   const editingItem = useMemo(
@@ -50,6 +51,7 @@ export function ServiceCategoryDialog() {
       } else {
         setSelectedBranches([]);
       }
+      setRequiresContact((editingItem as { requires_contact?: boolean })?.requires_contact || false);
       setError("");
     }
   }, [dialogOpen, editingItem]);
@@ -82,16 +84,17 @@ export function ServiceCategoryDialog() {
       return;
     }
 
-    // Send all selected branches as array
+    // Send all selected branches as array + requires_contact flag
     if (dialogMode === "edit" && editingId) {
-      await updateItem(editingId, trimmed, selectedBranches);
+      await updateItem(editingId, trimmed, selectedBranches, requiresContact);
     } else {
-      await addItem(trimmed, selectedBranches);
+      await addItem(trimmed, selectedBranches, requiresContact);
     }
 
     closeDialog();
     setName("");
     setSelectedBranches([]);
+    setRequiresContact(false);
     setError("");
   };
 
@@ -161,6 +164,19 @@ export function ServiceCategoryDialog() {
             </div>
           </div>
 
+          {/* Liên hệ trực tiếp */}
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="requires-contact"
+              checked={requiresContact}
+              onCheckedChange={(v) => setRequiresContact(v === true)}
+              className="h-3.5 w-3.5"
+            />
+            <label htmlFor="requires-contact" className="text-sm text-gray-700 cursor-pointer">
+              Liên hệ trực tiếp (không đặt lịch online)
+            </label>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button
               type="button"
@@ -169,6 +185,7 @@ export function ServiceCategoryDialog() {
                 closeDialog();
                 setName("");
                 setSelectedBranches([]);
+                setRequiresContact(false);
                 setError("");
               }}
             >

@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, active, sort_order, branch_ids } = body;
+    const { name, active, sort_order, branch_ids, requires_contact } = body;
 
     if (!name || typeof name !== "string" || !name.trim()) {
       return NextResponse.json(
@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
       name: name.trim(),
       active: active !== undefined ? Boolean(active) : true,
       sort_order: sort_order !== undefined ? Number(sort_order) : 0,
+      requires_contact: requires_contact !== undefined ? Boolean(requires_contact) : false,
     };
 
     const { data, error } = await supabaseAdmin

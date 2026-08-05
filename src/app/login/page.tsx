@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/stores/auth-store";
@@ -40,7 +41,16 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
+    <div className="relative flex min-h-screen items-center justify-center bg-gray-50">
+      {/* Back to /dat-lich button — top-left corner */}
+      <button
+        type="button"
+        onClick={() => router.push("/dat-lich")}
+        className="absolute left-4 top-4 flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Về trang đặt lịch
+      </button>
       <div className="w-full max-w-md space-y-6 rounded-lg border bg-white p-8 shadow-sm">
         <div className="text-center">
           {/* Design A — high-res brand composition (logo emblem + "Level 1

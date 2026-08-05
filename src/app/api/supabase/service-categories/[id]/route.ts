@@ -52,6 +52,7 @@ export async function PUT(
     if (body.sort_order !== undefined)
       updateData.sort_order = Number(body.sort_order);
     if (body.branch_id !== undefined) updateData.branch_id = body.branch_id || null;
+    if (body.requires_contact !== undefined) updateData.requires_contact = Boolean(body.requires_contact);
 
     // Allow update even if only branch_ids is provided
     const hasFields = Object.keys(updateData).length > 0 || Array.isArray(body.branch_ids);
