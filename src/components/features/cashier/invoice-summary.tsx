@@ -1157,6 +1157,34 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             discountAmount: voucherDiscountSum,
           }
         : null;
+      // Multi-promotion / multi-voucher arrays sent to the API. The report's
+      // Hóa đơn view reads these back to render the "Khuyến mãi" and "Voucher"
+      // columns (each can list many). When only the legacy single promotion is
+      // applied, we still send `promotions: [meta]` so the array shape is
+      // consistent. Vouchers array mirrors promotions (currently the cashier
+      // UI only applies one voucher at a time, but the schema supports many).
+      const promotionsArray = selectedPromo
+        ? [
+            {
+              id: selectedPromo.id,
+              code: selectedPromo.code || "",
+              name: selectedPromo.name,
+              discountValue: selectedPromo.discountValue,
+              discountAmount: promoDiscountSum,
+            },
+          ]
+        : [];
+      const vouchersArray = selectedVoucher
+        ? [
+            {
+              id: selectedVoucher.id,
+              code: selectedVoucher.code || "",
+              name: selectedVoucher.name,
+              discountValue: selectedVoucher.discountValue,
+              discountAmount: voucherDiscountSum,
+            },
+          ]
+        : [];
 
       // Resolve the real customer_id: for booking tabs, activeCustomer.customerId
       // is the booking.id (tab key), not the customer. Use tabMeta.customerId
@@ -1196,6 +1224,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
               discount: invoice.discountAmount,
               tip,
               promotion: promotionMeta,
+              // Multi-promotion / multi-voucher arrays for walk-in invoices
+              // too — the report reads them regardless of invoice origin.
+              promotions: promotionsArray,
+              vouchers: vouchersArray,
               final_amount: total,
               payment_method: paymentMethod,
               status: "completed",
@@ -1393,6 +1425,10 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
         discount: invoice.discountAmount,
         tip,
         promotion: promotionMeta,
+        // Multi-promotion / multi-voucher arrays — the report's Hóa đơn view
+        // reads these to populate the "Khuyến mãi" and "Voucher" columns.
+        promotions: promotionsArray,
+        vouchers: vouchersArray,
         final_amount: total,
         payment_method: paymentMethod,
         status: "completed",
@@ -1436,6 +1472,11 @@ export function InvoiceSummary({ selectedDate }: { selectedDate: string }) {
             discount: invoice.discountAmount,
             tip,
             promotion: promotionMeta,
+            // Multi-promotion / multi-voucher arrays — keep the saved invoice
+            // in sync with the cashier's current selection so the report's
+            // Hóa đơn view shows the right columns after a PUT update.
+            promotions: promotionsArray,
+            vouchers: vouchersArray,
             final_amount: total,
             payment_method: payload.payment_method,
             status: "completed",

@@ -12,6 +12,26 @@ export interface ReportFilters {
 }
 
 // View 1: Hóa đơn
+// A single invoice can apply MULTIPLE promotions and MULTIPLE vouchers, so
+// both fields are arrays. The legacy `promotionName` etc. fields are kept for
+// backward compatibility with code that still reads the "primary" (first)
+// promotion — they're filled from promotions[0] when present.
+export interface AppliedPromotion {
+  id?: string;
+  code?: string | null;
+  name: string;
+  discountValue: number;     // % hoặc số tiền giảm
+  discountType?: string;     // "percent" | "amount" | "service_category" | ...
+  discountAmount: number;    // Số tiền thực tế trừ (đ)
+}
+export interface AppliedVoucher {
+  id?: string;
+  code?: string | null;
+  name: string;
+  discountValue: number;     // % hoặc số tiền giảm
+  discountType?: string;
+  discountAmount: number;    // Số tiền thực tế trừ (đ)
+}
 export interface InvoiceReport {
   id: string;
   stt: number;
@@ -21,10 +41,14 @@ export interface InvoiceReport {
   customerName: string;
   totalAmount: number;
   surcharge: number;         // Thưởng (tiền tip cho thợ)
-  promotionName: string;     // Tên chương trình khuyến mãi áp dụng
-  promotionDiscountValue: number; // % hoặc số tiền giảm
-  promotionDiscountType: string;  // "percent" hoặc "amount"
-  promotionDiscountAmount: number; // Số tiền thực tế promotion trừ (đ)
+  promotionName: string;     // Tên chương trình khuyến mãi áp dụng (legacy: promotions[0].name)
+  promotionDiscountValue: number; // % hoặc số tiền giảm (legacy: promotions[0])
+  promotionDiscountType: string;  // "percent" hoặc "amount" (legacy: promotions[0])
+  promotionDiscountAmount: number; // Số tiền thực tế promotion trừ (đ) (legacy: promotions[0])
+  // Full list of applied promotions (one invoice can apply many).
+  promotions: AppliedPromotion[];
+  // Full list of applied vouchers (one invoice can apply many).
+  vouchers: AppliedVoucher[];
   discount: number;          // Tổng giảm giá của hóa đơn (đ) — fallback
   paidAmount: number;        // Đã thanh toán
 }

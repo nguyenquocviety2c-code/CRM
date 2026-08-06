@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DateRangePicker } from "@/components/shared/date-range-picker";
 import { IncentiveActions } from "./incentive-actions";
 
 interface Promotion {
@@ -63,9 +64,25 @@ interface PromotionListProps {
   onDelete: (id: string) => void;
   onCreate: () => void;
   onView: (promotion: Promotion) => void;
+  // Date-range filter (shared with the Voucher tab). The picker sits on the
+  // SAME row as the search box and the "Cột" button, to the LEFT of "Cột".
+  // The parent owns the state and applies the overlap filter; this component
+  // just renders the picker + forwards changes via onDateRangeChange.
+  dateFrom?: string;
+  dateTo?: string;
+  onDateRangeChange?: (from: string, to: string) => void;
 }
 
-export function PromotionList({ promotions, onEdit, onDelete, onCreate, onView }: PromotionListProps) {
+export function PromotionList({
+  promotions,
+  onEdit,
+  onDelete,
+  onCreate,
+  onView,
+  dateFrom,
+  dateTo,
+  onDateRangeChange,
+}: PromotionListProps) {
   const [search, setSearch] = useState("");
   // All columns visible by default. Hidden when set to false.
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
@@ -100,7 +117,12 @@ export function PromotionList({ promotions, onEdit, onDelete, onCreate, onView }
         </Button>
       </div>
 
-      {/* Search + Column visibility toggle — same row */}
+      {/* Search + Date range picker + Column visibility toggle — same row.
+          The date-range picker sits to the LEFT of the "Cột" button so the
+          user can filter the list by validity window without losing the column
+          toggle. The picker is only rendered when the parent passes
+          dateFrom/dateTo/onDateRangeChange (kept optional for any other
+          callers that don't want the filter). */}
       <div className="flex items-center gap-2">
         <div className="relative max-w-sm flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -111,6 +133,15 @@ export function PromotionList({ promotions, onEdit, onDelete, onCreate, onView }
             className="pl-10"
           />
         </div>
+
+        {/* Date range picker — filters by validity window overlap. */}
+        {onDateRangeChange && dateFrom && dateTo && (
+          <DateRangePicker
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onChange={onDateRangeChange}
+          />
+        )}
 
         {/* Column visibility toggle */}
         <DropdownMenu>

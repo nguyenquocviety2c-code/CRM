@@ -126,6 +126,23 @@ interface Product {
   product_type?: string | null;
 }
 
+// A customer-set row (as returned by GET /api/supabase/customer-sets). Used to
+// populate the "Tự động áp dụng" target selector with every customer set the
+// salon has defined (so a promotion can be auto-applied to members of any
+// specific customer set, not just "all" / "new" / "old" customers).
+interface CustomerSet {
+  id: string;
+  name: string;
+  color?: string | null;
+  logo?: string | null;
+}
+
+// Sentinel value prefix for the "Tự động áp dụng" select. Customer-set entries
+// are encoded as `customer_set:<id>` so the saved `autoApplyTarget` string
+// stays a single scalar (the column is TEXT) while still distinguishing a
+// customer-set target from the built-in `all` / `new` / `old` targets.
+const CUSTOMER_SET_PREFIX = "customer_set:";
+
 export function IncentiveDialog({
   open,
   onOpenChange,
@@ -245,6 +262,23 @@ export function IncentiveDialog({
     },
     enabled: open && discountType === "product",
   });
+
+  // Fetch ALL customer sets (for the "Tự động áp dụng" target selector —
+  // Field 10). Loaded whenever the dialog is open so the cashier can pick a
+  // specific customer set as the promotion's target audience. We use a high
+  // limit (500) to grab every set; salons rarely have more than a few dozen.
+  const { data: customerSetsData } = useQuery<CustomerSet[]>({
+    queryKey: ["incentive-customer-sets"],
+    queryFn: async () => {
+      const res = await fetch("/api/supabase/customer-sets?limit=500");
+      const json = await res.json();
+      // API returns { customerSets: [...] } under data.
+      const list = (json.data?.customerSets as CustomerSet[] | undefined) || [];
+      return list;
+    },
+    enabled: open,
+  });
+  const customerSets = customerSetsData || [];
 
   // Filter the entity list by the selected store(s).
   const filteredServiceCategories = useMemo(() => {
@@ -693,17 +727,43 @@ export function IncentiveDialog({
               )}
             </div>
 
-            {/* Field 10: Tự động áp dụng */}
+            {/* Field 10: Tự động áp dụng — chọn nhóm khách hàng mục tiêu.
+                Built-in options: "Tất cả khách hàng" (all), "Khách hàng mới"
+                (new — profile đã có nhưng chưa có hóa đơn hoàn tất), "Khách
+                hàng cũ" (old — profile đã có hóa đơn hoàn tất thanh toán).
+                Plus every customer set defined in CSKH > Tập khách hàng, each
+                encoded as `customer_set:<id>` so the saved autoApplyTarget
+                stays a single scalar while still identifying the set. The
+                Select's `value` is controlled so EDIT mode shows the current
+                target correctly (including a customer-set target). */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">Tự động áp dụng</Label>
-              <Select onValueChange={(value) => setValue("autoApplyTarget", value)}>
+              <Select
+                value={(watch("autoApplyTarget") as string) || ""}
+                onValueChange={(value) => setValue("autoApplyTarget", value, { shouldValidate: true })}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Chọn nhóm khách hàng mục tiêu" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Tất cả khách hàng</SelectItem>
                   <SelectItem value="new">Khách hàng mới</SelectItem>
-                  <SelectItem value="vip">Khách hàng VIP</SelectItem>
+                  <SelectItem value="old">Khách hàng cũ</SelectItem>
+                  {/* Customer sets — only shown when at least one exists. Each
+                      label is prefixed with "Tập: " so the cashier can tell
+                      these are customer-set targets at a glance. */}
+                  {customerSets.length > 0 && (
+                    <>
+                      {customerSets.map((cs) => (
+                        <SelectItem
+                          key={cs.id}
+                          value={`${CUSTOMER_SET_PREFIX}${cs.id}`}
+                        >
+                          {`Tập: ${cs.name}`}
+                        </SelectItem>
+                      ))}
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>

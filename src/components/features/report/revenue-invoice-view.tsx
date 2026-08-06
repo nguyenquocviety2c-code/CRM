@@ -38,6 +38,7 @@ const INVOICE_COLUMN_DEFS: ColumnDef[] = [
   { key: "surcharge", label: "Thưởng" },
   { key: "discount", label: "Giảm giá" },
   { key: "promotionName", label: "Khuyến mãi" },
+  { key: "voucherName", label: "Voucher" },
   { key: "totalAmount", label: "Tổng tiền" },
 ];
 
@@ -83,10 +84,18 @@ export function RevenueInvoiceView() {
   // Line 2 = the actual money deducted by the promotion. Both lines stack
   // vertically inside the Khuyến mãi cell so the cashier sees both the rule
   // and its effect at a glance.
-  const renderPromotion = (invoice: typeof data[number]): React.ReactNode => {
-    if (!invoice.promotionName) return <span className="text-gray-400">—</span>;
-    const val = invoice.promotionDiscountValue || 0;
-    const type = invoice.promotionDiscountType;
+  //
+  // Multi-promotion support: one invoice can apply MULTIPLE promotions. We
+  // render each one as its own stacked block (separated by a thin divider) so
+  // the cashier can see every promotion that was applied to the order, not
+  // just the "primary" one.
+  const renderPromotionBlock = (
+    p: { name: string; discountValue: number; discountType?: string; discountAmount: number },
+    fallbackDiscount: number,
+  ): React.ReactNode => {
+    if (!p.name) return null;
+    const val = p.discountValue || 0;
+    const type = p.discountType;
     // Determine whether `val` is a PERCENT (e.g. 10 → 10%) or a fixed money
     // amount. The stored `discountType` values seen in production are
     // "service_category" (a percent applied to a service category) and null;
@@ -102,11 +111,11 @@ export function RevenueInvoiceView() {
     // Line 2: the actual deducted money. Prefer the promotion's pre-computed
     // discountAmount; fall back to the invoice-level discount when the
     // promotion only carries a percent (the server computes the money later).
-    const deductedMoney = invoice.promotionDiscountAmount || invoice.discount;
+    const deductedMoney = p.discountAmount || (fallbackDiscount && val === 0 ? fallbackDiscount : 0);
     return (
       <div className="flex flex-col gap-0.5">
         <span className="text-xs text-gray-900">
-          {invoice.promotionName}
+          {p.name}
           {valueSuffix && <span className="ml-0.5 text-gray-600">{valueSuffix}</span>}
         </span>
         {deductedMoney > 0 && (
@@ -114,6 +123,44 @@ export function RevenueInvoiceView() {
             −{formatVND(deductedMoney)}
           </span>
         )}
+      </div>
+    );
+  };
+
+  // Render the full Khuyến mãi cell: stacks every applied promotion. When the
+  // invoice carries only the legacy single `promotion` field (no `promotions`
+  // array), `promotions` is filled from it by the store mapper, so this just
+  // works. Falls back to the legacy `promotionName` when no array entries.
+  const renderPromotion = (invoice: typeof data[number]): React.ReactNode => {
+    const list = (invoice.promotions && invoice.promotions.length > 0)
+      ? invoice.promotions
+      : (invoice.promotionName
+        ? [{ name: invoice.promotionName, discountValue: invoice.promotionDiscountValue, discountType: invoice.promotionDiscountType, discountAmount: invoice.promotionDiscountAmount }]
+        : []);
+    if (list.length === 0) return <span className="text-gray-400">—</span>;
+    return (
+      <div className="flex flex-col divide-y divide-gray-100">
+        {list.map((p, i) => (
+          <div key={i} className={i > 0 ? "pt-1" : ""}>
+            {renderPromotionBlock(p, invoice.discount)}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Render the Voucher cell — same multi-row layout as the Khuyến mãi cell so
+  // a single invoice that applied multiple vouchers shows every one of them.
+  const renderVoucher = (invoice: typeof data[number]): React.ReactNode => {
+    const list = invoice.vouchers || [];
+    if (list.length === 0) return <span className="text-gray-400">—</span>;
+    return (
+      <div className="flex flex-col divide-y divide-gray-100">
+        {list.map((v, i) => (
+          <div key={i} className={i > 0 ? "pt-1" : ""}>
+            {renderPromotionBlock(v, invoice.discount)}
+          </div>
+        ))}
       </div>
     );
   };
@@ -212,6 +259,7 @@ export function RevenueInvoiceView() {
                     if (col.key === "surcharge") return <TableCell key="surcharge">{formatVND(invoice.surcharge)}</TableCell>;
                     if (col.key === "discount") return <TableCell key="discount">{formatVND(invoice.discount)}</TableCell>;
                     if (col.key === "promotionName") return <TableCell key="promotionName">{renderPromotion(invoice)}</TableCell>;
+                    if (col.key === "voucherName") return <TableCell key="voucherName">{renderVoucher(invoice)}</TableCell>;
                     if (col.key === "totalAmount") return <TableCell key="totalAmount">{formatVND(invoice.totalAmount)}</TableCell>;
                     return null;
                   })}

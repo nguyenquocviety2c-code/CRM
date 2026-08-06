@@ -36,6 +36,18 @@ interface InvoiceItemInput {
   tip?: number;
 }
 
+// Shape of an applied promotion/voucher stored in the invoice note JSON.
+// One invoice can carry MULTIPLE of each — the cashier can stack several
+// promotions and several vouchers on a single order.
+interface AppliedIncentiveInput {
+  id?: string;
+  code?: string | null;
+  name?: string;
+  discountValue?: number;
+  discountType?: string;
+  discountAmount?: number;
+}
+
 /**
  * Generate an invoice code: "HD" + 6-digit zero-padded sequence.
  * Mirrors the bookings code-generator: try RPC, then JS fallback.
@@ -134,6 +146,8 @@ export async function GET(request: NextRequest) {
             note?: string;
             tip?: number;
             promotion?: unknown;
+            promotions?: unknown;
+            vouchers?: unknown;
             photos?: unknown;
           };
           decoded_row = {
@@ -142,16 +156,21 @@ export async function GET(request: NextRequest) {
             note: parsed.note ?? null,
             tip: Number(parsed.tip) || 0,
             promotion: parsed.promotion ?? null,
+            // Multi-promotion / multi-voucher support: the note JSON can carry
+            // `promotions: [...]` and `vouchers: [...]` arrays. Default to []
+            // when absent so the client always sees an array shape.
+            promotions: Array.isArray(parsed.promotions) ? parsed.promotions : [],
+            vouchers: Array.isArray(parsed.vouchers) ? parsed.vouchers : [],
             // lite mode: drop photos (base64 data URLs, up to MBs each) to
             // keep the report's 1000-invoice payload small. Non-lite callers
             // (detail views) get the full photos array as before.
             photos: lite ? [] : (Array.isArray(parsed.photos) ? (parsed.photos as string[]) : []),
           };
         } catch {
-          decoded_row = { ...row, items: [], tip: 0, promotion: null, photos: [] };
+          decoded_row = { ...row, items: [], tip: 0, promotion: null, promotions: [], vouchers: [], photos: [] };
         }
       } else {
-        decoded_row = { ...row, items: [], tip: 0, promotion: null, photos: [] };
+        decoded_row = { ...row, items: [], tip: 0, promotion: null, promotions: [], vouchers: [], photos: [] };
       }
       return decoded_row;
     });
@@ -301,6 +320,8 @@ export async function POST(request: NextRequest) {
       discount,
       tip,
       promotion,
+      promotions,
+      vouchers,
       final_amount,
       payment_method,
       status,
@@ -357,6 +378,15 @@ export async function POST(request: NextRequest) {
     const perItemTipSum = itemRows.reduce((sum, it) => sum + (Number(it.tip) || 0), 0);
     const tipAmount = tip != null ? Number(tip) : perItemTipSum;
     const promotionMeta = promotion || null;
+    // Normalize multi-promotion / multi-voucher arrays. Default to [] when not
+    // sent so the stored note always has these fields (the GET handler reads
+    // them back). Filter out nullish entries to keep the arrays clean.
+    const promotionsList: AppliedIncentiveInput[] = Array.isArray(promotions)
+      ? (promotions as unknown[]).filter((p): p is AppliedIncentiveInput => !!p && typeof p === "object")
+      : [];
+    const vouchersList: AppliedIncentiveInput[] = Array.isArray(vouchers)
+      ? (vouchers as unknown[]).filter((v): v is AppliedIncentiveInput => !!v && typeof v === "object")
+      : [];
     const finalAmount = final_amount != null ? Number(final_amount) : Math.max(0, subtotalAmount - discountAmount + tipAmount);
 
     const finalCode = await generateInvoiceCode();
@@ -371,6 +401,9 @@ export async function POST(request: NextRequest) {
       note: note || null,
       tip: tipAmount,
       promotion: promotionMeta,
+      // Multi-promotion / multi-voucher support.
+      promotions: promotionsList,
+      vouchers: vouchersList,
       photos: photosList,
     });
 
@@ -579,7 +612,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Attach decoded items + tip + promotion + photos to the response.
-    const responseData = { ...data, items: itemRows, note: note || null, tip: tipAmount, promotion: promotionMeta, photos: photosList };
+    const responseData = { ...data, items: itemRows, note: note || null, tip: tipAmount, promotion: promotionMeta, promotions: promotionsList, vouchers: vouchersList, photos: photosList };
 
     return NextResponse.json({ ok: true, data: responseData }, { status: 201 });
   } catch (error: unknown) {

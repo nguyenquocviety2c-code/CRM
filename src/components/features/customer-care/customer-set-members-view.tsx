@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useState } from "react";
 import {
   Table,
@@ -13,11 +13,9 @@ import {
 } from "@/components/ui/table";
 import { CustomerSet } from "@/stores/customer-care-store";
 import { formatVND } from "@/lib/utils";
-import { renderLogo } from "@/lib/customer-set-logos";
 
 interface CustomerSetMembersViewProps {
   customerSet: CustomerSet;
-  onBack: () => void;
 }
 
 /** Format an epoch ms as "DD/MM/YYYY" (Vietnam-friendly). Empty when 0. */
@@ -32,24 +30,28 @@ function fmtDate(ms: number): string {
 }
 
 interface Member {
-  customer_id: string;
-  added_at: string;
-  customer: {
-    id: string;
-    name: string;
-    phone: string | null;
-    code: string | null;
-  } | null;
-  total_spent: number | null;
-  service_count: number;
-  last_visit: string | null;
-  avg_visit_days: number | null;
-  avg_spend_per_visit: number | null;
+  memberId: string;
+  addedAt: string;
+  customerId: string;
+  name: string;
+  phone: string | null;
+  code: string | null;
+  birthday: string | null;
+  totalSpent: number;
+  serviceCount: number;
+  lastVisitMs: number;
+  avgVisitDays: number;
+  avgSpendPerVisit: number;
+  createdAt: string | null;
 }
 
+/**
+ * Inline members view — rendered INSIDE the customer-care page (replaces the
+ * customer-set list table when a set is selected). No overlay / fixed header
+ * of its own: the parent page owns the title bar, back button and search.
+ */
 export function CustomerSetMembersView({
   customerSet,
-  onBack,
 }: CustomerSetMembersViewProps) {
   const [search, setSearch] = useState("");
 
@@ -62,46 +64,23 @@ export function CustomerSetMembersView({
       );
       const json = await res.json();
       if (!json.ok) return { items: [] };
-      return { items: json.data || [] };
+      // The API returns an array directly under `data` (see route.ts).
+      const arr = Array.isArray(json.data) ? json.data : [];
+      return { items: arr };
     },
   });
 
   const members = (data?.items || []).filter(
     (m) =>
       !search ||
-      (m.customer?.name || "").toLowerCase().includes(search.toLowerCase()) ||
-      (m.customer?.phone || "").includes(search)
+      (m.name || "").toLowerCase().includes(search.toLowerCase()) ||
+      (m.phone || "").includes(search)
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b px-6 py-4">
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50"
-            title="Quay lại"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          {/* Logo glyph + name (name uses the set's text color, uppercase). */}
-          {customerSet.logo && renderLogo(customerSet.logo, "h-6 w-6 shrink-0")}
-          <h1
-            className="text-lg font-bold uppercase tracking-wide"
-            style={{ color: customerSet.color || undefined }}
-          >
-            {customerSet.name}
-          </h1>
-          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
-            {members.length} khách hàng
-          </span>
-        </div>
-      </div>
-
+    <div className="flex h-full flex-col">
       {/* Search */}
-      <div className="px-6 py-3">
+      <div className="px-6 pb-4">
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
@@ -139,30 +118,26 @@ export function CustomerSetMembersView({
               </TableHeader>
               <TableBody>
                 {members.map((m, idx) => (
-                  <TableRow key={m.customer_id} className="border-b hover:bg-gray-50">
+                  <TableRow key={m.memberId || m.customerId} className="border-b hover:bg-gray-50">
                     <TableCell className="text-left text-xs text-gray-400">{idx + 1}</TableCell>
                     <TableCell className="text-left">
-                      <span className="font-medium text-gray-900">
-                        {m.customer?.name || "Khách"}
-                      </span>
+                      <span className="font-medium text-gray-900">{m.name}</span>
+                    </TableCell>
+                    <TableCell className="text-left text-gray-600">{m.phone || "—"}</TableCell>
+                    <TableCell className="text-right text-gray-700">
+                      {formatVND(Number(m.totalSpent) || 0)}đ
+                    </TableCell>
+                    <TableCell className="text-right text-gray-700">
+                      {m.serviceCount || 0}
+                    </TableCell>
+                    <TableCell className="text-right text-gray-700">
+                      {formatVND(Number(m.avgSpendPerVisit) || 0)}đ
+                    </TableCell>
+                    <TableCell className="text-right text-gray-700">
+                      {m.avgVisitDays || 0} ngày
                     </TableCell>
                     <TableCell className="text-left text-gray-600">
-                      {m.customer?.phone || "—"}
-                    </TableCell>
-                    <TableCell className="text-right text-gray-700">
-                      {formatVND(Number(m.total_spent) || 0)}đ
-                    </TableCell>
-                    <TableCell className="text-right text-gray-700">
-                      {m.service_count || 0}
-                    </TableCell>
-                    <TableCell className="text-right text-gray-700">
-                      {formatVND(Number(m.avg_spend_per_visit) || 0)}đ
-                    </TableCell>
-                    <TableCell className="text-right text-gray-700">
-                      {m.avg_visit_days || 0} ngày
-                    </TableCell>
-                    <TableCell className="text-left text-gray-600">
-                      {m.last_visit ? fmtDate(new Date(m.last_visit).getTime()) : "—"}
+                      {m.lastVisitMs ? fmtDate(m.lastVisitMs) : "—"}
                     </TableCell>
                   </TableRow>
                 ))}

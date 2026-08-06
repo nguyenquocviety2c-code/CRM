@@ -36,6 +36,20 @@ interface IncentiveItem {
   type?: string | null;
 }
 
+// Build a "dd/MM/yyyy" string for today (used as the default end of the date
+// range). Keeps the date-range picker logic consistent with the rest of the
+// app, which uses dd/MM/yyyy everywhere.
+function todayDDMMYYYY(): string {
+  const now = new Date();
+  return `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
+}
+// Build a "dd/MM/yyyy" for the first day of the current month (used as the
+// default start of the date range — shows the current month by default).
+function firstOfMonthDDMMYYYY(): string {
+  const now = new Date();
+  return `01/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
+}
+
 export default function IncentivesPage() {
   const [activeTab, setActiveTab] = useState<SubTab>("promotion");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -49,6 +63,13 @@ export default function IncentivesPage() {
   // "Chi tiết khuyến mãi" vs "Chi tiết voucher").
   const [detailOpen, setDetailOpen] = useState(false);
   const [viewingDetail, setViewingDetail] = useState<IncentiveDetail | null>(null);
+  // Date range filter shared by BOTH the promotion and voucher tabs. The
+  // lists only show items whose [startDate, endDate] validity window OVERLAPS
+  // the selected [dateFrom, dateTo] range — so a voucher that ran 01 Aug → 15
+  // Aug still appears when the user picks 10 Aug → 20 Aug (partial overlap).
+  // Defaults to the current month.
+  const [dateFrom, setDateFrom] = useState<string>(firstOfMonthDDMMYYYY());
+  const [dateTo, setDateTo] = useState<string>(todayDDMMYYYY());
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { search, page, limit } = useCustomerCareStore();
@@ -223,27 +244,74 @@ export default function IncentivesPage() {
   const promotions = (promotionsData?.items as IncentiveItem[]) || [];
   const vouchers = (vouchersData?.items as IncentiveItem[]) || [];
 
+  // Date-range overlap filter — shared by BOTH tabs.
+  // An incentive is INCLUDED when its validity window [startDate, endDate]
+  // OVERLAPS the selected [dateFrom, dateTo] range. The overlap test is the
+  // standard interval-intersection check:  startA <= endB && endA >= startB.
+  // Incentives with no startDate AND no endDate are treated as always-active
+  // (unbounded) and always pass the filter. Incentives with only one bound
+  // use that bound against the opposite end of the selected range.
+  const parseDDMMYYYY = (s: string): number => {
+    if (!s) return NaN;
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return NaN;
+    // Use noon UTC to avoid DST skew; only the date matters for overlap.
+    return Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0);
+  };
+  const rangeStart = parseDDMMYYYY(dateFrom);
+  const rangeEnd = parseDDMMYYYY(dateTo);
+  const passesDateRange = (item: { startDate?: string | null; endDate?: string | null }): boolean => {
+    // No selected range → show everything (defensive — defaults always set).
+    if (isNaN(rangeStart) || isNaN(rangeEnd)) return true;
+    const sRaw = item.startDate;
+    const eRaw = item.endDate;
+    const s = sRaw ? new Date(sRaw).getTime() : NaN;
+    const e = eRaw ? new Date(eRaw).getTime() : NaN;
+    // Unbounded on both sides → always active.
+    if (isNaN(s) && isNaN(e)) return true;
+    // Unbounded start: active up to endDate. Overlaps when endDate >= rangeStart.
+    if (isNaN(s)) return !isNaN(e) && e >= rangeStart;
+    // Unbounded end: active from startDate. Overlaps when startDate <= rangeEnd.
+    if (isNaN(e)) return !isNaN(s) && s <= rangeEnd;
+    // Both bounds: standard interval overlap.
+    return s <= rangeEnd && e >= rangeStart;
+  };
+  const filteredPromotions = promotions.filter(passesDateRange);
+  const filteredVouchers = vouchers.filter(passesDateRange);
+
   return (
     <div className="space-y-4">
       <IncentivesTabs activeTab={activeTab} onTabChange={setActiveTab} />
 
       {activeTab === "promotion" && (
         <PromotionList
-          promotions={promotions}
+          promotions={filteredPromotions}
           onEdit={handleEdit}
           onDelete={handleDelete}
           onCreate={handleOpenCreate}
           onView={handleViewPromotion}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateRangeChange={(from, to) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
         />
       )}
 
       {activeTab === "voucher" && (
         <VoucherList
-          vouchers={vouchers}
+          vouchers={filteredVouchers}
           onEdit={handleEdit}
           onDelete={handleDelete}
           onCreate={handleOpenCreate}
           onView={handleViewVoucher}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateRangeChange={(from, to) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
         />
       )}
 

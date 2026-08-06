@@ -43,6 +43,16 @@ function isNewCustomer(c: GiftPromoCustomer): boolean {
 }
 
 /**
+ * Determine whether a customer is a "Khách hàng cũ" (returning customer): has
+ * at least one completed invoice (totalSpent > 0). The inverse of
+ * isNewCustomer — used to filter promotions whose autoApplyTarget === "old".
+ */
+function isOldCustomer(c: GiftPromoCustomer): boolean {
+  const spent = Number(c.totalSpent ?? c.total_spent ?? 0);
+  return spent > 0;
+}
+
+/**
  * Determine whether a customer is a "Khách hàng VIP": has a rank or group
  * whose name contains "vip" (case-insensitive). Used to filter promotions
  * whose autoApplyTarget === "vip".
@@ -67,8 +77,15 @@ function isMember(c: GiftPromoCustomer): boolean {
  * isPromotionActive, applied separately).
  *
  * - autoApplyTarget "all" → suitable for everyone.
- * - autoApplyTarget "new" → suitable only for new customers.
+ * - autoApplyTarget "new" → suitable only for new customers (no completed invoice).
+ * - autoApplyTarget "old" → suitable only for returning customers (≥1 completed invoice).
  * - autoApplyTarget "vip" → suitable only for VIP customers.
+ * - autoApplyTarget "customer_set:<id>" → treated as suitable for everyone here.
+ *   Customer-set membership is computed on the server (see customer-sets
+ *   members API) and this dialog doesn't have that lookup wired in; defaulting
+ *   to "suitable" avoids hiding promotions that the cashier manually gifts to
+ *   a customer who happens to be in the targeted set. The auto-apply path
+ *   (server-side) is the real gatekeeper for automatic application.
  * - applyScope "members_only" → suitable only for members (has group/rank).
  * - applyScope "all_customers" / "time_range" → no customer-type restriction.
  */
@@ -80,8 +97,10 @@ function isIncentiveSuitable(
   const target = incentive.autoApplyTarget as string | null | undefined;
   // members_only → requires the customer to be a member.
   if (scope === "members_only" && !isMember(customer)) return false;
-  // autoApplyTarget targeting (new / vip). "all" or empty = no restriction.
+  // autoApplyTarget targeting. "all" / empty / customer_set:* = no restriction
+  // here (see docstring above for the customer_set rationale).
   if (target === "new" && !isNewCustomer(customer)) return false;
+  if (target === "old" && !isOldCustomer(customer)) return false;
   if (target === "vip" && !isVipCustomer(customer)) return false;
   return true;
 }

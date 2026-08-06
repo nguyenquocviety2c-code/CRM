@@ -33,6 +33,17 @@ interface SupabaseInvoiceItem {
   total?: number;
   staffName?: string;
 }
+// A single invoice's note JSON may carry `promotions` (array) and `vouchers`
+// (array) when the cashier applied multiple of each. The legacy single
+// `promotion` field is also still read for backward compatibility.
+interface SupabaseAppliedIncentive {
+  id?: string;
+  code?: string | null;
+  name?: string;
+  discountValue?: number;
+  discountType?: string;
+  discountAmount?: number;
+}
 interface SupabaseInvoice {
   id: string;
   code: string | null;
@@ -43,14 +54,9 @@ interface SupabaseInvoice {
   tip: number;
   payment_method: string;
   status: string;
-  promotion?: {
-    id?: string;
-    code?: string | null;
-    name?: string;
-    discountValue?: number;
-    discountType?: string;
-    discountAmount?: number;
-  } | null;
+  promotion?: SupabaseAppliedIncentive | null;
+  promotions?: SupabaseAppliedIncentive[] | null;
+  vouchers?: SupabaseAppliedIncentive[] | null;
   customer?: { id?: string; name?: string; phone?: string | null } | null;
   branch?: { id?: string; name?: string } | null;
   items?: SupabaseInvoiceItem[];
@@ -183,6 +189,15 @@ function useRawInvoices() {
 
 /**
  * Map a Supabase invoice → the InvoiceReport shape the UI expects.
+ *
+ * Promotion / voucher handling: a single invoice can carry MULTIPLE promotions
+ * and MULTIPLE vouchers (stored as `promotions: []` and `vouchers: []` in the
+ * invoice note JSON). For backward compatibility we also still read the legacy
+ * single `promotion` field — when `promotions` is absent but `promotion` is
+ * present, we lift it into `promotions: [promotion]`. The legacy
+ * `promotionName` / `promotionDiscountValue` / `promotionDiscountType` /
+ * `promotionDiscountAmount` fields are filled from `promotions[0]` so any
+ * existing code that reads them keeps working.
  */
 function mapInvoiceReport(inv: SupabaseInvoice, stt: number): InvoiceReport {
   const totalAmount = Number(inv.total_amount ?? inv.final_amount ?? 0);
@@ -193,14 +208,53 @@ function mapInvoiceReport(inv: SupabaseInvoice, stt: number): InvoiceReport {
   // "Thưởng" = tip (the customer's bonus to staff). The system has no
   // separate surcharge field — tip IS the thưởng.
   const surcharge = tip;
-  // Promotion name + discount value (the chương trình khuyến mãi applied).
-  const promotionName = inv.promotion?.name || "";
-  const promotionDiscountValue = Number(inv.promotion?.discountValue ?? 0);
-  const promotionDiscountType = inv.promotion?.discountType || "";
-  // Số tiền thực tế promotion trừ (đ): prefer the promotion's pre-computed
-  // discountAmount; fall back to the invoice-level discount when the
-  // promotion only carries a percent (server computes the money later).
-  const promotionDiscountAmount = Number(inv.promotion?.discountAmount ?? 0);
+  // Normalize the legacy single `promotion` field into the `promotions` array.
+  // The server still stores `promotion` (single object) for invoices created
+  // before multi-promotion support; newer invoices store `promotions: [...]`.
+  const promotions: NonNullable<InvoiceReport["promotions"]> = [];
+  if (Array.isArray(inv.promotions)) {
+    for (const p of inv.promotions) {
+      if (!p) continue;
+      promotions.push({
+        id: p.id,
+        code: p.code ?? null,
+        name: p.name || "",
+        discountValue: Number(p.discountValue ?? 0),
+        discountType: p.discountType,
+        discountAmount: Number(p.discountAmount ?? 0),
+      });
+    }
+  } else if (inv.promotion && inv.promotion.name) {
+    promotions.push({
+      id: inv.promotion.id,
+      code: inv.promotion.code ?? null,
+      name: inv.promotion.name,
+      discountValue: Number(inv.promotion.discountValue ?? 0),
+      discountType: inv.promotion.discountType,
+      discountAmount: Number(inv.promotion.discountAmount ?? 0),
+    });
+  }
+  const vouchers: NonNullable<InvoiceReport["vouchers"]> = [];
+  if (Array.isArray(inv.vouchers)) {
+    for (const v of inv.vouchers) {
+      if (!v) continue;
+      vouchers.push({
+        id: v.id,
+        code: v.code ?? null,
+        name: v.name || "",
+        discountValue: Number(v.discountValue ?? 0),
+        discountType: v.discountType,
+        discountAmount: Number(v.discountAmount ?? 0),
+      });
+    }
+  }
+  // Legacy fields — filled from the first promotion so existing callers that
+  // only read `promotionName` etc. keep working.
+  const primaryPromo = promotions[0];
+  const promotionName = primaryPromo?.name || "";
+  const promotionDiscountValue = primaryPromo?.discountValue ?? 0;
+  const promotionDiscountType = primaryPromo?.discountType ?? "";
+  const promotionDiscountAmount = primaryPromo?.discountAmount ?? 0;
   const discount = Number(inv.discount ?? 0);
   return {
     id: inv.id,
@@ -215,6 +269,8 @@ function mapInvoiceReport(inv: SupabaseInvoice, stt: number): InvoiceReport {
     promotionDiscountValue,
     promotionDiscountType,
     promotionDiscountAmount,
+    promotions,
+    vouchers,
     discount,
     paidAmount,
     // debt = totalAmount + surcharge - paidAmount (0 for completed invoices).

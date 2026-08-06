@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { DateRangePicker } from "@/components/shared/date-range-picker";
 import { IncentiveActions } from "./incentive-actions";
 
 interface Voucher {
@@ -26,9 +27,25 @@ interface VoucherListProps {
   onDelete: (id: string) => void;
   onCreate: () => void;
   onView: (voucher: Voucher) => void;
+  // Date-range filter (shared with the Promotion tab). The picker sits on the
+  // SAME row as the search box, mirroring the Promotion tab's layout so the
+  // two tabs look identical. The parent owns the state and applies the
+  // overlap filter; this component just renders the picker + forwards changes.
+  dateFrom?: string;
+  dateTo?: string;
+  onDateRangeChange?: (from: string, to: string) => void;
 }
 
-export function VoucherList({ vouchers, onEdit, onDelete, onCreate, onView }: VoucherListProps) {
+export function VoucherList({
+  vouchers,
+  onEdit,
+  onDelete,
+  onCreate,
+  onView,
+  dateFrom,
+  dateTo,
+  onDateRangeChange,
+}: VoucherListProps) {
   const [search, setSearch] = useState("");
 
   const filtered = vouchers.filter(
@@ -50,15 +67,27 @@ export function VoucherList({ vouchers, onEdit, onDelete, onCreate, onView }: Vo
         </Button>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <Input
-          placeholder="Tìm kiếm..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="pl-10"
-        />
+      {/* Search + Date range picker — same row, mirroring the Promotion tab.
+          The picker is only rendered when the parent passes dateFrom/dateTo/
+          onDateRangeChange (kept optional for any other callers). */}
+      <div className="flex items-center gap-2">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <Input
+            placeholder="Tìm kiếm..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-10"
+          />
+        </div>
+
+        {onDateRangeChange && dateFrom && dateTo && (
+          <DateRangePicker
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onChange={onDateRangeChange}
+          />
+        )}
       </div>
 
       {/* Table */}

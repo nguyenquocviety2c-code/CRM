@@ -6,7 +6,11 @@ const ITEMS_MARKER = '"__kind":"invoice_meta"';
 
 /**
  * Decode the `note` column's `invoice_meta` JSON back into structured fields.
- * Shape: { "__kind": "invoice_meta", "items": [...], "note": "...", "tip": <number>, "promotion": <object|null>, "photos": string[] }
+ * Shape: { "__kind": "invoice_meta", "items": [...], "note": "...", "tip": <number>, "promotion": <object|null>, "promotions": <object[]>, "vouchers": <object[]>, "photos": string[] }
+ *
+ * Multi-promotion / multi-voucher support: the note JSON can carry
+ * `promotions: [...]` and `vouchers: [...]` arrays (one invoice can apply
+ * many of each). They default to [] when absent.
  */
 function decodeInvoiceMeta(row: Record<string, unknown> | null) {
   if (!row) return row;
@@ -18,6 +22,8 @@ function decodeInvoiceMeta(row: Record<string, unknown> | null) {
         note?: string;
         tip?: number;
         promotion?: unknown;
+        promotions?: unknown;
+        vouchers?: unknown;
         photos?: unknown;
       };
       return {
@@ -26,13 +32,15 @@ function decodeInvoiceMeta(row: Record<string, unknown> | null) {
         note: parsed.note ?? null,
         tip: Number(parsed.tip) || 0,
         promotion: parsed.promotion ?? null,
+        promotions: Array.isArray(parsed.promotions) ? parsed.promotions : [],
+        vouchers: Array.isArray(parsed.vouchers) ? parsed.vouchers : [],
         photos: Array.isArray(parsed.photos) ? (parsed.photos as string[]) : [],
       };
     } catch {
-      return { ...row, items: [], tip: 0, promotion: null, photos: [] };
+      return { ...row, items: [], tip: 0, promotion: null, promotions: [], vouchers: [], photos: [] };
     }
   }
-  return { ...row, items: [], tip: 0, promotion: null, photos: [] };
+  return { ...row, items: [], tip: 0, promotion: null, promotions: [], vouchers: [], photos: [] };
 }
 
 /**
@@ -174,9 +182,10 @@ export async function PUT(
     const { id } = await params;
     const body = await request.json();
 
-    // When updating the note JSON (items / tip / promotion / photos / note),
-    // re-serialize the invoice_meta payload so everything stays in sync.
-    if (body.tip !== undefined || body.items !== undefined || body.promotion !== undefined || body.photos !== undefined) {
+    // When updating the note JSON (items / tip / promotion / promotions /
+    // vouchers / photos / note), re-serialize the invoice_meta payload so
+    // everything stays in sync.
+    if (body.tip !== undefined || body.items !== undefined || body.promotion !== undefined || body.promotions !== undefined || body.vouchers !== undefined || body.photos !== undefined) {
       // Fetch the current row to preserve existing items/note/promotion/photos when only one field changes.
       const { data: current } = await supabaseAdmin
         .from("invoices")
@@ -188,6 +197,8 @@ export async function PUT(
       let existingNote: string | null = null;
       let existingTip = 0;
       let existingPromotion: unknown = null;
+      let existingPromotions: unknown[] = [];
+      let existingVouchers: unknown[] = [];
       let existingPhotos: string[] = [];
       const currentNote = (current as { note?: string } | null)?.note;
       if (typeof currentNote === "string" && currentNote.includes(ITEMS_MARKER)) {
@@ -197,12 +208,16 @@ export async function PUT(
             note?: string;
             tip?: number;
             promotion?: unknown;
+            promotions?: unknown;
+            vouchers?: unknown;
             photos?: unknown;
           };
           existingItems = Array.isArray(parsed.items) ? parsed.items : [];
           existingNote = parsed.note ?? null;
           existingTip = Number(parsed.tip) || 0;
           existingPromotion = parsed.promotion ?? null;
+          existingPromotions = Array.isArray(parsed.promotions) ? parsed.promotions : [];
+          existingVouchers = Array.isArray(parsed.vouchers) ? parsed.vouchers : [];
           existingPhotos = Array.isArray(parsed.photos) ? (parsed.photos as string[]) : [];
         } catch {
           /* ignore parse errors */
@@ -215,6 +230,10 @@ export async function PUT(
         note: body.note !== undefined ? (body.note || null) : existingNote,
         tip: body.tip !== undefined ? Number(body.tip) || 0 : existingTip,
         promotion: body.promotion !== undefined ? (body.promotion || null) : existingPromotion,
+        // Multi-promotion / multi-voucher support: replace the arrays when the
+        // body sends them; otherwise preserve the existing arrays.
+        promotions: Array.isArray(body.promotions) ? body.promotions : existingPromotions,
+        vouchers: Array.isArray(body.vouchers) ? body.vouchers : existingVouchers,
         photos: body.photos !== undefined ? body.photos : existingPhotos,
       });
 
