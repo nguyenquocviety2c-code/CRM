@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { PackageList } from "@/components/features/product-service/package-list";
 import { usePackageStore } from "@/stores/package-store";
 import { BranchSelector } from "@/components/layout/branch-selector";
+import { useBranchStore } from "@/stores/branch-store";
 import {
   ColumnToggle,
   ColumnDef,
@@ -53,6 +54,13 @@ export default function PackagePage() {
   const toggleColumn = (key: string) =>
     setVisibleColumns((prev) => toggleColumnKey(prev, key));
 
+  // Subscribe to the globally-selected branch (the BranchSelector in the page
+  // header). The table content is filtered by this branch — fetchItems reads
+  // it from the store and appends branch_id to the API request. Including it
+  // in the effect deps below ensures the table re-fetches whenever the user
+  // picks a different branch in the header.
+  const selectedBranchId = useBranchStore((s) => s.selectedBranchId);
+
   // Fetch package categories for the filter dropdown.
   useEffect(() => {
     (async () => {
@@ -74,10 +82,12 @@ export default function PackagePage() {
     })();
   }, []);
 
-  // Fetch packages whenever search or category filter changes.
+  // Fetch packages whenever search, category filter, OR the selected branch
+  // changes. The branch comes from the global BranchSelector in the page
+  // header — the table displays content for that branch.
   useEffect(() => {
     fetchItems();
-  }, [fetchItems, search, categoryFilter]);
+  }, [fetchItems, search, categoryFilter, selectedBranchId]);
 
   const filteredItems = useMemo(() => {
     let result = [...items];

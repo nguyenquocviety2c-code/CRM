@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { Package } from "@/types/product-service";
+import { useBranchStore } from "@/stores/branch-store";
 
 interface PackageState {
   items: Package[];
@@ -65,6 +66,15 @@ export const usePackageStore = create<PackageState>((set, get) => ({
       if (get().search) params.append("search", get().search);
       if (get().categoryFilter !== "all")
         params.append("category_id", get().categoryFilter);
+
+      // Filter by the globally-selected branch (the BranchSelector in the page
+      // header). "all" / null / "" → no branch filter (show packages from every
+      // branch). The packages API probes for a branch_id column at runtime and
+      // gracefully no-ops if the table doesn't have one, so this is safe.
+      const branchId = useBranchStore.getState().selectedBranchId;
+      if (branchId && branchId !== "all") {
+        params.append("branch_id", branchId);
+      }
 
       const response = await fetch(`/api/supabase/packages?${params.toString()}`);
       const result = await response.json();

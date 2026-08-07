@@ -216,7 +216,11 @@ export function WarehouseTransferTab() {
                 const badgeStyle = getBadgeStyle(item.status);
                 return (
                   <TableRow key={item.id}>
-                    {isColVisible("transferDate") && <TableCell>{formatDateTime(item.transferDate)}</TableCell>}
+                    {isColVisible("transferDate") && (
+                      <TableCell className="max-w-[160px] truncate" title={formatDateTime(item.transferDate)}>
+                        {formatDateTime(item.transferDate)}
+                      </TableCell>
+                    )}
                     <TableCell>
                       <div className="flex items-center gap-1">
                         <Button variant="ghost" size="icon">
@@ -228,17 +232,37 @@ export function WarehouseTransferTab() {
                       </div>
                     </TableCell>
                     {isColVisible("product") && (
-                      <TableCell className="max-w-xs truncate">
+                      <TableCell className="max-w-xs truncate" title={getProductNames(item)}>
                         {getProductNames(item)}
                       </TableCell>
                     )}
-                    {isColVisible("createdByEmail") && <TableCell>{item.createdByEmail}</TableCell>}
-                    {isColVisible("quantity") && <TableCell>{getTotalQuantity(item)}</TableCell>}
-                    {isColVisible("fromBranch") && <TableCell>{item.fromBranch?.name || "-"}</TableCell>}
-                    {isColVisible("toBranch") && <TableCell>{item.toBranch?.name || "-"}</TableCell>}
-                    {isColVisible("note") && <TableCell>{item.note || ""}</TableCell>}
+                    {isColVisible("createdByEmail") && (
+                      <TableCell className="max-w-[180px] truncate" title={item.createdByEmail}>
+                        {item.createdByEmail}
+                      </TableCell>
+                    )}
+                    {isColVisible("quantity") && (
+                      <TableCell className="max-w-[80px] truncate" title={String(getTotalQuantity(item))}>
+                        {getTotalQuantity(item)}
+                      </TableCell>
+                    )}
+                    {isColVisible("fromBranch") && (
+                      <TableCell className="max-w-[160px] truncate" title={item.fromBranch?.name || "-"}>
+                        {item.fromBranch?.name || "-"}
+                      </TableCell>
+                    )}
+                    {isColVisible("toBranch") && (
+                      <TableCell className="max-w-[160px] truncate" title={item.toBranch?.name || "-"}>
+                        {item.toBranch?.name || "-"}
+                      </TableCell>
+                    )}
+                    {isColVisible("note") && (
+                      <TableCell className="max-w-[200px] truncate" title={item.note || ""}>
+                        {item.note || ""}
+                      </TableCell>
+                    )}
                     {isColVisible("status") && (
-                      <TableCell>
+                      <TableCell className="max-w-[120px] truncate">
                         <span
                           className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${badgeStyle.bg} ${badgeStyle.text}`}
                         >
